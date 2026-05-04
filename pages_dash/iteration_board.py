@@ -11,33 +11,36 @@ import plotly.graph_objects as go
 
 from data.loader import load_data
 from config.settings import ADO_BASE_URL
+from reports.recommendations import get_recommendations_iteration
+from reports.rec_display import rec_strip
 
 dash.register_page(__name__, path="/iteration", name="Iteration Board")
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-REJECTED_STATES = {"Not an issue", "Not Required"}
+REJECTED_STATES = {"Not an issue", "Not Required", "No Customer Response"}
 CLOSED_STATES   = {"Closed", "Resolved", "Userstory Update"}
 ALL_DONE_STATES = CLOSED_STATES | REJECTED_STATES
 
 STATE_MAP = {
-    "New":              "🆕 New",
-    "Active":           "🔵 Active",
-    "Dev InProgress":   "🔵 Active",
-    "Dev Review":       "🔵 Active",
-    "Tester Assigned":  "🔵 Active",
-    "Dev Complete":     "🟡 In Review",
-    "Request Estimate": "🟡 In Review",
-    "Clarification":    "🟡 In Review",
-    "Estimated":        "🟡 In Review",
-    "Watch List":       "⏸ On Hold",
-    "On Hold":          "⏸ On Hold",
-    "Rare Scenario":    "⏸ On Hold",
-    "Reopened":         "🔴 Reopened",
-    "Resolved":         "✅ Resolved",
-    "Closed":           "✅ Closed",
-    "Not an issue":     "❌ Rejected",
-    "Not Required":     "❌ Rejected",
-    "Userstory Update": "✅ Closed",
+    "New":                  "🆕 New",
+    "Active":               "🔵 Active",
+    "Dev InProgress":       "🔵 Active",
+    "Dev Review":           "🔵 Active",
+    "Tester Assigned":      "🔵 Active",
+    "Dev Complete":         "🟡 In Review",
+    "Request Estimate":     "🟡 In Review",
+    "Clarification":        "🟡 In Review",
+    "Estimated":            "🟡 In Review",
+    "Watch List":           "⏸ On Hold",
+    "On Hold":              "⏸ On Hold",
+    "Rare Scenario":        "⏸ On Hold",
+    "Reopened":             "🔴 Reopened",
+    "Resolved":             "✅ Resolved",
+    "Closed":               "✅ Closed",
+    "Not an issue":         "❌ Rejected",
+    "Not Required":         "❌ Rejected",
+    "No Customer Response": "❌ Rejected",
+    "Userstory Update":     "✅ Closed",
 }
 
 STATE_COLORS = {
@@ -338,10 +341,17 @@ def _type_pill(t):
 
 
 def _section_label(text):
-    return html.Div(text, style={
-        "fontSize": "11px", "fontWeight": "700", "textTransform": "uppercase",
-        "letterSpacing": "0.8px", "color": "#a0aec0",
-        "marginBottom": "12px", "marginTop": "4px",
+    return html.Div([
+        html.Div(style={
+            "display": "inline-block", "width": "3px", "height": "14px",
+            "borderRadius": "2px", "background": "#7c6af4",
+            "verticalAlign": "middle", "marginRight": "8px",
+        }),
+        html.Span(text),
+    ], style={
+        "fontSize": "13px", "fontWeight": "700", "textTransform": "uppercase",
+        "letterSpacing": "0.7px", "color": "#c8c8e0", "marginBottom": "14px",
+        "marginTop": "4px", "display": "flex", "alignItems": "center",
     })
 
 
@@ -407,6 +417,14 @@ def layout():
     }
     _tab_selected = {**_tab_style, "color": "#e8e8f0", "borderBottom": "2px solid #8b7ee8"}
 
+    _sb = {
+        "background": "rgba(255,255,255,0.015)",
+        "borderRadius": "12px",
+        "border": "1px solid rgba(255,255,255,0.04)",
+        "padding": "20px 20px 12px 20px",
+        "marginBottom": "24px",
+    }
+
     sprint_tab = dcc.Tab(
         label="📡  Sprint View", value="sprint",
         style=_tab_style, selected_style=_tab_selected,
@@ -414,43 +432,50 @@ def layout():
             html.Div(id="ib-timeline-strip", className="mb-3"),
             html.Div(id="ib-health-banner",  className="mb-3"),
 
-            _section_label("At a Glance"),
-            html.Div(id="ib-kpi-row", className="mb-4"),
-            html.Hr(className="section-divider"),
-
-            _section_label("Burndown"),
-            dbc.Row([
-                dbc.Col(_chart_card("Items Remaining", "burndown_items",
-                                    "ib-burndown-items", insight_id="ib-insight-burndown"), md=6),
-                dbc.Col(_chart_card("Hours Remaining", "burndown_hours",
-                                    "ib-burndown-hours"), md=6),
-            ], className="mb-2"),
-            html.Hr(className="section-divider"),
-
-            _section_label("Team Workload"),
-            dbc.Row([
-                dbc.Col(_chart_card("Workload by Person (Closed vs Open)",
-                                    "workload", "ib-workload-bar"), md=6),
-                dbc.Col(_chart_card("Remaining Hours by Person",
-                                    "hours", "ib-hours-bar"), md=6),
-            ], className="mb-2"),
-            html.Hr(className="section-divider"),
-
-            _section_label("State Breakdown"),
-            _chart_card("Items by State", "state", "ib-state-bar",
-                        insight_id="ib-insight-state"),
-            html.Hr(className="section-divider"),
-
-            _section_label("Blockers"),
-            _table_card("🚨 P1 / P2 Open Items", "blockers", "ib-blockers-body"),
-            html.Hr(className="section-divider"),
-
-            _section_label("All Open Items"),
             html.Div([
-                html.Div("📋 Open Items in This Sprint",
-                         style={"fontSize": "14px", "fontWeight": "700", "marginBottom": "10px"}),
-                html.Div(id="ib-open-table"),
-            ], className="chart-card mb-4"),
+                _section_label("At a Glance"),
+                html.Div(id="ib-kpi-row"),
+            ], style=_sb),
+
+            html.Div([
+                _section_label("Burndown"),
+                dbc.Row([
+                    dbc.Col(_chart_card("Items Remaining", "burndown_items",
+                                        "ib-burndown-items", insight_id="ib-insight-burndown"), md=6),
+                    dbc.Col(_chart_card("Hours Remaining", "burndown_hours",
+                                        "ib-burndown-hours"), md=6),
+                ], className="mb-2"),
+            ], style=_sb),
+
+            html.Div([
+                _section_label("Team Workload"),
+                dbc.Row([
+                    dbc.Col(_chart_card("Workload by Person (Closed vs Open)",
+                                        "workload", "ib-workload-bar"), md=6),
+                    dbc.Col(_chart_card("Remaining Hours by Person",
+                                        "hours", "ib-hours-bar"), md=6),
+                ], className="mb-2"),
+            ], style=_sb),
+
+            html.Div([
+                _section_label("State Breakdown"),
+                _chart_card("Items by State", "state", "ib-state-bar",
+                            insight_id="ib-insight-state"),
+            ], style=_sb),
+
+            html.Div([
+                _section_label("Blockers"),
+                _table_card("🚨 P1 / P2 Open Items", "blockers", "ib-blockers-body"),
+            ], style=_sb),
+
+            html.Div([
+                _section_label("All Open Items"),
+                html.Div([
+                    html.Div("📋 Open Items in This Sprint",
+                             style={"fontSize": "14px", "fontWeight": "700", "marginBottom": "10px"}),
+                    html.Div(id="ib-open-table"),
+                ], className="chart-card"),
+            ], style=_sb),
         ], style={"paddingTop": "20px"}),
     )
 
@@ -458,22 +483,26 @@ def layout():
         label="📊  Sprint Intelligence", value="intel",
         style=_tab_style, selected_style=_tab_selected,
         children=html.Div([
-            _section_label("Velocity Trend"),
-            _chart_card("Items Closed per Sprint (Last 8)", "velocity",
-                        "ib-velocity-chart", insight_id="ib-velocity-insight"),
-            html.Hr(className="section-divider"),
+            html.Div([
+                _section_label("Velocity Trend"),
+                _chart_card("Items Closed per Sprint (Last 8)", "velocity",
+                            "ib-velocity-chart", insight_id="ib-velocity-insight"),
+            ], style=_sb),
 
-            _section_label("Scope Discipline"),
-            dbc.Row([
-                dbc.Col(_table_card("➕ Added Mid-Sprint (Scope Creep)",
-                                    "scope_creep", "ib-scope-body"), md=6),
-                dbc.Col(_table_card("🔁 Older Items (Possible Carryover)",
-                                    "carryover", "ib-carryover-body"), md=6),
-            ], className="mb-2"),
-            html.Hr(className="section-divider"),
+            html.Div([
+                _section_label("Scope Discipline"),
+                dbc.Row([
+                    dbc.Col(_table_card("➕ Added Mid-Sprint (Scope Creep)",
+                                        "scope_creep", "ib-scope-body"), md=6),
+                    dbc.Col(_table_card("🔁 Older Items (Possible Carryover)",
+                                        "carryover", "ib-carryover-body"), md=6),
+                ], className="mb-2"),
+            ], style=_sb),
 
-            _section_label("Tasks"),
-            _table_card("🔧 Tasks in This Sprint", "tasks", "ib-tasks-body"),
+            html.Div([
+                _section_label("Tasks"),
+                _table_card("🔧 Tasks in This Sprint", "tasks", "ib-tasks-body"),
+            ], style=_sb),
         ], style={"paddingTop": "20px"}),
     )
 
@@ -484,6 +513,7 @@ def layout():
                    className="page-subtitle"),
         ], className="page-header"),
         filter_bar,
+        html.Div(id="ib-rec-strip"),
         dcc.Tabs(
             id="ib-tabs", value="sprint",
             children=[sprint_tab, intel_tab],
@@ -1286,3 +1316,20 @@ def update_iteration_board(iteration, team, employee):
         scope_body, carryover_body,
         tasks_body,
     )
+
+
+@callback(
+    Output("ib-rec-strip", "children"),
+    Input("ib-iteration", "value"),
+    Input("ib-team",      "value"),
+    Input("ib-employee",  "value"),
+)
+def update_ib_recs(iteration, team, employee):
+    df = load_data()
+    if "iteration_path" in df.columns:
+        df["iteration_path"] = df["iteration_path"].apply(
+            lambda x: str(x).split("\\")[-1] if pd.notna(x) and str(x) not in ("Not Specified", "") else x
+        )
+    selected = [iteration] if iteration and not isinstance(iteration, list) else (iteration or [])
+    recs = get_recommendations_iteration(df, selected_iterations=selected or None)
+    return rec_strip(recs)

@@ -72,13 +72,18 @@ def load_data(force_refresh=False):
             df["remaining_work"] = pd.to_numeric(df["remaining_work"], errors='coerce').fillna(0)
 
         # 2. String Normalization (Strip whitespace and handle 'None'/'nan')
-        string_cols = ["state", "assigned_to", "work_item_type", "release_date", "function", "iteration_path"]
+        string_cols = ["state", "assigned_to", "work_item_type", "release_date", "function", "iteration_path", "story_owner"]
         for col in string_cols:
             if col in df.columns:
                 # Fill actual NaNs with empty string before cleanup
                 df[col] = df[col].fillna("").astype(str).str.strip()
                 # Treat "None", "nan", or empty as "Not Specified" or "Unassigned" as appropriate
-                df[col] = df[col].replace(["None", "nan", ""], "Unassigned" if col == "assigned_to" else "Not Specified")
+                if col == "assigned_to":
+                    df[col] = df[col].replace(["None", "nan", ""], "Unassigned")
+                elif col == "story_owner":
+                    df[col] = df[col].replace(["None", "nan"], "")
+                else:
+                    df[col] = df[col].replace(["None", "nan", ""], "Not Specified")
 
         # 3. Handle Date Conversions
         date_cols = ['created_date', 'closed_date', 'changed_date']
@@ -88,11 +93,57 @@ def load_data(force_refresh=False):
                 if hasattr(df[col].dt, 'tz') and df[col].dt.tz is not None:
                     df[col] = df[col].dt.tz_localize(None)
 
-        # 4. Add team column (TEAM_MAPPING keys are already stripped)
+        # 4. Add team column from assigned_to (used by bugs/QA/items pages)
         if "assigned_to" in df.columns:
             df["team"] = df["assigned_to"].map(TEAM_MAPPING).fillna("Unassigned")
         else:
             df["team"] = "Unassigned"
+
+        # 5. Add main_dev_team from main_developer (used by capacity page)
+        if "main_developer" in df.columns:
+            md = df["main_developer"].astype(str).str.split(" <").str[0].str.strip()
+            df["main_dev_team"] = md.map(TEAM_MAPPING).fillna("Unassigned")
+        else:
+            df["main_dev_team"] = "Unassigned"
+
+        # 6. Patch parent_id for Tasks linked via "Related" instead of "Child"
+        #    People sometimes create tasks under Related instead of Child in ADO.
+        #    Pick lowest Enhancement/Bug ID when a task relates to multiple.
+        try:
+            with engine.connect() as _rc:
+                rel_df = pd.read_sql(text("""
+                    SELECT DISTINCT ON (t.work_item_id)
+                           t.work_item_id AS task_id,
+                           CASE WHEN rel.source_id = t.work_item_id
+                                THEN rel.target_id
+                                ELSE rel.source_id END AS parent_id
+                    FROM work_items_main t
+                    JOIN work_items_relations rel
+                        ON rel.relation_type = 'System.LinkTypes.Related'
+                        AND (rel.source_id = t.work_item_id
+                             OR rel.target_id = t.work_item_id)
+                    JOIN work_items_main e
+                        ON e.work_item_id = CASE
+                            WHEN rel.source_id = t.work_item_id
+                            THEN rel.target_id ELSE rel.source_id END
+                    WHERE t.work_item_type = 'Task'
+                      AND t.parent_id IS NULL
+                      AND e.work_item_type IN (
+                            'Enhancement','Bug','Bug_UI','Bug_Text')
+                    ORDER BY t.work_item_id, parent_id
+                """), _rc)
+            if not rel_df.empty:
+                rel_map = rel_df.set_index("task_id")["parent_id"].to_dict()
+                mask = (
+                    (df["work_item_type"] == "Task")
+                    & df["parent_id"].isna()
+                    & df["work_item_id"].isin(rel_map)
+                )
+                df.loc[mask, "parent_id"] = (
+                    df.loc[mask, "work_item_id"].map(rel_map)
+                )
+        except Exception as _re:
+            print(f"⚠️  Related-task patch skipped: {_re}")
 
         # Update cache
         _DATA_CACHE = df

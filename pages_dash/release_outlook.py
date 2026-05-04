@@ -9,31 +9,36 @@ import plotly.graph_objects as go
 
 from data.loader import load_data
 from config.settings import ADO_BASE_URL
+from reports.summarizer import summarize_releases
+from reports.formatter import format_report
+from reports.recommendations import get_recommendations_release
+from reports.rec_display import rec_strip
 
 dash.register_page(__name__, path="/release-outlook", name="Release Outlook")
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-CLOSED_STATES = {"Closed", "Not an issue", "Not Required", "Userstory Update"}
+CLOSED_STATES = {"Closed", "Not an issue", "Not Required", "Userstory Update", "No Customer Response"}
 
 STATE_MAP = {
-    "New":              "🆕 New",
-    "Active":           "🔵 Active",
-    "Dev InProgress":   "🔵 Active",
-    "Dev Review":       "🔵 Active",
-    "Tester Assigned":  "🔵 Active",
-    "Dev Complete":     "🟡 In Review",
-    "Request Estimate": "🟡 In Review",
-    "Clarification":    "🟡 In Review",
-    "Estimated":        "🟡 In Review",
-    "Watch List":       "⏸ On Hold",
-    "On Hold":          "⏸ On Hold",
-    "Rare Scenario":    "⏸ On Hold",
-    "Reopened":         "🔴 Reopened",
-    "Resolved":         "✅ Resolved",
-    "Closed":           "✅ Closed",
-    "Not an issue":     "❌ Rejected",
-    "Not Required":     "❌ Rejected",
-    "Userstory Update": "❌ Rejected",
+    "New":                  "🆕 New",
+    "Active":               "🔵 Active",
+    "Dev InProgress":       "🔵 Active",
+    "Dev Review":           "🔵 Active",
+    "Tester Assigned":      "🔵 Active",
+    "Dev Complete":         "🟡 In Review",
+    "Request Estimate":     "🟡 In Review",
+    "Clarification":        "🟡 In Review",
+    "Estimated":            "🟡 In Review",
+    "Watch List":           "⏸ On Hold",
+    "On Hold":              "⏸ On Hold",
+    "Rare Scenario":        "⏸ On Hold",
+    "Reopened":             "🔴 Reopened",
+    "Resolved":             "✅ Resolved",
+    "Closed":               "✅ Closed",
+    "Not an issue":         "❌ Rejected",
+    "Not Required":         "❌ Rejected",
+    "No Customer Response": "❌ Rejected",
+    "Userstory Update":     "❌ Rejected",
 }
 
 STATE_COLORS = {
@@ -145,10 +150,17 @@ def _chart_card(title, tip_key, graph_id, insight_id=None):
 
 
 def _section_label(text):
-    return html.Div(text, style={
-        "fontSize": "11px", "fontWeight": "700", "textTransform": "uppercase",
-        "letterSpacing": "0.8px", "color": "#a0aec0",
-        "marginBottom": "12px", "marginTop": "4px",
+    return html.Div([
+        html.Div(style={
+            "display": "inline-block", "width": "3px", "height": "14px",
+            "borderRadius": "2px", "background": "#7c6af4",
+            "verticalAlign": "middle", "marginRight": "8px",
+        }),
+        html.Span(text),
+    ], style={
+        "fontSize": "13px", "fontWeight": "700", "textTransform": "uppercase",
+        "letterSpacing": "0.7px", "color": "#c8c8e0", "marginBottom": "14px",
+        "marginTop": "4px", "display": "flex", "alignItems": "center",
     })
 
 
@@ -182,6 +194,14 @@ def layout():
         "background": "#1c1c27", "borderRadius": "10px", "padding": "14px 18px",
         "border": "1px solid rgba(255,255,255,0.07)",
         "marginBottom": "20px",
+    }
+
+    _sb = {
+        "background": "rgba(255,255,255,0.015)",
+        "borderRadius": "12px",
+        "border": "1px solid rgba(255,255,255,0.04)",
+        "padding": "20px 20px 12px 20px",
+        "marginBottom": "24px",
     }
 
     filter_bar = html.Div([
@@ -233,39 +253,49 @@ def layout():
         style=_tab_style,
         selected_style=_tab_selected_style,
         children=html.Div([
-            # ── Go / No-Go banner ────────────────────────────────────────────
+            # ── Go / No-Go banner + Progress ─────────────────────────────────
             html.Div(id="ro-health-banner", className="mb-3"),
-
-            # ── Progress bar ─────────────────────────────────────────────────
             html.Div(id="ro-progress-bar", className="mb-4"),
 
             # ── AT A GLANCE ──────────────────────────────────────────────────
-            _section_label("At a Glance"),
-            html.Div(id="ro-kpi-row", className="mb-4"),
-            html.Hr(className="section-divider"),
+            html.Div([
+                _section_label("At a Glance"),
+                html.Div(id="ro-kpi-row"),
+            ], style=_sb),
+
+            # ── BUG QUALITY ──────────────────────────────────────────────────
+            html.Div([
+                _section_label("Bug Quality"),
+                html.Div(id="ro-bug-quality-row"),
+            ], style=_sb),
 
             # ── DELIVERY HEALTH ──────────────────────────────────────────────
-            _section_label("Delivery Health"),
-            dbc.Row([
-                dbc.Col(_chart_card("Items by State",  "state",    "ro-state-bar",
-                                    insight_id="ro-insight-state"), md=7),
-                dbc.Col(_chart_card("Item Type Mix",   "type",     "ro-type-donut"),  md=5),
-            ], className="mb-2"),
-            html.Hr(className="section-divider"),
+            html.Div([
+                _section_label("Delivery Health"),
+                dbc.Row([
+                    dbc.Col(_chart_card("Items by State", "state", "ro-state-bar",
+                                        insight_id="ro-insight-state"), md=7),
+                    dbc.Col(_chart_card("Item Type Mix",  "type",  "ro-type-donut"), md=5),
+                ]),
+            ], style=_sb),
 
             # ── WHO OWNS THE WORK ────────────────────────────────────────────
-            _section_label("Who Owns the Work"),
-            _chart_card("Open Items by Owner", "assignee", "ro-assignee-chart"),
-            html.Hr(className="section-divider"),
+            html.Div([
+                _section_label("Who Owns the Work"),
+                _chart_card("Open Items by Owner", "assignee", "ro-assignee-chart"),
+            ], style=_sb),
 
             # ── BLOCKERS ─────────────────────────────────────────────────────
-            _section_label("Blockers"),
-            _table_card("🚨 P1 / P2 Blockers", "blockers", "ro-blockers-body"),
-            html.Hr(className="section-divider"),
+            html.Div([
+                _section_label("Blockers"),
+                _table_card("🚨 P1 / P2 Blockers", "blockers", "ro-blockers-body"),
+            ], style=_sb),
 
             # ── RISK WATCH ───────────────────────────────────────────────────
-            _section_label("Risk Watch"),
-            _table_card("🕰️ Stale Open Items (7+ days no activity)", "at_risk", "ro-atrisk-body"),
+            html.Div([
+                _section_label("Risk Watch"),
+                _table_card("🕰️ Stale Open Items (7+ days no activity)", "at_risk", "ro-atrisk-body"),
+            ], style=_sb),
         ], style={"paddingTop": "20px"}),
     )
 
@@ -276,42 +306,60 @@ def layout():
         selected_style=_tab_selected_style,
         children=html.Div([
             # ── REJECTED / OUT OF SCOPE ──────────────────────────────────────
-            _section_label("Rejected / Out of Scope"),
-            _table_card("🚫 Not an Issue / Not Required", "rejected", "ro-rejected-body"),
-            html.Hr(className="section-divider"),
+            html.Div([
+                _section_label("Rejected / Out of Scope"),
+                _table_card("🚫 Not an Issue / Not Required", "rejected", "ro-rejected-body"),
+            ], style=_sb),
 
             # ── ESTIMATION ACCURACY ──────────────────────────────────────────
-            _section_label("Estimation Accuracy"),
-            _chart_card("Original Estimate vs Completed Work", "estimation", "ro-audit-estimation"),
-            html.Hr(className="section-divider"),
+            html.Div([
+                _section_label("Estimation Accuracy"),
+                _chart_card("Original Estimate vs Completed Work", "estimation", "ro-audit-estimation"),
+            ], style=_sb),
 
             # ── THROUGHPUT ───────────────────────────────────────────────────
-            _section_label("Delivery Contribution"),
-            _chart_card("Closed Items by Owner", "throughput", "ro-audit-throughput"),
-            html.Hr(className="section-divider"),
+            html.Div([
+                _section_label("Delivery Contribution"),
+                _chart_card("Closed Items by Owner", "throughput", "ro-audit-throughput"),
+            ], style=_sb),
 
             # ── CYCLE TIME ───────────────────────────────────────────────────
-            _section_label("Cycle Time"),
-            _chart_card("Days from Created → Closed", "cycle", "ro-audit-cycle",
-                        insight_id="ro-audit-cycle-insight"),
+            html.Div([
+                _section_label("Cycle Time"),
+                _chart_card("Days from Created → Closed", "cycle", "ro-audit-cycle",
+                            insight_id="ro-audit-cycle-insight"),
+            ], style=_sb),
         ], style={"paddingTop": "20px"}),
     )
 
-    return html.Div([
-        html.Div([
-            html.H1("🚀 Release Outlook", className="page-title"),
-            html.P("Per-release health signal, progress, blockers, and scope control.",
-                   className="page-subtitle"),
-        ], className="page-header"),
+    ro_report_modal = dbc.Modal([
+        dbc.ModalHeader(dbc.ModalTitle("📄 Release Outlook Report"), close_button=True),
+        dbc.ModalBody(
+            html.Div(id="ro-report-body",
+                     style={"maxHeight": "70vh", "overflowY": "auto", "padding": "4px 8px"}),
+        ),
+        dbc.ModalFooter(
+            html.Span(id="ro-report-ts", style={"fontSize": "11px", "color": "#8892a4"}),
+        ),
+    ], id="ro-report-modal", is_open=False, size="xl", backdrop="static",
+       style={"--bs-modal-bg": "#13131f", "color": "#e2e8f0"})
 
+    return html.Div([
+        html.Div(
+            dbc.Button("📄 Board Report", id="ro-report-btn", size="sm",
+                       style={"background": "rgba(129,140,248,0.15)", "border": "1px solid rgba(129,140,248,0.3)",
+                              "color": "#818cf8", "fontWeight": "600", "float": "right", "marginBottom": "10px"}),
+        ),
         filter_bar,
+        html.Div(id="ro-rec-strip"),
 
         dcc.Tabs(
             id="ro-tabs",
             value="live",
             children=[live_tab, audit_tab],
-            style={"borderBottom": "1px solid #e8ecf0", "marginBottom": "24px"},
+            style={"borderBottom": "1px solid rgba(255,255,255,0.07)", "marginBottom": "24px"},
         ),
+        ro_report_modal,
     ])
 
 
@@ -321,6 +369,7 @@ def layout():
     Output("ro-health-banner",       "children"),
     Output("ro-progress-bar",        "children"),
     Output("ro-kpi-row",             "children"),
+    Output("ro-bug-quality-row",     "children"),
     Output("ro-state-bar",           "figure"),
     Output("ro-type-donut",          "figure"),
     Output("ro-insight-state",       "children"),
@@ -351,7 +400,7 @@ def update_release_outlook(release, team, item_types):
         )
 
     no_data = (
-        html.Div(), html.Div(), html.Div(),
+        html.Div(), html.Div(), html.Div(), html.Div(),
         empty_fig(), empty_fig(), "",
         empty_fig(), html.Div(), html.Div(),
         html.Div(), empty_fig(), empty_fig(), empty_fig(), "",
@@ -409,6 +458,15 @@ def update_release_outlook(release, team, item_types):
     if "created_date" in df.columns:
         cutoff = today - pd.Timedelta(days=30)
         scope_added = int((pd.to_datetime(df["created_date"], errors="coerce") >= cutoff).sum())
+
+    # ── Customer vs Internal bug counts (open bugs in this release) ──────────
+    open_bugs_df = open_df[open_df["work_item_type"].str.contains("Bug", na=False, case=False)] \
+        if "work_item_type" in open_df.columns else open_df
+    if "type" in open_bugs_df.columns:
+        customer_bugs = int((open_bugs_df["type"] == "Customer").sum())
+        internal_bugs = int((open_bugs_df["type"] == "Internal").sum())
+    else:
+        customer_bugs = internal_bugs = 0
 
     # ════════════════════════════════════════════════════════════════════════
     # LIVE TAB
@@ -482,6 +540,21 @@ def update_release_outlook(release, team, item_types):
                  subtitle="Not an issue / Not required"),
         ], className="g-3"),
     ])
+
+    # ── Bug quality KPIs ──────────────────────────────────────────────────────
+    total_open_bugs = customer_bugs + internal_bugs
+    bug_quality_row = dbc.Row([
+        _kpi("Customer Issues", f"{customer_bugs:,}",
+             cls="danger" if customer_bugs > 0 else "success",
+             subtitle="Open bugs reported by end users", md=4),
+        _kpi("Internal Issues", f"{internal_bugs:,}",
+             cls="warning" if internal_bugs > 0 else "success",
+             subtitle="Open bugs caught by the team", md=4),
+        _kpi("Bug Origin Split",
+             f"{round(customer_bugs / max(total_open_bugs, 1) * 100)}% Customer",
+             cls="" if total_open_bugs == 0 else ("danger" if customer_bugs > internal_bugs else ""),
+             subtitle=f"{total_open_bugs} open bugs total in this release", md=4),
+    ], className="g-3")
 
     # ── State bar ─────────────────────────────────────────────────────────────
     if "state" in df.columns:
@@ -596,14 +669,19 @@ def update_release_outlook(release, team, item_types):
                     style_table={"overflowX": "auto"},
                     style_cell={"fontSize": "12px", "padding": "8px 12px",
                                 "textAlign": "left", "maxWidth": "260px",
-                                "overflow": "hidden", "textOverflow": "ellipsis"},
-                    style_header={"fontWeight": "600", "background": "#fff5f5",
-                                  "fontSize": "11px", "color": "#c53030"},
+                                "overflow": "hidden", "textOverflow": "ellipsis",
+                                "backgroundColor": "#151524", "color": "#e2e8f0",
+                                "border": "none", "borderBottom": "1px solid rgba(255,255,255,0.05)"},
+                    style_header={"fontWeight": "600", "backgroundColor": "#0e0e1a",
+                                  "color": "#8892a4", "fontSize": "11px",
+                                  "border": "none", "borderBottom": "1px solid rgba(255,255,255,0.08)",
+                                  "textTransform": "uppercase", "letterSpacing": "0.5px"},
                     style_data_conditional=[
+                        {"if": {"row_index": "odd"}, "backgroundColor": "rgba(255,255,255,0.02)"},
                         {"if": {"filter_query": "{priority} = 1"},
-                         "background": "#fff5f5", "color": "#c53030", "fontWeight": "600"},
+                         "backgroundColor": "rgba(248,113,113,0.10)", "color": "#f87171", "fontWeight": "600"},
                         {"if": {"filter_query": "{priority} = 2"},
-                         "background": "#fffaf0", "color": "#c05621"},
+                         "backgroundColor": "rgba(251,146,60,0.08)", "color": "#fb923c"},
                     ],
                     sort_action="native", page_size=10,
                     tooltip_data=[
@@ -655,14 +733,19 @@ def update_release_outlook(release, team, item_types):
                     style_table={"overflowX": "auto"},
                     style_cell={"fontSize": "12px", "padding": "8px 12px",
                                 "textAlign": "left", "maxWidth": "260px",
-                                "overflow": "hidden", "textOverflow": "ellipsis"},
-                    style_header={"fontWeight": "600", "background": "#f7fafc", "fontSize": "11px"},
+                                "overflow": "hidden", "textOverflow": "ellipsis",
+                                "backgroundColor": "#151524", "color": "#e2e8f0",
+                                "border": "none", "borderBottom": "1px solid rgba(255,255,255,0.05)"},
+                    style_header={"fontWeight": "600", "backgroundColor": "#0e0e1a",
+                                  "color": "#8892a4", "fontSize": "11px",
+                                  "border": "none", "borderBottom": "1px solid rgba(255,255,255,0.08)",
+                                  "textTransform": "uppercase", "letterSpacing": "0.5px"},
                     style_data_conditional=[
-                        {"if": {"row_index": "odd"},           "backgroundColor": "#f7fafc"},
+                        {"if": {"row_index": "odd"}, "backgroundColor": "rgba(255,255,255,0.02)"},
                         {"if": {"filter_query": "{days_stale} >= 30"},
-                         "background": "#fff5f5", "color": "#c53030", "fontWeight": "600"},
+                         "backgroundColor": "rgba(248,113,113,0.10)", "color": "#f87171", "fontWeight": "600"},
                         {"if": {"filter_query": "{days_stale} >= 14"},
-                         "background": "#fffaf0", "color": "#c05621"},
+                         "backgroundColor": "rgba(251,146,60,0.08)", "color": "#fb923c"},
                     ],
                     sort_action="native", page_size=10,
                 ),
@@ -733,16 +816,21 @@ def update_release_outlook(release, team, item_types):
                 style_table={"overflowX": "auto"},
                 style_cell={"fontSize": "12px", "padding": "8px 12px",
                             "textAlign": "left", "maxWidth": "260px",
-                            "overflow": "hidden", "textOverflow": "ellipsis"},
-                style_header={"fontWeight": "600", "background": "#f7fafc", "fontSize": "11px"},
+                            "overflow": "hidden", "textOverflow": "ellipsis",
+                            "backgroundColor": "#151524", "color": "#e2e8f0",
+                            "border": "none", "borderBottom": "1px solid rgba(255,255,255,0.05)"},
+                style_header={"fontWeight": "600", "backgroundColor": "#0e0e1a",
+                              "color": "#8892a4", "fontSize": "11px",
+                              "border": "none", "borderBottom": "1px solid rgba(255,255,255,0.08)",
+                              "textTransform": "uppercase", "letterSpacing": "0.5px"},
                 style_data_conditional=[
-                    {"if": {"row_index": "odd"}, "backgroundColor": "rgba(255,255,255,0.03)"},
+                    {"if": {"row_index": "odd"}, "backgroundColor": "rgba(255,255,255,0.02)"},
                     {"if": {"filter_query": "{days_in_scope} >= 7"},
-                     "background": "#fff5f5", "color": "#c53030", "fontWeight": "600"},
+                     "backgroundColor": "rgba(248,113,113,0.10)", "color": "#f87171", "fontWeight": "600"},
                     {"if": {"filter_query": "{days_in_scope} >= 1 && {days_in_scope} < 7"},
-                     "background": "#fffaf0", "color": "#c05621"},
+                     "backgroundColor": "rgba(251,146,60,0.08)", "color": "#fb923c"},
                     {"if": {"filter_query": "{days_in_scope} = 0"},
-                     "color": "#718096", "fontStyle": "italic"},
+                     "color": "#434d60", "fontStyle": "italic"},
                 ],
                 sort_action="native", page_size=10,
                 tooltip_data=[
@@ -868,6 +956,7 @@ def update_release_outlook(release, team, item_types):
         health_banner,
         progress_bar,
         kpi_row,
+        bug_quality_row,
         fig_state,
         fig_type,
         insight_state,
@@ -881,3 +970,36 @@ def update_release_outlook(release, team, item_types):
         fig_cycle,
         cycle_insight,
     )
+
+
+# ── Report callback ───────────────────────────────────────────────────────────
+@callback(
+    Output("ro-report-modal", "is_open"),
+    Output("ro-report-body",  "children"),
+    Output("ro-report-ts",    "children"),
+    Input("ro-report-btn",    "n_clicks"),
+    prevent_initial_call=True,
+)
+def _open_ro_report(n):
+    if not n:
+        from dash import no_update
+        return no_update, no_update, no_update
+    df      = load_data()
+    summary = summarize_releases(df)
+    n_rel   = len(summary.get("releases", []))
+    at_risk = len(summary.get("at_risk", []))
+    body    = format_report(summary)
+    ts      = f"Generated {summary['as_of']}  •  {n_rel} releases  •  {at_risk} at risk"
+    return True, body, ts
+
+
+@callback(
+    Output("ro-rec-strip", "children"),
+    Input("ro-release", "value"),
+    Input("ro-team",    "value"),
+    Input("ro-type",    "value"),
+)
+def update_ro_recs(release, team, item_type):
+    df = load_data()
+    recs = get_recommendations_release(df)
+    return rec_strip(recs)

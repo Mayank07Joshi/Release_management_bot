@@ -12,6 +12,8 @@ import plotly.graph_objects as go
 from data.loader import load_data, apply_filters, filter_activity_since
 from config.settings import ANALYSIS_START_DATE
 from config.team_mapping import QA_TEAM_MEMBERS
+from reports.summarizer import summarize_qa
+from reports.formatter import format_report
 
 dash.register_page(__name__, path="/qa-health", name="QA Health")
 
@@ -19,7 +21,7 @@ dash.register_page(__name__, path="/qa-health", name="QA Health")
 SLA = {1: 1, 2: 2, 3: 5, 4: 10}
 
 CLOSED_STATES  = {"Closed"}
-REJECTED_STATES = {"Not an issue", "Not Required"}
+REJECTED_STATES = {"Not an issue", "Not Required", "No Customer Response"}
 OPEN_STATES_QA  = CLOSED_STATES | REJECTED_STATES  # non-open
 
 _STATE_MAP_QA = {
@@ -30,7 +32,8 @@ _STATE_MAP_QA = {
     "Watch List": "⏸ On Hold", "On Hold": "⏸ On Hold",
     "Reopened": "🔴 Reopened", "Resolved": "✅ Resolved",
     "Closed": "✅ Closed", "Not an issue": "❌ Rejected",
-    "Not Required": "❌ Rejected", "Userstory Update": "❌ Rejected",
+    "Not Required": "❌ Rejected", "No Customer Response": "❌ Rejected",
+    "Userstory Update": "❌ Rejected",
 }
 
 # ── Table style constants ──────────────────────────────────────────────────────
@@ -87,10 +90,17 @@ def _strip_iter(x):
 
 
 def _section_label(text):
-    return html.Div(text, style={
-        "fontSize": "11px", "fontWeight": "700", "textTransform": "uppercase",
-        "letterSpacing": "0.8px", "color": "#a0aec0",
-        "marginBottom": "12px", "marginTop": "4px",
+    return html.Div([
+        html.Div(style={
+            "display": "inline-block", "width": "3px", "height": "14px",
+            "borderRadius": "2px", "background": "#7c6af4",
+            "verticalAlign": "middle", "marginRight": "8px",
+        }),
+        html.Span(text),
+    ], style={
+        "fontSize": "13px", "fontWeight": "700", "textTransform": "uppercase",
+        "letterSpacing": "0.7px", "color": "#c8c8e0", "marginBottom": "14px",
+        "marginTop": "4px", "display": "flex", "alignItems": "center",
     })
 
 
@@ -176,52 +186,85 @@ def layout():
         ], className="g-2"),
     ], style=_fb)
 
+    _sb = {
+        "background": "rgba(255,255,255,0.015)",
+        "borderRadius": "12px",
+        "border": "1px solid rgba(255,255,255,0.04)",
+        "padding": "20px 20px 12px 20px",
+        "marginBottom": "24px",
+    }
+
+    qa_report_modal = dbc.Modal([
+        dbc.ModalHeader(dbc.ModalTitle("📄 QA Health Report"), close_button=True),
+        dbc.ModalBody(
+            html.Div(id="qa-report-body",
+                     style={"maxHeight": "70vh", "overflowY": "auto", "padding": "4px 8px"}),
+        ),
+        dbc.ModalFooter(
+            html.Span(id="qa-report-ts", style={"fontSize": "11px", "color": "#8892a4"}),
+        ),
+    ], id="qa-report-modal", is_open=False, size="xl", backdrop="static",
+       style={"--bs-modal-bg": "#13131f", "color": "#e2e8f0"})
+
     return html.Div([
         html.Div([
-            html.H1("🧪 QA Health", className="page-title"),
-            html.P("Testing volume, defect discovery, fix SLAs, and QA workload.",
-                   className="page-subtitle"),
-        ], className="page-header"),
+            html.Div([
+                html.H1("🧪 QA Health", className="page-title"),
+                html.P("Testing volume, defect discovery, fix SLAs, and QA workload.",
+                       className="page-subtitle"),
+            ]),
+            dbc.Button("📄 Board Report", id="qa-report-btn", size="sm",
+                       style={"background": "rgba(129,140,248,0.15)", "border": "1px solid rgba(129,140,248,0.3)",
+                              "color": "#818cf8", "fontWeight": "600", "alignSelf": "center"}),
+        ], className="page-header", style={"display": "flex", "justifyContent": "space-between", "alignItems": "flex-start"}),
 
         filter_bar,
 
         # ── KPIs ──────────────────────────────────────────────────────────────
-        _section_label("At a Glance"),
-        html.Div(id="qa-kpi-row", className="mb-4"),
-        html.Hr(className="section-divider"),
+        html.Div([
+            _section_label("At a Glance"),
+            html.Div(id="qa-kpi-row"),
+        ], style=_sb),
 
         # ── Output & Quality ──────────────────────────────────────────────────
-        _section_label("Output & Quality"),
-        dbc.Row([
-            dbc.Col(html.Div(dcc.Graph(id="qa-throughput"),       className="chart-card"), md=6),
-            dbc.Col(html.Div(dcc.Graph(id="qa-defect-discovery"), className="chart-card"), md=6),
-        ], className="mb-4"),
-        html.Hr(className="section-divider"),
+        html.Div([
+            _section_label("Output & Quality"),
+            dbc.Row([
+                dbc.Col(html.Div(dcc.Graph(id="qa-throughput"),       className="chart-card"), md=6),
+                dbc.Col(html.Div(dcc.Graph(id="qa-defect-discovery"), className="chart-card"), md=6),
+            ], className="mb-2"),
+        ], style=_sb),
 
         # ── Fix Speeds & SLA Compliance ───────────────────────────────────────
-        _section_label("Fix Speeds & SLA Compliance"),
-        html.P("Are we fixing critical bugs within expected timeframes? (P1=1d, P2=2d, P3=5d)",
-               style={"fontSize": "12px", "color": "#718096", "marginBottom": "10px"}),
-        html.Div(dcc.Graph(id="qa-sla"),   className="chart-card mb-4"),
-        html.Div(dcc.Graph(id="qa-aging"), className="chart-card mb-4"),
-        html.Hr(className="section-divider"),
+        html.Div([
+            _section_label("Fix Speeds & SLA Compliance"),
+            html.P("Are we fixing critical bugs within expected timeframes? (P1=1d, P2=2d, P3=5d)",
+                   style={"fontSize": "12px", "color": "#718096", "marginBottom": "10px"}),
+            html.Div(dcc.Graph(id="qa-sla"),   className="chart-card mb-3"),
+            html.Div(dcc.Graph(id="qa-aging"), className="chart-card"),
+        ], style=_sb),
 
         # ── Defect Clustering Heatmap ─────────────────────────────────────────
-        _section_label("Defect Clustering Heatmap"),
-        html.P("Where are the bugs hiding? Darker red = high volume of critical issues.",
-               style={"fontSize": "12px", "color": "#718096", "marginBottom": "10px"}),
-        html.Div(dcc.Graph(id="qa-heatmap"), className="chart-card mb-4"),
-        html.Hr(className="section-divider"),
+        html.Div([
+            _section_label("Defect Clustering Heatmap"),
+            html.P("Where are the bugs hiding? Darker red = high volume of critical issues.",
+                   style={"fontSize": "12px", "color": "#718096", "marginBottom": "10px"}),
+            html.Div(dcc.Graph(id="qa-heatmap"), className="chart-card"),
+        ], style=_sb),
 
         # ── QA Team Output & Workload ─────────────────────────────────────────
-        _section_label("QA Team Output & Workload"),
-        html.Div(dcc.Graph(id="qa-member-tp"), className="chart-card mb-4"),
-        html.Div(dcc.Graph(id="qa-workload"),  className="chart-card mb-4"),
-        html.Hr(className="section-divider"),
+        html.Div([
+            _section_label("QA Team Output & Workload"),
+            html.Div(dcc.Graph(id="qa-member-tp"), className="chart-card mb-3"),
+            html.Div(dcc.Graph(id="qa-workload"),  className="chart-card"),
+        ], style=_sb),
 
         # ── Raw Data Table ────────────────────────────────────────────────────
-        _section_label("Recent QA Items"),
-        html.Div(id="qa-recent-table"),
+        html.Div([
+            _section_label("Recent QA Items"),
+            html.Div(id="qa-recent-table"),
+        ], style=_sb),
+        qa_report_modal,
     ])
 
 
@@ -577,3 +620,22 @@ def update_qa(iterations, grouping, heatmap_dim):
 
     return (kpi_row, fig_tp, fig_disc, fig_sla, fig_age,
             fig_hm, fig_mtp, fig_wl, tbl)
+
+
+# ── Report callback ───────────────────────────────────────────────────────────
+@callback(
+    Output("qa-report-modal", "is_open"),
+    Output("qa-report-body",  "children"),
+    Output("qa-report-ts",    "children"),
+    Input("qa-report-btn",    "n_clicks"),
+    prevent_initial_call=True,
+)
+def _open_qa_report(n):
+    if not n:
+        from dash import no_update
+        return no_update, no_update, no_update
+    df      = load_data()
+    summary = summarize_qa(df)
+    body    = format_report(summary)
+    ts      = f"Generated {summary['as_of']}  •  {summary['total_bugs']} total bugs"
+    return True, body, ts

@@ -102,11 +102,9 @@ body {
     gap: 2px;
     flex: 1;
     justify-content: center;
-    overflow-x: auto;
-    scrollbar-width: none;
+    overflow: visible;
     padding: 0 16px;
 }
-.topnav-tabs::-webkit-scrollbar { display: none; }
 
 .topnav-tab {
     display: flex;
@@ -135,6 +133,76 @@ body {
 }
 
 .topnav-tab-icon { font-size: 13px; }
+
+/* Topnav Planning click-dropdown (<details>/<summary>) */
+.topnav-planning-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+/* Remove default <details> marker */
+.topnav-planning-wrapper > summary { list-style: none; }
+.topnav-planning-wrapper > summary::-webkit-details-marker { display: none; }
+
+.topnav-planning-toggle {
+    cursor: pointer;
+    user-select: none;
+}
+.topnav-planning-toggle:focus { outline: none; }
+
+.topnav-planning-arrow {
+    font-size: 10px;
+    opacity: 0.55;
+    margin-left: 2px;
+    display: inline-block;
+    transition: transform 0.15s;
+}
+
+.topnav-planning-wrapper[open] .topnav-planning-arrow { transform: rotate(180deg); }
+.topnav-planning-wrapper[open] .topnav-planning-toggle {
+    background: var(--accent-dim) !important;
+    color: var(--accent) !important;
+    border-color: rgba(129, 140, 248, 0.18) !important;
+}
+
+.topnav-planning-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-mid);
+    border-radius: 10px;
+    padding: 6px;
+    min-width: 210px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+    z-index: 300;
+}
+
+.topnav-dropdown-item {
+    color: var(--text-secondary);
+    font-size: 12.5px;
+    font-weight: 500;
+    padding: 9px 13px;
+    border-radius: 7px;
+    display: flex;
+    align-items: center;
+    text-decoration: none;
+    transition: background 0.12s, color 0.12s;
+    white-space: nowrap;
+}
+
+.topnav-dropdown-item:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    text-decoration: none;
+}
+
+.topnav-dropdown-item.active {
+    background: var(--accent-dim);
+    color: var(--accent);
+}
 
 /* Right slot */
 .topnav-right {
@@ -166,13 +234,56 @@ body {
     box-shadow: 0 0 10px rgba(129, 140, 248, 0.3);
 }
 
+.topnav-logout {
+    font-size: 12px;
+    color: #64748b;
+    text-decoration: none;
+    transition: color 0.2s;
+}
+.topnav-logout:hover { color: #e2e8f0; }
+
+/* ── Platform Modal / Dark Dropdown ─────────────────────────────────────────── */
+.dark-dropdown .Select-control,
+.dark-dropdown .Select-menu-outer {
+    background: #1e1e38 !important;
+    border-color: rgba(255,255,255,0.1) !important;
+    color: #e2e8f0 !important;
+}
+.dark-dropdown .Select-value-label,
+.dark-dropdown .Select-placeholder,
+.dark-dropdown input { color: #e2e8f0 !important; }
+.dark-dropdown .Select-option { background: #1e1e38 !important; color: #e2e8f0 !important; }
+.dark-dropdown .Select-option:hover,
+.dark-dropdown .Select-option.is-focused { background: #2a2a4a !important; }
+.dark-dropdown .Select-arrow { border-top-color: #64748b !important; }
+
+/* VirtualizedSelect / react-select v2+ */
+.dark-dropdown .Select__control { background: #1e1e38 !important; border-color: rgba(255,255,255,0.1) !important; }
+.dark-dropdown .Select__single-value { color: #e2e8f0 !important; }
+.dark-dropdown .Select__placeholder { color: #64748b !important; }
+.dark-dropdown .Select__menu { background: #1e1e38 !important; border: 1px solid rgba(255,255,255,0.1) !important; }
+.dark-dropdown .Select__option { background: #1e1e38 !important; color: #e2e8f0 !important; }
+.dark-dropdown .Select__option--is-focused { background: #2a2a4a !important; }
+.dark-dropdown .Select__input input { color: #e2e8f0 !important; }
+
+/* Bootstrap Modal dark theme */
+.modal-content {
+    background: #13132b !important;
+    border: 1px solid rgba(255,255,255,0.1) !important;
+    color: #e2e8f0 !important;
+}
+.modal-header { border-bottom-color: rgba(255,255,255,0.08) !important; }
+.modal-footer { border-top-color: rgba(255,255,255,0.08) !important; }
+.modal-title { color: #e2e8f0 !important; font-size: 15px !important; font-weight: 600 !important; }
+.btn-close { filter: invert(1) !important; }
+
 /* ── Main Content ────────────────────────────────────────────────────────────── */
 .main-content {
     margin-top: var(--topnav-h);
     padding: 28px 36px;
     min-height: calc(100vh - var(--topnav-h));
     background: var(--bg-base);
-    overflow-x: hidden;
+    overflow-x: clip;
 }
 
 /* ── Page Header — hidden (top nav provides the context) ─────────────────────── */
@@ -742,3 +853,379 @@ input:focus, select:focus, textarea:focus,
     color: var(--accent) !important;
 }
 .cell-edit-dropdown .Select-input input { color: #e2e8f0 !important; }
+
+/* ── Planner Sidebar Nav ─────────────────────────────────────────────────────── */
+.pl-nav-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 10px 6px;
+    border-radius: 8px;
+    cursor: pointer;
+    text-align: center;
+    color: var(--text-muted);
+    border: 1px solid transparent;
+    transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+    user-select: none;
+}
+.pl-nav-btn:hover {
+    color: var(--text-secondary);
+    background: rgba(255,255,255,0.04);
+    border-color: var(--border);
+}
+.pl-nav-btn--active {
+    color: var(--accent) !important;
+    background: var(--accent-dim) !important;
+    border-color: rgba(129,140,248,0.25) !important;
+}
+
+/* ── Adjuster writeback dropdowns (dark theme) ───────────────────────────── */
+.adj-dark-dd .Select-control {
+    background: #1c1c2e !important;
+    border: 1px solid rgba(255,255,255,0.12) !important;
+    border-radius: 4px !important;
+    min-height: 28px !important;
+    color: #e2e8f0 !important;
+    box-shadow: none !important;
+}
+.adj-dark-dd.is-open .Select-control,
+.adj-dark-dd .Select-control:hover {
+    border-color: rgba(129,140,248,0.4) !important;
+}
+.adj-dark-dd .Select-value-label,
+.adj-dark-dd .Select-single-value {
+    color: #c8c8e0 !important;
+    font-size: 11px !important;
+}
+.adj-dark-dd .Select-placeholder {
+    color: #505068 !important;
+    font-size: 11px !important;
+}
+.adj-dark-dd .Select-menu-outer {
+    background: #1c1c2e !important;
+    border: 1px solid rgba(255,255,255,0.14) !important;
+    border-radius: 4px !important;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5) !important;
+    z-index: 9999 !important;
+}
+.adj-dark-dd .Select-option {
+    background: #1c1c2e !important;
+    color: #c8c8e0 !important;
+    font-size: 11px !important;
+    padding: 6px 10px !important;
+}
+.adj-dark-dd .Select-option.is-focused {
+    background: #2a2a42 !important;
+    color: #e2e8f0 !important;
+}
+.adj-dark-dd .Select-option.is-selected {
+    background: rgba(129,140,248,0.18) !important;
+    color: #818cf8 !important;
+}
+.adj-dark-dd .Select-arrow-zone svg,
+.adj-dark-dd .Select-arrow {
+    border-top-color: #8892a4 !important;
+    color: #8892a4 !important;
+}
+.adj-dark-dd .Select-input > input {
+    color: #e2e8f0 !important;
+    font-size: 11px !important;
+    background: transparent !important;
+}
+.adj-dark-dd .Select-clear-zone {
+    color: #64748b !important;
+}
+.adj-dark-dd .Select-clear-zone:hover {
+    color: #f87171 !important;
+}
+
+/* ── Modal close button — visible on dark backgrounds ────────────────────── */
+.modal-header .btn-close {
+    filter: invert(1) grayscale(100%) brightness(180%);
+    opacity: 0.65;
+    transition: opacity 0.15s, transform 0.15s;
+    border-radius: 50%;
+    padding: 6px;
+}
+.modal-header .btn-close:hover {
+    opacity: 1;
+    transform: scale(1.15);
+    background: rgba(255, 255, 255, 0.12) !important;
+}
+.modal-header .btn-close:focus {
+    box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.35);
+}
+
+/* ── Modal dark shell ─────────────────────────────────────────────────────── */
+.modal-content {
+    background: var(--bg-surface) !important;
+    border: 1px solid var(--border-mid) !important;
+    border-radius: 14px !important;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.70) !important;
+}
+.modal-header {
+    border-bottom: 1px solid var(--border) !important;
+    padding: 18px 24px !important;
+}
+.modal-footer {
+    border-top: 1px solid var(--border) !important;
+    padding: 14px 24px !important;
+}
+.modal-body {
+    padding: 0 !important;
+}
+
+/* ── Gate pill indicators in story table ─────────────────────────────────── */
+.gate-pill {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-size: 11px;
+    font-weight: 600;
+    margin-bottom: 4px;
+    width: 100%;
+    border: 1px solid transparent;
+}
+.gate-pill:hover {
+    filter: brightness(1.2);
+}
+.gate-pill.gate-done {
+    background: rgba(52, 211, 153, 0.10);
+    border-color: rgba(52, 211, 153, 0.40);
+    border-left: 3px solid #34d399;
+    color: #34d399;
+    box-shadow: 0 0 12px rgba(52, 211, 153, 0.15);
+}
+.gate-pill.gate-pending {
+    background: transparent;
+    border-color: rgba(255, 255, 255, 0.09);
+    border-left: 3px solid rgba(255, 255, 255, 0.14);
+    color: #8892a4;
+}
+
+/* ── Tracker modal gate cards ─────────────────────────────────────────────── */
+.tracker-gate-card {
+    background: var(--bg-elevated);
+    border-radius: 12px;
+    padding: 16px 18px;
+    margin-bottom: 12px;
+    border: 1px solid var(--border);
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+.tracker-gate-card.gate-complete {
+    box-shadow: 0 0 28px rgba(52, 211, 153, 0.12);
+}
+.tracker-gate-card.gate-focused {
+    border-color: rgba(129, 140, 248, 0.55) !important;
+    box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.20);
+}
+
+/* ── Tracker step buttons ─────────────────────────────────────────────────── */
+.tracker-step-btn {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-bottom: 3px;
+    border: 1px solid transparent;
+    border-left: 3px solid transparent;
+    background: transparent;
+    transition: all 0.12s;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+.tracker-step-btn:hover {
+    background: rgba(255, 255, 255, 0.04) !important;
+}
+.tracker-step-btn.step-done {
+    color: var(--text-primary);
+}
+
+/* ── Filter bar rows ─────────────────────────────────────────────────────── */
+.filter-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 5px 0;
+}
+.filter-label {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    min-width: 42px;
+    flex-shrink: 0;
+}
+
+/* ── Focus Area page ─────────────────────────────────────────────────────── */
+.focus-type-btn {
+    padding: 5px 14px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    color: #8892a4;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.07);
+    transition: all 0.18s;
+    user-select: none;
+}
+.focus-type-btn:hover {
+    color: #e2e8f0;
+    background: rgba(255,255,255,0.09);
+}
+.focus-type-btn.focus-type-active {
+    color: #e2e8f0;
+    background: rgba(129,140,248,0.18);
+    border-color: rgba(129,140,248,0.50);
+}
+
+.focus-tab-btn {
+    padding: 10px 22px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    color: #8892a4;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    transition: all 0.18s;
+    margin-bottom: -1px;
+    user-select: none;
+}
+.focus-tab-btn:hover {
+    color: #e2e8f0;
+}
+.focus-tab-btn.focus-tab-active {
+    color: #818cf8;
+    border-bottom-color: #818cf8;
+}
+
+/* Focus Area state dropdown — dark theme override */
+.focus-state-dropdown .Select-control,
+.focus-state-dropdown .Select-menu-outer {
+    background: #13132a !important;
+    border-color: rgba(255,255,255,0.07) !important;
+    color: #e2e8f0 !important;
+}
+.focus-state-dropdown .Select-value-label,
+.focus-state-dropdown .Select-placeholder,
+.focus-state-dropdown .Select-input input {
+    color: #8892a4 !important;
+}
+.focus-state-dropdown .Select-option {
+    background: #13132a !important;
+    color: #e2e8f0 !important;
+}
+.focus-state-dropdown .Select-option:hover,
+.focus-state-dropdown .Select-option.is-focused {
+    background: rgba(129,140,248,0.15) !important;
+}
+.focus-state-dropdown .Select-multi-value-wrapper .Select-value {
+    background: rgba(129,140,248,0.18) !important;
+    border-color: rgba(129,140,248,0.40) !important;
+    color: #e2e8f0 !important;
+    border-radius: 4px;
+}
+.focus-state-dropdown .Select-value-icon {
+    border-right-color: rgba(129,140,248,0.40) !important;
+    color: #818cf8 !important;
+}
+.focus-state-dropdown .Select-arrow { border-top-color: #8892a4 !important; }
+
+/* ── Developer Capacity page ─────────────────────────────────────────────── */
+.dcap-view-btn {
+    padding: 5px 14px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    color: #8892a4;
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 6px;
+    margin-right: 6px;
+    transition: all 0.15s;
+    user-select: none;
+}
+.dcap-view-btn:hover {
+    color: #e2e8f0;
+    background: rgba(255,255,255,0.06);
+}
+.dcap-view-btn.dcap-view-active {
+    color: #e2e8f0;
+    background: rgba(129,140,248,0.15);
+    border-color: rgba(129,140,248,0.45);
+}
+
+.dcap-subtab {
+    padding: 10px 20px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    color: #8892a4;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: all 0.18s;
+    user-select: none;
+}
+.dcap-subtab:hover {
+    color: #e2e8f0;
+}
+.dcap-subtab.dcap-subtab-active {
+    color: #fbbf24;
+    border-bottom-color: #fbbf24;
+}
+
+/* ── Planning — collapsible filter bar ───────────────────────────────────── */
+.plan-filter-details {
+    margin-bottom: 8px;
+}
+
+.plan-filter-summary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    list-style: none;
+    padding: 6px 8px;
+    margin-bottom: 2px;
+    border-radius: 8px;
+    user-select: none;
+    width: fit-content;
+    border: 1px solid rgba(255,255,255,0.06);
+    background: rgba(255,255,255,0.03);
+    transition: background 0.15s;
+}
+.plan-filter-summary::-webkit-details-marker { display: none; }
+.plan-filter-summary::marker               { display: none; }
+.plan-filter-summary:hover {
+    background: rgba(129,140,248,0.08);
+    border-color: rgba(129,140,248,0.3);
+}
+
+/* ── Planning window golden enclosure — bottom edge on last data row ───────── */
+/* Dev matrix: Developer=col1, M0=col2, M1=col3, M2=col4 */
+.dev-matrix tbody tr:last-child td:nth-child(2),
+.dev-matrix tbody tr:last-child td:nth-child(3),
+.dev-matrix tbody tr:last-child td:nth-child(4) {
+    border-bottom: 2px solid #fbbf24 !important;
+}
+/* Story matrix: Story=col1, Size=col2, M0=col3, M1=col4, M2=col5 */
+.story-matrix tbody tr:last-child td:nth-child(3),
+.story-matrix tbody tr:last-child td:nth-child(4),
+.story-matrix tbody tr:last-child td:nth-child(5) {
+    border-bottom: 2px solid #fbbf24 !important;
+}
+

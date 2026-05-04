@@ -60,6 +60,8 @@ _FIELDS = [
     "Custom.Stage",
     "Custom.Type",
     "Microsoft.VSTS.Scheduling.FinishDate",
+    "Custom.Userstoryowner",
+    "System.Parent",
 ]
 
 # ── Engine (singleton) ────────────────────────────────────────────────────────
@@ -185,6 +187,8 @@ def _transform(work_items) -> pd.DataFrame:
             "tags":              f.get("System.Tags", ""),
             "type":              f.get("Custom.Type", ""),
             "stage":             f.get("Custom.Stage", "Unassigned"),
+            "story_owner":       f.get("Custom.Userstoryowner", ""),
+            "parent_id":         f.get("System.Parent"),   # int or None
         })
 
     if not rows:
@@ -235,6 +239,138 @@ def _bust_loader_cache():
         pass
 
 
+# ── Sprint iteration-history sync ─────────────────────────────────────────────
+
+def _get_current_sprint_path(engine) -> str | None:
+    """
+    Find the iteration path for the current calendar month by querying
+    work_items_main for the most-populated path matching 'Month YYYY'.
+    Returns None if nothing matches.
+    """
+    from datetime import date
+    month_name = date.today().strftime("%B %Y")   # e.g. "April 2026"
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT iteration_path, COUNT(*) AS cnt "
+                    "FROM work_items_main "
+                    "WHERE iteration_path ILIKE :pattern "
+                    "GROUP BY iteration_path ORDER BY cnt DESC LIMIT 1"
+                ),
+                {"pattern": f"%{month_name}%"},
+            ).fetchall()
+        if rows:
+            return rows[0].iteration_path
+    except Exception as e:
+        log.warning("Could not determine current sprint path: %s", e)
+    return None
+
+
+def _find_iteration_added_date(wit_client, item_id: int, sprint_path: str):
+    """
+    Return the datetime when item_id was LAST moved into sprint_path,
+    by scanning its ADO update revisions for a System.IterationPath change.
+    Returns None if no such revision is found (item may have been created
+    directly in the sprint — caller applies created_date fallback).
+    """
+    try:
+        updates = wit_client.get_updates(item_id)
+        last_added = None
+        for update in (updates or []):
+            if not update.fields:
+                continue
+            iter_change = update.fields.get("System.IterationPath")
+            if iter_change is None:
+                continue
+            new_val = getattr(iter_change, "new_value", None)
+            if new_val == sprint_path:
+                last_added = getattr(update, "revised_date", None)
+        return last_added
+    except Exception as e:
+        log.debug("Could not fetch updates for item %s: %s", item_id, e)
+        return None
+
+
+def _sync_sprint_iteration_history(wit_client, engine) -> None:
+    """
+    For every item currently in the sprint that we haven't tracked yet,
+    fetch its ADO revision history, detect when it entered the sprint,
+    and persist to p_sprint_item_history.
+
+    Only processes *new* items (not already in the history table) to keep
+    incremental sync fast.  Falls back to created_date when no explicit
+    IterationPath change revision exists (item was created directly in sprint).
+    """
+    from datetime import date
+    from db.focus import load_sprint_history, bulk_upsert_sprint_history
+
+    sprint_path = _get_current_sprint_path(engine)
+    if not sprint_path:
+        log.info("Sprint history sync: no current sprint path found, skipping")
+        return
+
+    log.info("Sprint history sync: sprint path = %s", sprint_path)
+
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT work_item_id, created_date "
+                    "FROM work_items_main "
+                    "WHERE iteration_path = :path"
+                ),
+                {"path": sprint_path},
+            ).fetchall()
+    except Exception as e:
+        log.warning("Sprint history sync: could not query sprint items: %s", e)
+        return
+
+    if not rows:
+        log.info("Sprint history sync: no items in current sprint")
+        return
+
+    existing = load_sprint_history(sprint_path)
+    new_rows  = [r for r in rows if r.work_item_id not in existing]
+
+    if not new_rows:
+        log.info("Sprint history sync: all %d items already tracked", len(rows))
+        return
+
+    log.info("Sprint history sync: fetching revision history for %d new items", len(new_rows))
+
+    today = date.today()
+    sprint_start_ts = pd.Timestamp(datetime(today.year, today.month, 1, tzinfo=timezone.utc))
+
+    records = []
+    for i, row in enumerate(new_rows):
+        if i > 0:
+            time.sleep(0.65)   # throttle: ~92 req/min, well under ADO limit
+
+        item_id  = row.work_item_id
+        added_at = _find_iteration_added_date(wit_client, item_id, sprint_path)
+
+        # Fallback: item created directly into sprint (no IterationPath change revision)
+        if added_at is None and row.created_date is not None:
+            cd = pd.Timestamp(row.created_date)
+            if cd.tzinfo is None:
+                cd = cd.tz_localize("UTC")
+            if cd >= sprint_start_ts:
+                added_at = cd.to_pydatetime()
+
+        records.append({
+            "work_item_id":  item_id,
+            "iteration_path": sprint_path,
+            "added_at":      added_at,
+        })
+
+        if (i + 1) % 25 == 0:
+            log.info("  sprint history: %d / %d processed", i + 1, len(new_rows))
+
+    bulk_upsert_sprint_history(records)
+    log.info("Sprint history sync complete: %d records upserted for %s", len(records), sprint_path)
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 _last_sync_result: dict = {"status": "never", "timestamp": None, "count": 0}
 
@@ -280,6 +416,12 @@ def run_sync(full: bool = False) -> dict:
         items   = _fetch_details(wit_client, ids)
         df      = _transform(items)
         count   = _upsert(df, engine)
+
+        try:
+            _sync_sprint_iteration_history(wit_client, engine)
+        except Exception as _sh_err:
+            log.warning("Sprint history sync failed (non-fatal): %s", _sh_err)
+
         _bust_loader_cache()
 
         elapsed = round(time.time() - t0, 1)

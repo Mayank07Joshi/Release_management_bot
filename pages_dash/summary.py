@@ -16,11 +16,15 @@ from dash.exceptions import PreventUpdate
 from data.loader import load_data, apply_filters, filter_activity_since
 from components.matrix import compute_mom_delta
 from config.settings import ANALYSIS_START_DATE, RECENT_ITEMS_COUNT, ADO_BASE_URL
+from reports.summarizer import summarize_executive
+from reports.formatter import format_report
+from reports.recommendations import get_recommendations_all
+from reports.rec_display import rec_strip
 
 dash.register_page(__name__, path="/summary", name="Summary")
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-OPEN_STATES   = ["Closed", "Not an issue", "Not Required", "Userstory Update"]
+OPEN_STATES   = ["Closed", "Not an issue", "Not Required", "Userstory Update", "No Customer Response"]
 P1_STALE_DAYS = 7
 
 STATE_MAP = {
@@ -39,9 +43,10 @@ STATE_MAP = {
     "Reopened":         "🔴 Reopened",
     "Resolved":         "✅ Resolved",
     "Closed":           "✅ Closed",
-    "Not an issue":     "❌ Rejected",
-    "Not Required":     "❌ Rejected",
-    "Userstory Update": "❌ Rejected",
+    "Not an issue":         "❌ Rejected",
+    "Not Required":         "❌ Rejected",
+    "No Customer Response": "❌ Rejected",
+    "Userstory Update":     "❌ Rejected",
 }
 TYPE_CONSOLIDATE = {"Bug_UI": "Bug", "Bug_Text": "Bug"}
 
@@ -158,6 +163,12 @@ _CHART_TIPS = {
         "closed bar are falling behind — good for spotting which parts of the "
         "product need more focus.",
     ),
+    "donut": (
+        "Open Items by Type",
+        "Distribution of open actionable items by type — excludes closed, rejected, "
+        "and non-required items. High Bug share relative to Enhancements signals "
+        "quality pressure. Use this to gauge where incoming workload is concentrated.",
+    ),
 }
 
 # ── KPI definitions ───────────────────────────────────────────────────────────
@@ -193,11 +204,18 @@ _KPI_META = {
         "Green ▲ = team is shipping faster. Red ▼ = pace is slowing down.",
     ),
     "bugs": (
-        "Total Bugs",
-        "All bugs regardless of status",
-        "Total bug count across all states (open, closed, rejected). "
+        "Open Bugs",
+        "Bugs requiring action (not closed or rejected)",
+        "Open bug count — excludes closed and rejected bugs. "
         "Hover to see the split by origin: Customer / Internal / Automation. "
-        "Red ▲ = bug volume is rising. Green ▼ = net reduction in bugs.",
+        "Red ▲ = bug volume is rising. Green ▼ = net reduction in open bugs.",
+    ),
+    "resolved_month": (
+        "Resolved This Month",
+        "Items closed or resolved in current calendar month",
+        "Count of items that were closed or resolved during the current calendar month. "
+        "A healthy team consistently resolves more than it opens each month. "
+        "Resets at the start of each calendar month — no delta shown.",
     ),
     "avg_cycle": (
         "Avg. Cycle Time",
@@ -219,6 +237,18 @@ _KPI_META = {
         "Open items with no assigned person. "
         "Unassigned items risk being forgotten and can stall delivery. "
         "Click this card to see the full list. Ideally this should be zero.",
+    ),
+    "customer_bugs": (
+        "Customer Issues",
+        "Open bugs reported by end users",
+        "Open bugs tagged as 'Customer' origin — these reached production and "
+        "were reported by actual users. A rising number signals quality escaping to customers.",
+    ),
+    "internal_bugs": (
+        "Internal Issues",
+        "Open bugs caught by the team",
+        "Open bugs tagged as 'Internal' origin — caught in QA, dev review, or internal testing "
+        "before reaching customers. A healthy team catches most issues here, not in production.",
     ),
 }
 
@@ -337,35 +367,204 @@ def layout():
     ], style=_fb_style)
 
     def _section_label(text):
-        return html.Div(text, style={
-            "fontSize": "11px", "fontWeight": "700", "textTransform": "uppercase",
-            "letterSpacing": "0.8px", "color": "#a0aec0", "marginBottom": "12px",
-            "marginTop": "4px",
+        return html.Div([
+            html.Div(style={
+                "display": "inline-block", "width": "3px", "height": "14px",
+                "borderRadius": "2px", "background": "#7c6af4",
+                "verticalAlign": "middle", "marginRight": "8px",
+            }),
+            html.Span(text),
+        ], style={
+            "fontSize": "13px", "fontWeight": "700", "textTransform": "uppercase",
+            "letterSpacing": "0.7px", "color": "#c8c8e0", "marginBottom": "14px",
+            "marginTop": "4px", "display": "flex", "alignItems": "center",
         })
 
+    _sb = {
+        "background": "rgba(255,255,255,0.015)",
+        "borderRadius": "12px",
+        "border": "1px solid rgba(255,255,255,0.04)",
+        "padding": "20px 20px 12px 20px",
+        "marginBottom": "24px",
+    }
+
+    _func_title, _func_desc = _CHART_TIPS["function"]
+
     return html.Div([
-        # ── Page header ───────────────────────────────────────────────────────
+        # ── Page header with Executive Report button ──────────────────────────
         html.Div([
-            html.H1("📊 Summary Dashboard", className="page-title"),
-            html.P(
-                "A complete picture of where the team stands today — "
-                "open work, active bugs, priorities, and delivery pace.",
-                className="page-subtitle",
-            ),
-        ], className="page-header"),
+            html.Div([
+                html.H1("Summary", className="page-title"),
+                html.P("Daily quick-glance for release management & portfolio health.",
+                       className="page-subtitle"),
+            ]),
+            dbc.Button("📄 Executive Report", id="sum-report-btn", size="sm", n_clicks=0,
+                       style={
+                           "background": "rgba(99,102,241,0.15)", "color": "#818cf8",
+                           "border": "1px solid rgba(99,102,241,0.35)", "borderRadius": "8px",
+                           "fontSize": "13px", "fontWeight": "600", "padding": "7px 16px",
+                       }),
+        ], className="page-header", style={"display": "flex", "justifyContent": "space-between",
+                                           "alignItems": "flex-start", "marginBottom": "16px"}),
 
-        # ── Filters ───────────────────────────────────────────────────────────
         filter_bar,
+        html.Div(id="sum-rec-strip"),
 
-        # ── Status snapshot (health + alerts together, right after filters) ──
-        html.Div(id="sum-health-status", className="mb-2"),
-        html.Div(id="sum-alerts-row",    className="mb-3"),
+        # ── Section 1: Portfolio Health ───────────────────────────────────────
+        html.Div([
+            _section_label("Portfolio Health"),
+            html.Div(id="sum-health-status", className="mb-2"),
+            html.Div(id="sum-alerts-row",    className="mb-3"),
+            html.Div(id="sum-kpi-section1"),
+        ], style=_sb),
 
-        # ── Act 1: At a Glance — executive KPIs ──────────────────────────────
-        _section_label("At a Glance"),
-        html.Div(id="sum-kpi-row"),
+        # ── Section 2: Bug & Quality ──────────────────────────────────────────
+        html.Div([
+            _section_label("Bug & Quality"),
+            html.Div(id="sum-kpi-section2"),
+        ], style=_sb),
 
-        # Hover popover on Total Bugs card — shows Customer/Internal/Automation split
+        # ── Section 3: Workload Risk ──────────────────────────────────────────
+        html.Div([
+            _section_label("Workload Risk"),
+            html.Div(id="sum-kpi-section3"),
+        ], style=_sb),
+
+        # ── Section 4: Delivery Trends ────────────────────────────────────────
+        html.Div([
+            _section_label("Delivery Trends"),
+            _chart_card("trend", "sum-trend-chart"),
+            html.Div([
+                html.Div([
+                    html.Span("📅 Scope This Month", className="chart-title-text"),
+                    _info_icon("tip-scope"),
+                    dbc.Tooltip(
+                        "Tracks how many items were added vs. closed in the current calendar month. "
+                        "A positive Net Change means the backlog is growing — "
+                        "more work is coming in than going out.",
+                        target="tip-scope", placement="right",
+                        style={"maxWidth": "280px", "fontSize": "12px", "lineHeight": "1.5"},
+                    ),
+                ], className="chart-section-header"),
+                html.Div(id="sum-scope-creep", style={"marginTop": "12px"}),
+            ], className="chart-card"),
+        ], style=_sb),
+
+        # ── Section 5: Priority & Risk ────────────────────────────────────────
+        html.Div([
+            _section_label("Priority & Risk"),
+            _chart_card("priority", "sum-priority-chart", "sum-insight-priority"),
+            html.Div([
+                html.Div([
+                    html.Span("🔥 Open P1 Bugs", className="chart-title-text"),
+                    _info_icon("tip-p1table"),
+                    dbc.Tooltip(
+                        "P1 bugs are the most critical issues — they affect customers or block key workflows. "
+                        "These should be resolved as fast as possible. "
+                        "Items highlighted in red have been open for 14+ days.",
+                        target="tip-p1table", placement="right",
+                        style={"maxWidth": "300px", "fontSize": "12px", "lineHeight": "1.5"},
+                    ),
+                ], className="chart-section-header"),
+                html.Div(id="sum-p1-table", style={"marginTop": "10px"}),
+                html.Div([
+                    dbc.Button("← Prev", id="sum-p1-prev", size="sm", outline=True,
+                               color="secondary", n_clicks=0),
+                    html.Span(id="sum-p1-page-info",
+                              style={"fontSize": "12px", "color": "#a0aec0", "margin": "0 8px"}),
+                    dbc.Button("Next →", id="sum-p1-next", size="sm", outline=True,
+                               color="secondary", n_clicks=0),
+                ], style={"display": "flex", "alignItems": "center", "justifyContent": "center",
+                          "marginTop": "10px", "gap": "6px"}),
+            ], className="chart-card"),
+        ], style=_sb),
+
+        # ── Section 6: Work Distribution ──────────────────────────────────────
+        html.Div([
+            _section_label("Work Distribution"),
+            _chart_card("donut", "sum-bug-enh-donut"),
+            html.Div([
+                html.Div([
+                    html.Div([
+                        html.Span("🗂 Work Type Breakdown", className="chart-title-text"),
+                        _info_icon("tip-type"),
+                        dbc.Tooltip(
+                            "Click any tile to drill into product areas, then states. "
+                            "Use ← Back to navigate up.",
+                            target="tip-type", placement="right",
+                            style={"maxWidth": "300px", "fontSize": "12px", "lineHeight": "1.5"},
+                        ),
+                    ], style={"display": "flex", "alignItems": "center", "gap": "6px"}),
+                    html.Div([
+                        html.Span(id="sum-treemap-breadcrumb",
+                                  style={"fontSize": "12px", "color": "#a0aec0"}),
+                        dbc.Button("← Back", id="sum-treemap-back", size="sm",
+                                   outline=True, color="secondary", n_clicks=0,
+                                   style={"fontSize": "11px", "padding": "2px 10px",
+                                          "display": "none"}),
+                    ], style={"display": "flex", "alignItems": "center", "gap": "10px",
+                              "marginTop": "6px"}),
+                ], className="chart-section-header"),
+                dcc.Graph(id="sum-type-donut", config={"displayModeBar": False},
+                          style={"height": "520px"}),
+            ], className="chart-card"),
+
+            html.Div([
+                html.Div([
+                    html.Div([
+                        html.Span(_func_title, className="chart-title-text"),
+                        _info_icon("tip-function"),
+                        dbc.Tooltip(_func_desc, target="tip-function", placement="right",
+                                    style={"maxWidth": "300px", "fontSize": "12px", "lineHeight": "1.5"}),
+                    ], style={"display": "flex", "alignItems": "center", "gap": "6px", "flex": "1"}),
+                    dcc.RadioItems(
+                        id="sum-func-filter",
+                        options=[
+                            {"label": "All", "value": "all"},
+                            {"label": "Customer", "value": "Customer"},
+                            {"label": "Internal", "value": "Internal"},
+                        ],
+                        value="all",
+                        inline=True,
+                        inputStyle={"marginRight": "4px", "cursor": "pointer"},
+                        labelStyle={"marginRight": "14px", "fontSize": "12px",
+                                    "color": "#a0aec0", "cursor": "pointer"},
+                    ),
+                ], className="chart-section-header",
+                   style={"display": "flex", "alignItems": "center",
+                          "justifyContent": "space-between", "flexWrap": "wrap", "gap": "8px"}),
+                html.Div(id="sum-insight-function", className="chart-insight"),
+                dcc.Graph(id="sum-function-chart", config={"displayModeBar": False, "responsive": True}),
+            ], className="chart-card"),
+        ], style=_sb),
+
+        # ── Section 7: Recent Activity ─────────────────────────────────────────
+        html.Div([
+            _section_label("Recent Activity"),
+            html.Div([
+                html.Div([
+                    html.Span("📋 Recently Updated Items", className="chart-title-text"),
+                    _info_icon("tip-recent"),
+                    dbc.Tooltip(
+                        "The most recently changed work items.",
+                        target="tip-recent", placement="right",
+                        style={"maxWidth": "300px", "fontSize": "12px", "lineHeight": "1.5"},
+                    ),
+                ], className="chart-section-header"),
+                html.Div(id="sum-recent-table", style={"marginTop": "10px"}),
+                html.Div([
+                    dbc.Button("← Prev", id="sum-recent-prev", size="sm", outline=True,
+                               color="secondary", n_clicks=0),
+                    html.Span(id="sum-recent-page-info",
+                              style={"fontSize": "12px", "color": "#a0aec0", "margin": "0 8px"}),
+                    dbc.Button("Next →", id="sum-recent-next", size="sm", outline=True,
+                               color="secondary", n_clicks=0),
+                ], style={"display": "flex", "alignItems": "center", "justifyContent": "center",
+                          "marginTop": "10px", "gap": "6px"}),
+            ], className="chart-card"),
+        ], style=_sb),
+
+        # ── Global overlays ────────────────────────────────────────────────────
         dbc.Popover(
             [
                 dbc.PopoverHeader(
@@ -382,119 +581,6 @@ def layout():
             placement="top",
             style={"minWidth": "220px"},
         ),
-
-        html.Hr(className="section-divider"),
-
-        # ── Act 2: Delivery Pace ──────────────────────────────────────────────
-        _section_label("Delivery Pace"),
-        _chart_card("trend", "sum-trend-chart"),
-
-        html.Div([
-            html.Div([
-                html.Span("📅 Scope This Month", className="chart-title-text"),
-                _info_icon("tip-scope"),
-                dbc.Tooltip(
-                    "Tracks how many items were added vs. closed in the current calendar month. "
-                    "A positive Net Change means the backlog is growing — "
-                    "more work is coming in than going out.",
-                    target="tip-scope", placement="right",
-                    style={"maxWidth": "280px", "fontSize": "12px", "lineHeight": "1.5"},
-                ),
-            ], className="chart-section-header"),
-            html.Div(id="sum-scope-creep", style={"marginTop": "12px"}),
-        ], className="chart-card"),
-        html.Hr(className="section-divider"),
-
-        # ── Act 3: What's Urgent ──────────────────────────────────────────────
-        _section_label("What's Urgent"),
-        _chart_card("priority", "sum-priority-chart", "sum-insight-priority"),
-
-        html.Div([
-            html.Div([
-                html.Span("🔥 Open P1 Bugs", className="chart-title-text"),
-                _info_icon("tip-p1table"),
-                dbc.Tooltip(
-                    "P1 bugs are the most critical issues — they affect customers or block key workflows. "
-                    "These should be resolved as fast as possible. "
-                    "Items highlighted in red have been open for 14+ days.",
-                    target="tip-p1table", placement="right",
-                    style={"maxWidth": "300px", "fontSize": "12px", "lineHeight": "1.5"},
-                ),
-            ], className="chart-section-header"),
-            html.Div(id="sum-p1-table", style={"marginTop": "10px"}),
-            html.Div([
-                dbc.Button("← Prev", id="sum-p1-prev", size="sm", outline=True,
-                           color="secondary", n_clicks=0),
-                html.Span(id="sum-p1-page-info",
-                          style={"fontSize": "12px", "color": "#a0aec0", "margin": "0 8px"}),
-                dbc.Button("Next →", id="sum-p1-next", size="sm", outline=True,
-                           color="secondary", n_clicks=0),
-            ], style={"display": "flex", "alignItems": "center", "justifyContent": "center",
-                      "marginTop": "10px", "gap": "6px"}),
-        ], className="chart-card"),
-        html.Hr(className="section-divider"),
-
-        # ── Act 4: Work Breakdown — drilldown treemap (Type → Area → State) ──
-        _section_label("Work Breakdown"),
-        html.Div([
-            html.Div([
-                html.Div([
-                    html.Span("🗂 Work Type Breakdown", className="chart-title-text"),
-                    _info_icon("tip-type"),
-                    dbc.Tooltip(
-                        "Click any tile to drill into product areas, then states. "
-                        "Use ← Back to navigate up.",
-                        target="tip-type", placement="right",
-                        style={"maxWidth": "300px", "fontSize": "12px", "lineHeight": "1.5"},
-                    ),
-                ], style={"display": "flex", "alignItems": "center", "gap": "6px"}),
-                html.Div([
-                    html.Span(id="sum-treemap-breadcrumb",
-                              style={"fontSize": "12px", "color": "#a0aec0"}),
-                    dbc.Button("← Back", id="sum-treemap-back", size="sm",
-                               outline=True, color="secondary", n_clicks=0,
-                               style={"fontSize": "11px", "padding": "2px 10px",
-                                      "display": "none"}),
-                ], style={"display": "flex", "alignItems": "center", "gap": "10px",
-                          "marginTop": "6px"}),
-            ], className="chart-section-header"),
-            dcc.Graph(id="sum-type-donut", config={"displayModeBar": False},
-                      style={"height": "520px"}),
-        ], className="chart-card"),
-        html.Hr(className="section-divider"),
-
-        # ── Act 5: Where is the Work ──────────────────────────────────────────
-        _section_label("Where Is the Work"),
-        _chart_card("function", "sum-function-chart", "sum-insight-function"),
-        html.Hr(className="section-divider"),
-
-        # ── Act 6: Recent Activity ────────────────────────────────────────────
-        _section_label("Recent Activity"),
-        html.Div([
-            html.Div([
-                html.Span("📋 Recently Updated Items", className="chart-title-text"),
-                _info_icon("tip-recent"),
-                dbc.Tooltip(
-                    "The most recently changed work items. "
-                    "You can edit Priority, State, and Assigned To directly in the table — "
-                    "changes sync back to Azure DevOps automatically.",
-                    target="tip-recent", placement="right",
-                    style={"maxWidth": "300px", "fontSize": "12px", "lineHeight": "1.5"},
-                ),
-            ], className="chart-section-header"),
-            html.Div(id="sum-recent-table", style={"marginTop": "10px"}),
-            html.Div([
-                dbc.Button("← Prev", id="sum-recent-prev", size="sm", outline=True,
-                           color="secondary", n_clicks=0),
-                html.Span(id="sum-recent-page-info",
-                          style={"fontSize": "12px", "color": "#a0aec0", "margin": "0 8px"}),
-                dbc.Button("Next →", id="sum-recent-next", size="sm", outline=True,
-                           color="secondary", n_clicks=0),
-            ], style={"display": "flex", "alignItems": "center", "justifyContent": "center",
-                      "marginTop": "10px", "gap": "6px"}),
-        ], className="chart-card"),
-
-        # ── Unassigned items modal ────────────────────────────────────────────
         dbc.Modal([
             dbc.ModalHeader(dbc.ModalTitle("📌 Unassigned Open Items")),
             dbc.ModalBody(html.Div(id="sum-unassigned-modal-body")),
@@ -503,14 +589,25 @@ def layout():
                            className="ms-auto", n_clicks=0)
             ),
         ], id="sum-unassigned-modal", size="xl", scrollable=True, is_open=False),
-
-        # ── Hidden stores ─────────────────────────────────────────────────────
         dcc.Store(id="sum-tree-data"),
         dcc.Store(id="sum-treemap-path", data=[]),
         dcc.Store(id="sum-p1-store"),
         dcc.Store(id="sum-p1-page", data=0),
         dcc.Store(id="sum-recent-store"),
         dcc.Store(id="sum-recent-page", data=0),
+
+        # ── Executive Report modal ─────────────────────────────────────────────
+        dbc.Modal([
+            dbc.ModalHeader(
+                dbc.ModalTitle("📄 Executive Report — Portfolio Health"),
+                close_button=True,
+            ),
+            dbc.ModalBody(html.Div(id="sum-report-body")),
+            dbc.ModalFooter(
+                html.Span(id="sum-report-ts",
+                          style={"fontSize": "11px", "color": "#64748b"}),
+            ),
+        ], id="sum-report-modal", is_open=False, size="xl", backdrop="static"),
     ])
 
 
@@ -519,24 +616,28 @@ def layout():
     Output("sum-health-status",       "children"),   # 1
     Output("sum-alerts-row",          "children"),   # 2
     Output("sum-bugs-breakdown-body", "children"),   # 3
-    Output("sum-kpi-row",          "children"),   # 4
-    Output("sum-trend-chart",      "figure"),        # 5
-    Output("sum-scope-creep",      "children"),      # 6
-    Output("sum-priority-chart",   "figure"),        # 7
-    Output("sum-insight-priority", "children"),      # 8
-    Output("sum-function-chart",   "figure"),        # 9
-    Output("sum-insight-function", "children"),      # 10
+    Output("sum-kpi-section1",     "children"),      # 4  Portfolio Health KPIs
+    Output("sum-kpi-section2",     "children"),      # 5  Bug & Quality KPIs
+    Output("sum-kpi-section3",     "children"),      # 6  Workload Risk KPIs
+    Output("sum-trend-chart",      "figure"),        # 7
+    Output("sum-scope-creep",      "children"),      # 8
+    Output("sum-priority-chart",   "figure"),        # 9
+    Output("sum-insight-priority", "children"),      # 10
+    Output("sum-function-chart",   "figure"),        # 11
+    Output("sum-insight-function", "children"),      # 12
     Output("sum-tree-data",        "data"),          # 13
     Output("sum-p1-store",         "data"),          # 14
     Output("sum-p1-page",          "data"),          # 15  reset on filter change
     Output("sum-recent-store",     "data"),          # 16
     Output("sum-recent-page",      "data"),          # 17  reset on filter change
+    Output("sum-bug-enh-donut",    "figure"),        # 18
     Input("sum-item-type",    "value"),
     Input("sum-date-start",   "value"),
     Input("sum-date-end",     "value"),
     Input("sum-employee",     "value"),
+    Input("sum-func-filter",  "value"),
 )
-def update_summary(item_types, start_date, end_date, employee):
+def update_summary(item_types, start_date, end_date, employee, func_filter):
     df = load_data()
     df = apply_filters(df, item_types=item_types, employee=employee)
     df = filter_activity_since(df, ANALYSIS_START_DATE)
@@ -562,13 +663,22 @@ def update_summary(item_types, start_date, end_date, employee):
 
     today = pd.Timestamp.today().normalize()
 
-    # ── Core counts ────────────────────────────────────────────────────────────
-    total      = len(df)
-    open_items = len(open_df)
-    total_bugs = len(bugs_all)
-    p1_open    = len(bugs_all[(bugs_all["priority"] == 1) & (~bugs_all["state"].isin(OPEN_STATES))])
-    rem_hours  = open_df["remaining_work"].sum() if "remaining_work" in open_df.columns else 0
-    unassigned = int(open_df["assigned_to"].isna().sum()) if "assigned_to" in open_df.columns else 0
+    # ── Core counts (open/actionable items only) ───────────────────────────────
+    open_items      = len(open_df)
+    open_bugs       = bugs_all[~bugs_all["state"].isin(OPEN_STATES)]
+    open_bugs_total = len(open_bugs)
+    p1_open         = len(bugs_all[(bugs_all["priority"] == 1) & (~bugs_all["state"].isin(OPEN_STATES))])
+    rem_hours       = open_df["remaining_work"].sum() if "remaining_work" in open_df.columns else 0
+
+    month_start         = today.replace(day=1)
+    resolved_this_month = int((df["closed_date"].notna() & (df["closed_date"] >= month_start)).sum())
+
+    if "type" in open_bugs.columns:
+        customer_bugs = int((open_bugs["type"] == "Customer").sum())
+        internal_bugs = int((open_bugs["type"] == "Internal").sum())
+    else:
+        customer_bugs = internal_bugs = 0
+    unassigned = int((open_df["assigned_to"] == "Unassigned").sum()) if "assigned_to" in open_df.columns else 0
 
     closed_bugs = bugs_all[bugs_all["state"] == "Closed"].copy()
     avg_cycle_val = (
@@ -592,9 +702,8 @@ def update_summary(item_types, start_date, end_date, employee):
         )
         return int(mask.sum())
 
-    prev_total      = int((df["created_date"] < prev_per.to_timestamp()).sum())
     prev_open_items = count_open_at(df, prev_per)
-    prev_bugs       = int((bugs_all["created_date"] < (prev_per + 1).to_timestamp()).sum())
+    prev_open_bugs  = count_open_at(bugs_all, prev_per)
     prev_p1_open    = count_open_at(bugs_all[bugs_all["priority"] == 1], prev_per)
 
     prev_8w_ago   = four_weeks_ago - pd.Timedelta(weeks=4)
@@ -612,7 +721,7 @@ def update_summary(item_types, start_date, end_date, employee):
         return html.Span(f"  {'▲' if up else '▼'}{abs(diff):,.1f}",
                          style={"fontSize": "11px", "color": color, "fontWeight": "600"})
 
-    def kpi_card(key, value, delta_el=None, cls="", clickable_id=None, card_id=None, sparkline_src=None):
+    def kpi_card(key, value, delta_el=None, cls="", clickable_id=None, card_id=None, sparkline_src=None, md=3):
         label, subtitle, tip_text = _KPI_META[key]
         # Always assign an ID so dbc.Tooltip can target it
         resolved_id = card_id or f"sum-kpi-{key}"
@@ -656,9 +765,9 @@ def update_summary(item_types, start_date, end_date, employee):
                              className="metric-card-clickable"),
                     tooltip,
                 ]),
-                md=3,
+                md=md,
             )
-        return dbc.Col(html.Div([inner, tooltip]), md=3)
+        return dbc.Col(html.Div([inner, tooltip]), md=md)
 
     # ── Sparkline series (8 weekly data points) ───────────────────────────────
     _vel_series, _open_series, _bugs_series, _p1_series = [], [], [], []
@@ -675,8 +784,11 @@ def update_summary(item_types, start_date, end_date, employee):
             (df["created_date"] <= w_end) &
             (df["closed_date"].isna() | (df["closed_date"] > w_end))
         ).sum()))
-        # total bugs cumulative
-        _bugs_series.append(int((bugs_all["created_date"] <= w_end).sum()))
+        # open bugs snapshot at week-end
+        _bugs_series.append(int((
+            (bugs_all["created_date"] <= w_end) &
+            (bugs_all["closed_date"].isna() | (bugs_all["closed_date"] > w_end))
+        ).sum()))
         # p1 open snapshot
         p1_mask = bugs_all["priority"] == 1
         _p1_series.append(int((
@@ -690,34 +802,40 @@ def update_summary(item_types, start_date, end_date, employee):
     sl_bugs = _sparkline_svg(_bugs_series, color="#c05050")
     sl_p1   = _sparkline_svg(_p1_series,   color="#c05050")
 
-    kpi_row = html.Div([
-        # Row 1 — Executive view
-        dbc.Row([
-            kpi_card("total",    f"{total:,}",
-                     delta_badge(total, prev_total, lower_is_better=False)),
-            kpi_card("open",     f"{open_items:,}",
-                     delta_badge(open_items, prev_open_items, lower_is_better=True),
-                     sparkline_src=sl_open),
-            kpi_card("p1",       f"{p1_open:,}",
-                     delta_badge(p1_open, prev_p1_open, lower_is_better=True),
-                     "danger" if p1_open > 0 else "success",
-                     sparkline_src=sl_p1),
-            kpi_card("velocity", f"{velocity}",
-                     delta_badge(velocity, prev_velocity, lower_is_better=False),
-                     sparkline_src=sl_vel),
-        ], className="g-3 mb-3"),
-        # Row 2 — Operational view
-        dbc.Row([
-            kpi_card("bugs",      f"{total_bugs:,}",
-                     delta_badge(total_bugs, prev_bugs, lower_is_better=True),
-                     card_id="sum-kpi-bugs", sparkline_src=sl_bugs),
-            kpi_card("avg_cycle", avg_cycle_str),
-            kpi_card("rem_hours", f"{rem_hours:,.0f}h"),
-            kpi_card("unassigned", f"{unassigned:,}",
-                     cls="danger" if unassigned > 10 else "",
-                     clickable_id="sum-unassigned-card-click"),
-        ], className="g-3"),
-    ])
+    # ── Section 1 KPIs: Portfolio Health ──────────────────────────────────────
+    kpi_section1 = dbc.Row([
+        kpi_card("resolved_month", f"{resolved_this_month:,}"),
+        kpi_card("open",     f"{open_items:,}",
+                 delta_badge(open_items, prev_open_items, lower_is_better=True),
+                 sparkline_src=sl_open),
+        kpi_card("p1",       f"{p1_open:,}",
+                 delta_badge(p1_open, prev_p1_open, lower_is_better=True),
+                 "danger" if p1_open > 0 else "success",
+                 sparkline_src=sl_p1),
+        kpi_card("velocity", f"{velocity}",
+                 delta_badge(velocity, prev_velocity, lower_is_better=False),
+                 sparkline_src=sl_vel),
+    ], className="g-3")
+
+    # ── Section 2 KPIs: Bug & Quality ─────────────────────────────────────────
+    kpi_section2 = dbc.Row([
+        kpi_card("bugs",         f"{open_bugs_total:,}",
+                 delta_badge(open_bugs_total, prev_open_bugs, lower_is_better=True),
+                 card_id="sum-kpi-bugs", sparkline_src=sl_bugs),
+        kpi_card("avg_cycle",    avg_cycle_str),
+        kpi_card("customer_bugs", f"{customer_bugs:,}",
+                 cls="danger" if customer_bugs > 0 else ""),
+        kpi_card("internal_bugs", f"{internal_bugs:,}",
+                 cls="warning" if internal_bugs > 0 else ""),
+    ], className="g-3")
+
+    # ── Section 3 KPIs: Workload Risk ─────────────────────────────────────────
+    kpi_section3 = dbc.Row([
+        kpi_card("rem_hours",   f"{rem_hours:,.0f}h", md=6),
+        kpi_card("unassigned",  f"{unassigned:,}",
+                 cls="danger" if unassigned > 10 else "",
+                 clickable_id="sum-unassigned-card-click", md=6),
+    ], className="g-3")
 
     # ── RAG health banner ───────────────────────────────────────────────────────
     open_p1_df = bugs_all[(bugs_all["priority"] == 1) & (~bugs_all["state"].isin(OPEN_STATES))].copy()
@@ -752,34 +870,59 @@ def update_summary(item_types, start_date, end_date, employee):
             + f". {unassigned} open items have no owner assigned."
         )
 
+    # ── Alert chips folded into banner ──────────────────────────────────────────
+    stale_p1 = open_p1_df[open_p1_df["age_days"] >= P1_STALE_DAYS]
+    alert_chips = []
+
+    if not stale_p1.empty:
+        oldest_days = int(stale_p1["age_days"].max())
+        assignees   = ", ".join(stale_p1["assigned_to"].dropna().unique()[:3])
+        alert_chips.append(html.Span([
+            html.Span(f"⚠ {len(stale_p1)} stale P1 bug{'s' if len(stale_p1) != 1 else ''}",
+                      style={"fontWeight": "600"}),
+            html.Span(f" · oldest {oldest_days}d",
+                      style={"opacity": "0.8"}),
+            html.Span(f" · {assignees}",
+                      style={"opacity": "0.65", "fontSize": "11px"}) if assignees else "",
+        ], style={
+            "display": "inline-flex", "alignItems": "center", "gap": "3px",
+            "background": "rgba(192,80,80,0.15)", "border": "1px solid rgba(192,80,80,0.3)",
+            "borderRadius": "6px", "padding": "4px 11px", "fontSize": "12px",
+            "color": "#e07070",
+        }))
+
+    if unassigned > 0:
+        alert_chips.append(html.Span([
+            html.Span(f"📌 {unassigned} unassigned",
+                      style={"fontWeight": "600"}),
+            html.Span(" · click card to view",
+                      style={"opacity": "0.7", "fontSize": "11px"}),
+        ], style={
+            "display": "inline-flex", "alignItems": "center", "gap": "4px",
+            "background": "rgba(214,158,46,0.12)", "border": "1px solid rgba(214,158,46,0.3)",
+            "borderRadius": "6px", "padding": "4px 11px", "fontSize": "12px",
+            "color": "#d69e2e",
+        }))
+
     health_banner = dbc.Alert(
-        dbc.Row([
-            dbc.Col(html.Div([
-                html.Span(f"{rag_icon} Portfolio Status: ", style={"fontWeight": "700"}),
-                html.Span(rag_label, style={"fontWeight": "700"}),
-            ], style={"fontSize": "15px"}), md="auto"),
-            dbc.Col(html.Span(rag_detail, style={"fontSize": "13px"}),
-                    className="d-flex align-items-center"),
-        ], align="center"),
+        [
+            dbc.Row([
+                dbc.Col(html.Div([
+                    html.Span(f"{rag_icon} Portfolio Status: ", style={"fontWeight": "700"}),
+                    html.Span(rag_label, style={"fontWeight": "700"}),
+                ], style={"fontSize": "15px"}), md="auto"),
+                dbc.Col(html.Span(rag_detail, style={"fontSize": "13px"}),
+                        className="d-flex align-items-center"),
+            ], align="center"),
+            html.Div(alert_chips,
+                     style={"display": "flex", "flexWrap": "wrap", "gap": "8px",
+                            "marginTop": "10px"}) if alert_chips else html.Div(),
+        ],
         color=rag_color,
         style={"padding": "12px 20px", "borderRadius": "10px", "marginBottom": "0"},
     )
 
-    # ── Alerts ──────────────────────────────────────────────────────────────────
-    alerts = []
-    stale_p1 = open_p1_df[open_p1_df["age_days"] >= P1_STALE_DAYS]
-    if not stale_p1.empty:
-        alerts.append(dbc.Alert([
-            html.Strong(f"⚠️ {len(stale_p1)} P1 bug(s) open for {P1_STALE_DAYS}+ days. "),
-            f"Oldest: {int(stale_p1['age_days'].max())} days. ",
-            f"Assignees: {', '.join(stale_p1['assigned_to'].dropna().unique()[:5])}",
-        ], color="danger", style={"padding": "10px 16px", "fontSize": "13px", "marginBottom": "8px"}))
-    if unassigned > 0:
-        alerts.append(dbc.Alert(
-            f"📌 {unassigned} open item(s) have no assignee — at risk of being missed.",
-            color="warning", style={"padding": "10px 16px", "fontSize": "13px", "marginBottom": "8px"}
-        ))
-    alerts_row = html.Div(alerts) if alerts else html.Div()
+    alerts_row = html.Div()  # chips now live in the banner
 
     # ── Trend chart: weekly opened vs closed, last 12 weeks ────────────────────
     weeks_start = pd.date_range(end=today, periods=13, freq="W-MON")[:-1]
@@ -824,7 +967,6 @@ def update_summary(item_types, start_date, end_date, employee):
     )
 
     # ── Scope creep card ────────────────────────────────────────────────────────
-    month_start       = today.replace(day=1)
     added_this_month  = int((df["created_date"] >= month_start).sum())
     closed_this_month = int((df["closed_date"].notna() & (df["closed_date"] >= month_start)).sum())
     net_change        = added_this_month - closed_this_month
@@ -883,8 +1025,8 @@ def update_summary(item_types, start_date, end_date, employee):
         ], className="metric-card"), md=3),
     ], className="g-3")
 
-    # ── State breakdown ────────────────────────────────────────────────────────
-    df_state = df.copy()
+    # ── State breakdown (open/actionable items only) ───────────────────────────
+    df_state = open_df.copy()
     df_state["state_group"] = df_state["state"].map(STATE_MAP).fillna("❓ Other")
     df_state["type_group"]  = df_state["work_item_type"].replace(TYPE_CONSOLIDATE)
 
@@ -950,6 +1092,42 @@ def update_summary(item_types, start_date, end_date, employee):
     insight_priority = (". ".join(parts) + ". "
                         + (f"{p2_bugs_count} P2 high-priority bug{'s' if p2_bugs_count != 1 else ''} also require attention."
                            if p2_bugs_count > 0 else ""))
+
+    # ── Bug / Enhancement doughnut (open items only) ────────────────────────────
+    _raw_type = open_df["work_item_type"].replace(TYPE_CONSOLIDATE).fillna("Other")
+    _type_vc  = _raw_type.value_counts().reset_index()
+    _type_vc.columns = ["Type", "Count"]
+    _keep_types = {"Bug", "Enhancement", "Task", "User Story"}
+    _type_vc["Type"] = _type_vc["Type"].apply(lambda t: t if t in _keep_types else "Other")
+    _type_vc = (_type_vc.groupby("Type", as_index=False)["Count"]
+                .sum().sort_values("Count", ascending=False))
+
+    _donut_total = int(_type_vc["Count"].sum())
+    _donut_colors = [TYPE_COLORS.get(t, "#94a3b8") for t in _type_vc["Type"]]
+    fig_donut = go.Figure(go.Pie(
+        labels=_type_vc["Type"],
+        values=_type_vc["Count"],
+        hole=0.58,
+        marker=dict(colors=_donut_colors, line=dict(color="rgba(8,8,18,0.6)", width=2)),
+        texttemplate="<b>%{label}</b><br>%{value:,}",
+        textfont=dict(size=12, color="white"),
+        hovertemplate="<b>%{label}</b><br>%{value:,} items · %{percent}<extra></extra>",
+        direction="clockwise",
+        sort=True,
+    ))
+    fig_donut.update_layout(
+        height=320,
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        margin=dict(t=20, b=30, l=20, r=20),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.18,
+                    xanchor="center", x=0.5,
+                    font=dict(size=11, color="#c8c8e0")),
+        annotations=[dict(
+            text=f"<b>{_donut_total:,}</b><br><span style='font-size:11px'>open items</span>",
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=16, color="#e2e8f0"),
+        )],
+    )
 
     # ── Area chart — concentric circles ─────────────────────────────────────────
     _CIRCLE_COLORS = [
@@ -1052,6 +1230,8 @@ def update_summary(item_types, start_date, end_date, employee):
     # ── Function open vs closed bubble chart ────────────────────────────────────
     if "function" in df.columns:
         func_df = df.copy()
+        if func_filter and func_filter != "all" and "type" in func_df.columns:
+            func_df = func_df[func_df["type"] == func_filter]
         func_df["is_open"] = ~func_df["state"].isin(OPEN_STATES)
         func_agg = func_df.groupby("function").agg(
             open=("is_open", "sum"),
@@ -1197,8 +1377,8 @@ def update_summary(item_types, start_date, end_date, employee):
 
     # ── Bugs-by-origin popover content ─────────────────────────────────────────
     _src_colors = {"Customer": "#c06060", "Internal": "#63b3ed", "Automation": "#68d391"}
-    if "type" in bugs_all.columns:
-        src_counts = bugs_all["type"].fillna("Unknown").value_counts()
+    if "type" in open_bugs.columns:
+        src_counts = open_bugs["type"].fillna("Unknown").value_counts()
         src_total  = int(src_counts.sum())
         popover_rows = []
         for src_key, src_color in _src_colors.items():
@@ -1239,18 +1419,21 @@ def update_summary(item_types, start_date, end_date, employee):
         health_banner,                      # 1  sum-health-status
         alerts_row,                         # 2  sum-alerts-row
         bugs_breakdown,                     # 3  sum-bugs-breakdown-body
-        kpi_row,                            # 4  sum-kpi-row
-        fig_trend,                          # 5  sum-trend-chart
-        scope_card,                         # 6  sum-scope-creep
-        fig_pri,                            # 7  sum-priority-chart
-        _insight_el(insight_priority),      # 8  sum-insight-priority
-        fig_function,                       # 9  sum-function-chart
-        _insight_el(insight_function),      # 10 sum-insight-function
+        kpi_section1,                       # 4  sum-kpi-section1
+        kpi_section2,                       # 5  sum-kpi-section2
+        kpi_section3,                       # 6  sum-kpi-section3
+        fig_trend,                          # 7  sum-trend-chart
+        scope_card,                         # 8  sum-scope-creep
+        fig_pri,                            # 9  sum-priority-chart
+        _insight_el(insight_priority),      # 10 sum-insight-priority
+        fig_function,                       # 11 sum-function-chart
+        _insight_el(insight_function),      # 12 sum-insight-function
         tree_df.to_dict("records") if not tree_df.empty else [],  # 13 sum-tree-data
         p1_open_df[p1_cols].to_dict("records") if not p1_open_df.empty else [],  # 14 sum-p1-store
         0,                                  # 15 sum-p1-page reset
         recent.to_dict("records") if not recent.empty else [],    # 16 sum-recent-store
         0,                                  # 17 sum-recent-page reset
+        fig_donut,                          # 18 sum-bug-enh-donut
     )
 
 
@@ -1270,7 +1453,7 @@ def update_summary(item_types, start_date, end_date, employee):
 def toggle_unassigned_modal(open_clicks, close_clicks,
                              item_types, start_date, end_date, employee,
                              is_open):
-    if open_clicks is None:
+    if not open_clicks:
         raise PreventUpdate
 
     if ctx.triggered_id == "sum-unassigned-modal-close":
@@ -1288,7 +1471,7 @@ def toggle_unassigned_modal(open_clicks, close_clicks,
             df = df[dates <= pd.Timestamp(end_date)]
 
     open_df      = df[~df["state"].isin(OPEN_STATES)]
-    unassigned   = open_df[open_df["assigned_to"].isna()].copy()
+    unassigned   = open_df[open_df["assigned_to"] == "Unassigned"].copy()
 
     if unassigned.empty:
         return True, html.P("✅ No unassigned open items.",
@@ -1622,3 +1805,47 @@ def paginate_recent(prev_clicks, next_clicks, page, records):
     else:
         page = min(total_pages - 1, page + 1)
     return page
+
+
+# ── Executive Report callback ──────────────────────────────────────────────────
+@callback(
+    Output("sum-report-modal", "is_open"),
+    Output("sum-report-body",  "children"),
+    Output("sum-report-ts",    "children"),
+    Input("sum-report-btn",    "n_clicks"),
+    State("sum-item-type",     "value"),
+    State("sum-date-start",    "value"),
+    State("sum-date-end",      "value"),
+    State("sum-employee",      "value"),
+    prevent_initial_call=True,
+)
+def open_executive_report(n, item_types, start_date, end_date, employee):
+    if not n:
+        from dash import no_update
+        return no_update, no_update, no_update
+    df = load_data()
+    df = apply_filters(df, item_types=item_types, employee=employee)
+    df = filter_activity_since(df, ANALYSIS_START_DATE)
+    if "created_date" in df.columns:
+        dates = pd.to_datetime(df["created_date"], errors="coerce")
+        if start_date:
+            df = df[dates >= pd.Timestamp(start_date)]
+        if end_date:
+            df = df[dates <= pd.Timestamp(end_date)]
+    summary = summarize_executive(df)
+    filter_note = " · filtered view" if (item_types or start_date or end_date or (employee and employee != "All")) else ""
+    ts = f"Generated {datetime.now().strftime('%d %b %Y  %H:%M')}{filter_note}"
+    return True, format_report(summary), ts
+
+
+@callback(
+    Output("sum-rec-strip", "children"),
+    Input("sum-item-type",  "value"),
+    Input("sum-employee",   "value"),
+    Input("sum-date-start", "value"),
+    Input("sum-date-end",   "value"),
+)
+def update_sum_recs(item_type, employee, date_start, date_end):
+    df = load_data()
+    recs = get_recommendations_all(df)
+    return rec_strip(recs, label="Portfolio Insights")
