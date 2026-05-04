@@ -1,3 +1,4 @@
+APScheduler==3.11.2
 azure-core==1.39.0
 azure-devops==7.1.0b4
 dash==4.0.0
@@ -17,3 +18,7 @@ requests-oauthlib==2.0.0
 SQLAlchemy==2.0.48
 Werkzeug==3.1.6
 waitress==3.0.2
+tzlocal==5.3.1
+ollama==0.6.1
+GitPython==3.1.46
+xlsxwriter==3.2.9
