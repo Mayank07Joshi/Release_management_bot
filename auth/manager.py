@@ -18,23 +18,18 @@ def setup_login_manager(server):
     def load_user(user_id):
         return User.get(int(user_id))
 
-    # Protect all routes except login, logout, and static assets
-    @server.before_request
-    def require_login():
-        from flask import request, redirect, url_for, jsonify
-        from flask_login import current_user
-
-        public = {"/login", "/logout"}
-        path   = request.path
-
-        # Always allow login/logout and static assets
-        if path in public or path.startswith("/assets/"):
-            return None
-
-        if not current_user.is_authenticated:
-            # Dash internal AJAX calls → return 401 (Dash handles redirect)
-            if path.startswith("/_dash"):
-                return jsonify({"error": "unauthenticated"}), 401
-            return redirect("/login")
+    # Auth disabled — open access for now
+    # @server.before_request
+    # def require_login():
+    #     from flask import request, redirect, url_for, jsonify
+    #     from flask_login import current_user
+    #     public = {"/login", "/logout"}
+    #     path   = request.path
+    #     if path in public or path.startswith("/assets/"):
+    #         return None
+    #     if not current_user.is_authenticated:
+    #         if path.startswith("/_dash"):
+    #             return jsonify({"error": "unauthenticated"}), 401
+    #         return redirect("/login")
 
     return login_manager
