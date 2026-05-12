@@ -10,7 +10,7 @@ from calendar import monthrange
 from data.loader import load_data, engine
 from sqlalchemy import text
 
-dash.register_page(__name__, path="/focus", name="VSTS Focus Area")
+# Page no longer registered standalone — content embedded in Summary page via focus_tab_content()
 
 # ── Palette ───────────────────────────────────────────────────────────────────
 BG   = "#0f0f1e"
@@ -166,7 +166,8 @@ _STATE_OPTIONS = [{"label": s, "value": s} for s in _ALL_STATES]
 _DEFAULT_STATES = ["Active", "Clarification", "Estimated", "New", "Reopened", "Request Estimate"]
 
 
-def layout():
+def focus_tab_content():
+    """Returns the VSTS Focus Area content for embedding in the Summary page."""
     return html.Div([
         dcc.Store(id="focus-type",         data="All"),
         dcc.Store(id="focus-tab",          data="summary"),
@@ -257,9 +258,14 @@ def layout():
         }),
 
         # ── Content ───────────────────────────────────────────────────────────
-        html.Div(id="focus-content"),
-
-    ], style={"padding": "28px 36px", "minHeight": "100vh", "background": BG})
+        dcc.Loading(
+            id="loading-focus-content",
+            type="circle",
+            color="#818cf8",
+            style={"minHeight": "200px"},
+            children=html.Div(id="focus-content"),
+        ),
+    ])
 
 
 # ── Callbacks ─────────────────────────────────────────────────────────────────
@@ -386,11 +392,45 @@ def _render_summary(df, df_issues_scope, df_enh, type_filter):
 
     unest = int((df_main["original_estimate"].fillna(0) == 0).sum())
 
+    _n_iss_all = len(df[df["work_item_type"].isin(ISSUE_TYPES)])
+    _n_tasks   = len(df[df["work_item_type"] == "Task"])
+    _n_other   = len(df) - len(df_enh) - _n_iss_all - _n_tasks
+    _breakdown_rows = [(len(df_enh), "Enhancements", BLU), (_n_iss_all, "Issues", G)]
+    if _n_other > 0:
+        _breakdown_rows.append((_n_other, "Other", "#6b7280"))
+
+    breakdown_card = html.Div([
+        html.Div(f"{len(df):,}", style={
+            "fontSize": "38px", "fontWeight": "700", "color": GOLD,
+            "lineHeight": "1.1", "marginBottom": "6px",
+        }),
+        html.Div("ALL WORK ITEMS", style={
+            "fontSize": "10px", "fontWeight": "700", "color": MT,
+            "letterSpacing": "0.08em", "textTransform": "uppercase",
+            "marginBottom": "10px",
+        }),
+        *[
+            html.Div([
+                html.Span(f"{cnt:,}", style={
+                    "fontWeight": "700", "fontSize": "13px", "color": clr,
+                    "width": "44px", "display": "inline-block",
+                }),
+                html.Span(lbl, style={"fontSize": "11px", "color": MT}),
+            ], style={"marginBottom": "3px"})
+            for cnt, lbl, clr in _breakdown_rows
+        ],
+    ], style={
+        "background": CARD, "border": f"1px solid {BD}",
+        "borderRadius": "10px", "padding": "20px 24px",
+        "flex": "1", "minWidth": "0",
+    })
+
     kpis = html.Div([
-        _kpi_card(f"{len(df_main):,}",         "Total Loaded",          "",                  GOLD),
-        _kpi_card(f"{len(df_issues_scope):,}",  "Issues in Scope",       "Jan 2024 – Present", G),
-        _kpi_card(f"{len(df_enh):,}",           "Enhancements in Scope", "Inception – Present", BLU),
-        _kpi_card(f"{unest:,}",                 "Unestimated Items",     "Needs attention",    RED),
+        breakdown_card,
+        _kpi_card(f"{len(df_issues_scope):,}", "Issues in Scope",       "Jan 2024 – Present",  G),
+        _kpi_card(f"{len(df_enh):,}",          "Enhancements in Scope", "Inception – Present",  BLU),
+        _kpi_card(f"{_n_tasks:,}",             "Tasks",                 "Child work items",     ACC),
+        _kpi_card(f"{unest:,}",                "Unestimated Items",     "Needs attention",      RED),
     ], style={"display": "flex", "gap": "16px", "marginBottom": "24px"})
 
     # ── Issues panel ──────────────────────────────────────────────────────────
@@ -520,7 +560,84 @@ def _render_summary(df, df_issues_scope, df_enh, type_filter):
             "borderRadius": "12px", "padding": "20px 24px", "flex": "1",
         })
 
-    panels = [p for p in [issues_panel, enh_panel] if p is not None]
+    # ── Tasks breakdown panel ─────────────────────────────────────────────────
+    _OH = "#a78bfa"
+    _CAT_COLORS = {
+        "Meetings & Calls":  "#60a5fa",
+        "Dev Overhead":      "#a78bfa",
+        "Research & Spikes": "#fbbf24",
+        "Design & Docs":     "#f472b6",
+        "Testing & QA":      "#34d399",
+        "Operations":        "#fb923c",
+        "Other":             "#6b7280",
+    }
+    try:
+        with engine.connect() as conn:
+            _cat_rows = conn.execute(text(
+                "SELECT stc.category, stc.method, COUNT(*) AS cnt "
+                "FROM standalone_task_classifications stc "
+                "JOIN work_items_main w ON w.id = stc.task_id "
+                "GROUP BY stc.category, stc.method"
+            )).fetchall()
+    except Exception:
+        _cat_rows = []
+
+    _cat_counts: dict[str, int] = {}
+    _meth_counts: dict[str, int] = {}
+    for r in _cat_rows:
+        _cat_counts[r.category] = _cat_counts.get(r.category, 0) + r.cnt
+        _meth_counts[r.method]  = _meth_counts.get(r.method,  0) + r.cnt
+    _n_classified = sum(_meth_counts.values())
+
+    _cat_segs  = [(v, _CAT_COLORS.get(k, MT), k)
+                  for k, v in sorted(_cat_counts.items(), key=lambda x: -x[1]) if v > 0]
+    _meth_segs = [
+        (_meth_counts.get("rules",    0), G,   "Keyword Rules"),
+        (_meth_counts.get("ollama",   0), _OH, "AI · Ollama"),
+        (_meth_counts.get("fallback", 0), MT,  "Fallback"),
+    ]
+
+    tasks_panel = html.Div([
+        html.Div([
+            html.Div([
+                html.Span("Tasks", style={
+                    "fontSize": "16px", "fontWeight": "700",
+                    "color": TXT, "marginRight": "8px",
+                }),
+                html.Span("Dev & Mobile · standalone (not linked to any story or bug)",
+                          style={"fontSize": "12px", "color": MT}),
+            ]),
+            html.Span(f"{_n_classified:,} classified", style={
+                "fontSize": "11px", "fontWeight": "600", "color": _OH,
+                "background": "rgba(167,139,250,0.12)",
+                "border": "1px solid rgba(167,139,250,0.28)",
+                "borderRadius": "12px", "padding": "2px 10px",
+            }),
+        ], style={"display": "flex", "justifyContent": "space-between",
+                  "alignItems": "center", "marginBottom": "18px"}),
+        _bar_row("By Category", _cat_segs,  show_pct=False),
+        _bar_row("By Method",   _meth_segs, show_pct=False, margin_bottom="12px"),
+        html.Div([
+            html.Span("ℹ", style={"color": _OH, "fontSize": "14px",
+                                   "marginRight": "8px", "lineHeight": "1"}),
+            html.Span(
+                f"Classified automatically on every ADO sync · "
+                f"{max(_n_tasks - _n_classified, 0):,} tasks unclassified (linked to stories/bugs or outside Dev+Mobile scope)",
+                style={"fontSize": "12px", "color": MT},
+            ),
+        ], style={
+            "display": "flex", "alignItems": "flex-start",
+            "background": "rgba(167,139,250,0.07)",
+            "border": "1px solid rgba(167,139,250,0.20)",
+            "borderRadius": "8px", "padding": "12px 16px",
+        }),
+    ], style={
+        "background": CARD, "border": f"1px solid {BD}",
+        "borderRadius": "12px", "padding": "20px 24px",
+        "flex": "1", "minWidth": "0",
+    })
+
+    panels = [p for p in [issues_panel, enh_panel, tasks_panel] if p is not None]
 
     # ── Decision Validity Gate ────────────────────────────────────────────────
     validity_gate = html.Div([

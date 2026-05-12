@@ -67,25 +67,10 @@ app = Dash(
 )
 
 # ── Top nav structure ──────────────────────────────────────────────────────────
-NAV_LEFT = [
-    {"label": "Home",    "href": "/",        "icon": "🏠"},
-    {"label": "Summary", "href": "/summary", "icon": "📊"},
-]
-NAV_PLANNING = [
-    {"label": "Planning Tool",   "href": "/planning",        "icon": "📅"},
-    {"label": "Capacity",        "href": "/capacity",        "icon": "📈"},
-    {"label": "Release Outlook", "href": "/release-outlook", "icon": "🚀"},
-]
-NAV_RIGHT = [
-    {"label": "Items",     "href": "/items",     "icon": "📋"},
-    {"label": "Teams",     "href": "/teams",     "icon": "👥"},
-    {"label": "Assistant", "href": "/assistant", "icon": "🤖"},
-]
-NAV_PLATFORM = [
-    {"label": "Epics",       "href": "/epics",        "icon": "🗂️"},
-    {"label": "Releases",    "href": "/releases",     "icon": "🚢"},
-    {"label": "Features",    "href": "/features",     "icon": "📋"},
-    {"label": "Bug Tracker", "href": "/bug-tracker",  "icon": "🐛"},
+_NAV = [
+    {"label": "Home",         "href": "/",         "icon": "🏠"},
+    {"label": "Summary",      "href": "/summary",  "icon": "📊"},
+    {"label": "Planning Tool","href": "/planning", "icon": "📅"},
 ]
 
 topnav = html.Div([
@@ -100,52 +85,11 @@ topnav = html.Div([
 
     # ── Center: page tabs ─────────────────────────────────────────────────────
     html.Nav([
-        *[
-            dbc.NavLink(
-                [html.Span(item["icon"], className="topnav-tab-icon"), item["label"]],
-                href=item["href"], active="exact", className="topnav-tab",
-            )
-            for item in NAV_LEFT
-        ],
-        html.Details([
-            html.Summary(
-                [html.Span("📅", className="topnav-tab-icon"), " Planning ",
-                 html.Span("▾", className="topnav-planning-arrow")],
-                className="topnav-tab topnav-planning-toggle",
-                id="planning-nav-btn",
-            ),
-            html.Div([
-                html.A(
-                    [html.Span(item["icon"], style={"marginRight": "8px"}), item["label"]],
-                    href=item["href"],
-                    className="topnav-dropdown-item",
-                )
-                for item in NAV_PLANNING
-            ], className="topnav-planning-menu"),
-        ], className="topnav-planning-wrapper"),
-        *[
-            dbc.NavLink(
-                [html.Span(item["icon"], className="topnav-tab-icon"), item["label"]],
-                href=item["href"], active="exact", className="topnav-tab",
-            )
-            for item in NAV_RIGHT
-        ],
-        html.Details([
-            html.Summary(
-                [html.Span("🏗️", className="topnav-tab-icon"), " Platform ",
-                 html.Span("▾", className="topnav-planning-arrow")],
-                className="topnav-tab topnav-planning-toggle",
-                id="platform-nav-btn",
-            ),
-            html.Div([
-                html.A(
-                    [html.Span(item["icon"], style={"marginRight": "8px"}), item["label"]],
-                    href=item["href"],
-                    className="topnav-dropdown-item",
-                )
-                for item in NAV_PLATFORM
-            ], className="topnav-planning-menu"),
-        ], className="topnav-planning-wrapper"),
+        dbc.NavLink(
+            [html.Span(item["icon"], className="topnav-tab-icon"), item["label"]],
+            href=item["href"], active="exact", className="topnav-tab",
+        )
+        for item in _NAV
     ], className="topnav-tabs"),
 
     # ── Right: user avatar + logout ───────────────────────────────────────────
@@ -207,9 +151,6 @@ def _ado_failure_toast(n):
     return cards
 
 
-_PLANNING_PATHS = {"/planning", "/capacity", "/dev-capacity", "/release-outlook", "/focus"}
-_PLATFORM_PATHS = {"/epics", "/releases", "/features", "/bug-tracker"}
-
 @app.callback(
     Output("topnav-avatar-display", "children"),
     Input("url-location", "pathname"),
@@ -223,22 +164,6 @@ def _update_avatar(pathname):
             html.A("Logout", href="/logout", className="topnav-logout"),
         ], style={"display": "flex", "alignItems": "center", "gap": "10px"})
     return html.A("Login", href="/login", className="topnav-logout")
-
-@app.callback(
-    Output("planning-nav-btn", "className"),
-    Input("url-location", "pathname"),
-)
-def _planning_active(pathname):
-    base = "topnav-tab topnav-planning-toggle"
-    return base + " active" if pathname in _PLANNING_PATHS else base
-
-@app.callback(
-    Output("platform-nav-btn", "className"),
-    Input("url-location", "pathname"),
-)
-def _platform_active(pathname):
-    base = "topnav-tab topnav-planning-toggle"
-    return base + " active" if pathname in _PLATFORM_PATHS else base
 
 
 if __name__ == "__main__":
@@ -257,6 +182,13 @@ if __name__ == "__main__":
         except Exception as _e:
             logging.getLogger(__name__).warning("Planning table init failed: %s", _e)
 
+        # Ensure standalone task classification table exists
+        try:
+            from db.standalone import init_standalone_table
+            init_standalone_table()
+        except Exception as _e:
+            logging.getLogger(__name__).warning("Standalone table init failed: %s", _e)
+
         # Ensure sprint iteration history table exists
         try:
             from db.focus import init_sprint_history_table
@@ -271,5 +203,9 @@ if __name__ == "__main__":
         atexit.register(lambda: scheduler.shutdown(wait=False))
 
         threading.Thread(target=run_sync, daemon=True, name="ado-sync-startup").start()
+
+        # Pre-warm the data cache so first page visit is instant
+        from data.loader import load_data as _load_data
+        threading.Thread(target=_load_data, daemon=True, name="cache-warmup").start()
 
     app.run(host="0.0.0.0", port=8050, debug=False)

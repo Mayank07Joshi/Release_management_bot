@@ -574,7 +574,7 @@ def _load_planning_data():
         if mkey not in months_present:
             continue
         ms      = [s for s in stories if s["month"] == mkey]
-        ready   = sum(1 for s in ms if s["dor"] and s["story_written"] and s["estimation"])
+        ready   = sum(1 for s in ms if s["dor"] and s["story_written"])
         total   = len(ms)
         pct     = round(ready / total * 100) if total else 0
         ns      = sum(1 for s in ms if not s["dor"])
@@ -667,17 +667,9 @@ def _load_planning_data():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _status(g: dict) -> str:
-    if g.get("delivery"):
-        return "SHIPPED"
-    if g.get("ready_to_ship"):
-        return "READY TO SHIP"
-    if g.get("in_qa"):
-        return "IN QA"
-    if g.get("in_dev"):
-        return "IN DEV"
-    if g.get("dor") and g.get("story_written") and g.get("estimation"):
+    if g.get("dor") and g.get("story_written"):
         return "STORY FROZEN"
-    if g.get("dor") or g.get("story_written") or g.get("estimation"):
+    if g.get("dor") or g.get("story_written"):
         return "DRAFT"
     return "NOT STARTED"
 
@@ -703,7 +695,6 @@ def _gate_btn(sid, gate, checked):
     labels = {
         "dor":           "DoR Gate",
         "story_written": "Story Written",
-        "estimation":    "Estimation",
     }
     clr  = G if checked else "rgba(255,255,255,0.18)"
     icon = "✓" if checked else "○"
@@ -935,8 +926,6 @@ def _story_row(s: dict, gates: dict) -> html.Tr:
     gates_col = html.Div([
         _gate_btn(s["id"], "dor",          g.get("dor",           False)),
         _gate_btn(s["id"], "story_written", g.get("story_written", False)),
-        _gate_btn(s["id"], "estimation",    g.get("estimation",    False)),
-        _delivery_gate_btn(s["id"], g),
     ], style={"display": "flex", "flexDirection": "column", "gap": "2px"})
 
     return html.Tr([
@@ -1876,7 +1865,23 @@ def _build_unest_tab(items: list[dict]) -> html.Div:
 # LAYOUT  (function — executed fresh on every page visit)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def layout():
+def layout(**_):
+    """Returns a shell immediately — content loaded via _init_plan callback."""
+    return html.Div([
+        dcc.Store(id="_plan-init", data=1),
+        dcc.Loading(
+            id="_plan-loading",
+            type="circle",
+            color="#818cf8",
+            style={"minHeight": "80vh", "display": "flex",
+                   "alignItems": "center", "justifyContent": "center"},
+            children=html.Div(id="_plan-body"),
+        ),
+    ], style={"background": C3, "minHeight": "100vh",
+              "fontFamily": "Inter, system-ui, sans-serif"})
+
+
+def _build_full_layout():
     stories, months, init_gates, ba_names, dev_names, dev_matrix, story_matrix, dev_stories_flat = \
         _load_planning_data()
 
@@ -1892,7 +1897,7 @@ def layout():
         and (s["pri"] in ("P1","P2") or s["size"] in ("Big","Medium"))
     ]
 
-    m1_ready = sum(1 for s in m1_s if s.get("dor") and s.get("story_written") and s.get("estimation"))
+    m1_ready = sum(1 for s in m1_s if s.get("dor") and s.get("story_written"))
     m1_total = len(m1_s) or 1
     m1_pct   = round(m1_ready / m1_total * 100)
 
@@ -2016,8 +2021,7 @@ def layout():
 
     tier_chips = []
     for lbl, tid in [("All", "all"), ("Pre-DoR", "pre-dor"), ("DoR ✓", "dor"),
-                     ("Story Written", "story_written"), ("Estimation ✓", "estimation"),
-                     ("In Delivery", "delivery")]:
+                     ("Story Written ✓", "story_written")]:
         tier_chips.append(html.Div(lbl, id={"type": "tier-chip", "tier": tid},
                                    style=_cs_act(G) if tid == "all" else _cs_idl()))
 
@@ -2091,7 +2095,7 @@ def layout():
     )
     _fm  = _sys.modules.get("pages_dash.focus")
     _cm  = _sys.modules.get("pages_dash.capacity_planner")
-    _focus_section  = _fm.layout()  if _fm  else html.Div("VSTS Focus Area loading…",   style={"padding": "20px", "color": MT})
+    _focus_section  = _fm.focus_tab_content()  if _fm  else html.Div("VSTS Focus Area loading…",   style={"padding": "20px", "color": MT})
     _devcap_section = _cm.layout()  if _cm  else html.Div("Developer Capacity loading…", style={"padding": "20px", "color": MT})
 
     # ── Full layout ────────────────────────────────────────────────────────────
@@ -2205,18 +2209,24 @@ def layout():
                              "marginBottom": "4px",
                              "boxShadow": "0 4px 20px rgba(0,0,0,0.45)",
                          }),
-                html.Div(id="readiness-header"),
+                dcc.Loading(
+                    type="circle", color="#818cf8", style={"minHeight": "60px"},
+                    children=html.Div(id="readiness-header"),
+                ),
                 # Enhancements section (shown by default)
                 html.Div([
-                    html.Div([
-                        html.Table([
-                            html.Thead(story_table_header),
-                            html.Tbody(id="story-tbody"),
-                        ], style={"width": "100%", "borderCollapse": "collapse"}),
-                    ], style={
-                        "background": CD, "borderRadius": "12px",
-                        "border": f"1px solid {BD}", "overflow": "hidden", "marginBottom": "4px",
-                    }),
+                    dcc.Loading(
+                        type="circle", color="#818cf8", style={"minHeight": "120px"},
+                        children=html.Div([
+                            html.Table([
+                                html.Thead(story_table_header),
+                                html.Tbody(id="story-tbody"),
+                            ], style={"width": "100%", "borderCollapse": "collapse"}),
+                        ], style={
+                            "background": CD, "borderRadius": "12px",
+                            "border": f"1px solid {BD}", "overflow": "hidden", "marginBottom": "4px",
+                        }),
+                    ),
                     html.Div([
                         html.Button("‹ Prev", id="story-page-prev", n_clicks=0, disabled=True,
                                     style={"background": "transparent", "border": f"1px solid {BD}",
@@ -2235,15 +2245,18 @@ def layout():
                 ], id="enh-section"),
                 # Issues section (hidden by default, shown when TYPE=Issues)
                 html.Div([
-                    html.Div([
-                        html.Table([
-                            html.Thead(bug_table_header),
-                            html.Tbody(id="bug-tbody"),
-                        ], style={"width": "100%", "borderCollapse": "collapse"}),
-                    ], style={
-                        "background": CD, "borderRadius": "12px",
-                        "border": f"1px solid {BD}", "overflow": "hidden", "marginBottom": "4px",
-                    }),
+                    dcc.Loading(
+                        type="circle", color="#818cf8", style={"minHeight": "120px"},
+                        children=html.Div([
+                            html.Table([
+                                html.Thead(bug_table_header),
+                                html.Tbody(id="bug-tbody"),
+                            ], style={"width": "100%", "borderCollapse": "collapse"}),
+                        ], style={
+                            "background": CD, "borderRadius": "12px",
+                            "border": f"1px solid {BD}", "overflow": "hidden", "marginBottom": "4px",
+                        }),
+                    ),
                     html.Div([
                         html.Button("‹ Prev", id="bug-page-prev", n_clicks=0, disabled=True,
                                     style={"background": "transparent", "border": f"1px solid {BD}",
@@ -2395,6 +2408,13 @@ def layout():
 # ═══════════════════════════════════════════════════════════════════════════════
 # CALLBACKS
 # ═══════════════════════════════════════════════════════════════════════════════
+
+@callback(
+    Output("_plan-body", "children"),
+    Input("_plan-init", "data"),
+)
+def _init_plan(_):
+    return _build_full_layout()
 
 # ── 1. Tab switching ──────────────────────────────────────────────────────────
 @callback(
@@ -2564,12 +2584,7 @@ def _render_stories(gates, month, ba_f, dev_f, show_f, type_f, tier_f, page, sto
         elif tier_f == "dor":
             stories = [s for s in stories if _gst(s)["dor"] and not _gst(s)["story_written"]]
         elif tier_f == "story_written":
-            stories = [s for s in stories if _gst(s)["story_written"] and not _gst(s)["estimation"]]
-        elif tier_f == "estimation":
-            stories = [s for s in stories if _gst(s)["estimation"] and not _gst(s)["in_dev"]]
-        elif tier_f == "delivery":
-            stories = [s for s in stories if _gst(s)["in_dev"] or _gst(s)["in_qa"]
-                       or _gst(s)["ready_to_ship"] or _gst(s)["delivery"]]
+            stories = [s for s in stories if _gst(s)["story_written"]]
 
     _pri_ord = {"P1": 0, "P2": 1, "P3": 2, "P4": 3}
     def _sort_key(s):

@@ -10,59 +10,21 @@ CARDS = [
     {
         "icon": "📊",
         "title": "Summary",
-        "desc": "KPIs, bug movement matrix, backlog trend, burn rate by priority.",
+        "desc": "VSTS Focus Area — sprint activity, task classification, and data load validation.",
         "href": "/summary",
         "group": None,
     },
     {
-        "icon": "📈",
-        "title": "Capacity",
-        "desc": "Team utilization, throughput, WIP trend, forecast, estimation accuracy.",
-        "href": "/capacity",
-        "group": "Planning",
-    },
-    {
-        "icon": "🚀",
-        "title": "Release Outlook",
-        "desc": "Release burn rate, scope changes, and delivery risk by priority.",
-        "href": "/release-outlook",
-        "group": "Planning",
-    },
-    {
-        "icon": "🔄",
-        "title": "Iteration Board",
-        "desc": "Sprint burndown, team workload, blockers, and velocity trends.",
-        "href": "/iteration",
-        "group": "Planning",
-    },
-    {
-        "icon": "📋",
-        "title": "Items",
-        "desc": "Bugs, enhancements, tasks and features — priority, age, owner accountability.",
-        "href": "/items",
-        "group": None,
-    },
-    {
-        "icon": "👥",
-        "title": "Teams",
-        "desc": "Team-specific metrics — QA quality, dev cycle time, workload, and spillover.",
-        "href": "/teams",
-        "group": None,
-    },
-    {
-        "icon": "🤖",
-        "title": "ADO Assistant",
-        "desc": "Ask questions about your data — metrics, trends, and navigation.",
-        "href": "/assistant",
+        "icon": "📅",
+        "title": "Planning Tool",
+        "desc": "Story readiness, BA sign-off, capacity matrix, and release pipeline health.",
+        "href": "/planning",
         "group": None,
     },
 ]
 
-# Group cards for display
 CARD_GROUPS = [
-    {"label": None,       "cards": [c for c in CARDS if c["group"] is None and c["href"] == "/summary"]},
-    {"label": "Planning", "cards": [c for c in CARDS if c["group"] == "Planning"]},
-    {"label": None,       "cards": [c for c in CARDS if c["group"] is None and c["href"] != "/summary"]},
+    {"label": None, "cards": CARDS},
 ]
 
 

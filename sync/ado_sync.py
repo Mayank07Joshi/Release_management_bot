@@ -62,6 +62,7 @@ _FIELDS = [
     "Microsoft.VSTS.Scheduling.FinishDate",
     "Custom.Userstoryowner",
     "System.Parent",
+    "Microsoft.VSTS.Common.Activity",
 ]
 
 # ── Engine (singleton) ────────────────────────────────────────────────────────
@@ -189,6 +190,7 @@ def _transform(work_items) -> pd.DataFrame:
             "stage":             f.get("Custom.Stage", "Unassigned"),
             "story_owner":       f.get("Custom.Userstoryowner", ""),
             "parent_id":         f.get("System.Parent"),   # int or None
+            "activity":          f.get("Microsoft.VSTS.Common.Activity", ""),
         })
 
     if not rows:
@@ -394,6 +396,16 @@ def run_sync(full: bool = False) -> dict:
         engine     = _get_engine()
         wit_client = _get_wit_client()
 
+        # Ensure activity column exists before any upsert attempt
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE work_items_main "
+                    "ADD COLUMN IF NOT EXISTS activity VARCHAR(100) DEFAULT ''"
+                ))
+        except Exception as _col_err:
+            log.warning("activity column migration (non-fatal): %s", _col_err)
+
         since = (
             datetime(2023, 1, 1, tzinfo=timezone.utc)
             if full
@@ -423,6 +435,25 @@ def run_sync(full: bool = False) -> dict:
             log.warning("Sprint history sync failed (non-fatal): %s", _sh_err)
 
         _bust_loader_cache()
+
+        try:
+            from sync.task_classifier import run_classifier
+            run_classifier()
+        except Exception as _cl_err:
+            log.warning("Standalone classifier (non-fatal): %s", _cl_err)
+
+        try:
+            with engine.begin() as conn:
+                pruned = conn.execute(text(
+                    "DELETE FROM standalone_task_classifications "
+                    "WHERE task_id NOT IN ("
+                    "    SELECT id FROM work_items_main WHERE work_item_type = 'Task'"
+                    ")"
+                )).rowcount
+                if pruned:
+                    log.info("Pruned %d stale task classifications", pruned)
+        except Exception as _prune_err:
+            log.warning("Classification prune (non-fatal): %s", _prune_err)
 
         elapsed = round(time.time() - t0, 1)
         log.info(f"✅ Sync complete — {count} items upserted in {elapsed}s")

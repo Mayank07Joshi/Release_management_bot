@@ -195,6 +195,153 @@ def _dev_month_items(df: pd.DataFrame, dev: str, ym_str: str, open_only: bool = 
     return list(items.values())
 
 
+# ── Standalone task data ──────────────────────────────────────────────────────
+
+def _load_standalone_data(yms: list[str]) -> dict:
+    """
+    Returns {dev_name: {ym: {"total_h": float, "by_category": {cat: float}}}}
+    for open standalone tasks, Dev+Mobile team only.
+    """
+    try:
+        from db.standalone import load_all_classifications
+        records = load_all_classifications()
+    except Exception:
+        return {}
+
+    from config.team_mapping import TEAM_MAPPING
+    result: dict = {}
+    for r in records:
+        dev = str(r.get("assigned_to", "")).split(" <")[0].strip()
+        if TEAM_MAPPING.get(dev, "") not in ("Development", "Mobile"):
+            continue
+        ym = _iter_ym(r.get("iteration_path", ""))
+        if ym not in yms:
+            continue
+        cat = r.get("category", "Other")
+        h   = float(r.get("original_estimate") or 0)
+        if dev not in result:
+            result[dev] = {}
+        if ym not in result[dev]:
+            result[dev][ym] = {"total_h": 0.0, "by_category": {}}
+        result[dev][ym]["total_h"] += h
+        result[dev][ym]["by_category"][cat] = \
+            result[dev][ym]["by_category"].get(cat, 0.0) + h
+    return result
+
+
+_CAT_CLR = {
+    "Meetings & Calls":  "#60a5fa",
+    "Dev Overhead":      "#a78bfa",
+    "Research & Spikes": "#fbbf24",
+    "Design & Docs":     "#f472b6",
+    "Testing & QA":      "#34d399",
+    "Operations":        "#fb923c",
+    "Other":             "#6b7280",
+}
+
+
+def _render_overhead_section(standalone_data: dict, devs: list, ym_str: str) -> html.Div:
+    """Standalone task overhead breakdown card for a given month."""
+    _OH = "#a78bfa"
+
+    # Aggregate per-dev and per-category
+    dev_rows = []
+    cat_totals: dict[str, float] = {}
+    grand_total = 0.0
+
+    for dev in devs:
+        dm = standalone_data.get(dev["name"], {}).get(ym_str, {})
+        h  = dm.get("total_h", 0.0)
+        by_cat = dm.get("by_category", {})
+        if h == 0:
+            continue
+        grand_total += h
+        for cat, ch in by_cat.items():
+            cat_totals[cat] = cat_totals.get(cat, 0.0) + ch
+
+        cat_pills = [
+            html.Span(f"{cat}: {ch:.0f}h", style={
+                "fontSize": "10px", "background": f"{_CAT_CLR.get(cat, '#6b7280')}22",
+                "color": _CAT_CLR.get(cat, "#6b7280"), "padding": "2px 7px",
+                "borderRadius": "4px", "marginRight": "4px",
+                "border": f"1px solid {_CAT_CLR.get(cat, '#6b7280')}44",
+            })
+            for cat, ch in sorted(by_cat.items(), key=lambda x: -x[1])
+        ]
+        cap = dev.get("capacity_h", 180)
+        oh_pct = round(h / cap * 100) if cap else 0
+        dev_rows.append(html.Div([
+            html.Div([
+                html.Span(dev["name"], style={
+                    "fontWeight": "600", "fontSize": "13px", "color": "#e2e8f0",
+                    "minWidth": "140px",
+                }),
+                html.Span(f"{h:.0f}h", style={
+                    "fontWeight": "700", "color": _OH,
+                    "fontSize": "14px", "marginRight": "8px", "minWidth": "44px",
+                }),
+                html.Span(f"({oh_pct}% of cap)", style={
+                    "fontSize": "11px", "color": "#6b7280", "marginRight": "12px",
+                }),
+                *cat_pills,
+            ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap", "gap": "4px"}),
+        ], style={
+            "padding": "10px 14px",
+            "borderBottom": "1px solid rgba(255,255,255,0.05)",
+        }))
+
+    if not dev_rows:
+        return html.Div(
+            "No standalone tasks found for this period. Run a sync to classify new tasks.",
+            style={"color": "#4b5563", "fontSize": "13px", "padding": "20px 0"},
+        )
+
+    # Category summary bar
+    cat_bar = []
+    if grand_total > 0:
+        for cat, h in sorted(cat_totals.items(), key=lambda x: -x[1]):
+            w = h / grand_total * 100
+            cat_bar.append(html.Div(
+                title=f"{cat}: {h:.0f}h",
+                style={
+                    "width": f"{w:.1f}%", "height": "100%",
+                    "background": _CAT_CLR.get(cat, "#6b7280"),
+                },
+            ))
+
+    return html.Div([
+        html.Div([
+            html.Div([
+                html.Div(f"{grand_total:.0f}h total overhead", style={
+                    "fontSize": "20px", "fontWeight": "700", "color": _OH,
+                }),
+                html.Div("standalone tasks not linked to any story or bug", style={
+                    "fontSize": "11px", "color": "#6b7280", "marginTop": "2px",
+                }),
+            ]),
+            html.Div([
+                *[
+                    html.Span([
+                        html.Span("■ ", style={"color": _CAT_CLR.get(c, "#6b7280"), "fontSize": "10px"}),
+                        html.Span(f"{c}  ", style={"fontSize": "11px", "color": "#8892a4"}),
+                    ])
+                    for c in _CAT_CLR
+                ],
+            ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap", "gap": "2px"}),
+        ], style={
+            "display": "flex", "justifyContent": "space-between",
+            "alignItems": "flex-start", "marginBottom": "14px",
+        }),
+        # Category colour bar
+        html.Div(cat_bar, style={
+            "display": "flex", "height": "6px", "borderRadius": "4px",
+            "overflow": "hidden", "marginBottom": "16px",
+            "background": "rgba(255,255,255,0.05)",
+        }),
+        *dev_rows,
+    ])
+
+
 # ── UI primitives ─────────────────────────────────────────────────────────────
 
 def _kpi(value, label, sub, clr):
@@ -217,24 +364,26 @@ def _kpi(value, label, sub, clr):
 
 
 def _cell_content(items: list, enh_h: float, issue_h: float, capacity: float,
-                  pressure_mode: bool = False, remaining_h: float = None):
-    total  = enh_h + issue_h
+                  pressure_mode: bool = False, remaining_h: float = None,
+                  standalone_h: float = 0.0):
+    total  = enh_h + issue_h + standalone_h
     denom  = remaining_h if (pressure_mode and remaining_h is not None) else capacity
 
     if pressure_mode and (remaining_h is None or remaining_h == 0):
-        # Month ended or no hours left — show dashes
         return html.Div([
             html.Div("—", style={"fontSize": "20px", "fontWeight": "700",
                                  "color": "#4b5563", "marginBottom": "2px"}),
             html.Div("0h left", style={"fontSize": "11px", "color": "#4b5563"}),
         ], style={"padding": "14px 16px"})
 
-    pct    = round(total / denom * 100) if denom > 0 else 0
-    pct_c  = _RED if pct > 100 else (_GOLD if pct >= 80 else _GREEN)
-    ew     = min(enh_h   / denom * 100, 100) if denom > 0 else 0
-    iw     = min(issue_h / denom * 100, 100) if denom > 0 else 0
-    top    = sorted(items, key=lambda x: -x["dev_h"])[:2]
-    extra  = len(items) - 2
+    pct   = round(total / denom * 100) if denom > 0 else 0
+    pct_c = _RED if pct > 100 else (_GOLD if pct >= 80 else _GREEN)
+
+    feat_h = enh_h + issue_h
+    free_h = denom - feat_h - standalone_h  # negative = over-allocated
+
+    top   = sorted(items, key=lambda x: -x["dev_h"])[:2]
+    extra = len(items) - 2
 
     pills = []
     for i in top:
@@ -245,16 +394,8 @@ def _cell_content(items: list, enh_h: float, issue_h: float, capacity: float,
             html.Span(txt, style={"fontSize": "11px", "color": "#c8c8e0"}),
         ], style={"marginBottom": "2px"}))
     if extra > 0:
-        pills.append(html.Div(
-            f"+{extra} more",
-            style={"fontSize": "11px", "color": "#4b5563"},
-        ))
-
-    subtitle = (
-        f"{total:.0f}h open / {remaining_h:.0f}h left"
-        if pressure_mode
-        else f"{total:.0f}h / {capacity:.0f}h"
-    )
+        pills.append(html.Div(f"+{extra} more",
+                               style={"fontSize": "11px", "color": "#4b5563"}))
 
     live_badge = html.Span(
         "LIVE", style={
@@ -265,33 +406,74 @@ def _cell_content(items: list, enh_h: float, issue_h: float, capacity: float,
         }
     ) if pressure_mode else None
 
+    def _section_row(label, h, clr):
+        w = min(h / denom * 100, 100) if denom > 0 else 0
+        return html.Div([
+            html.Span(label, style={
+                "fontSize": "9px", "color": "#6b7280", "letterSpacing": "0.5px",
+                "textTransform": "uppercase", "width": "80px", "flexShrink": "0",
+            }),
+            html.Span(f"{h:.0f}h", style={
+                "fontSize": "12px", "fontWeight": "700", "color": clr,
+                "width": "34px", "textAlign": "right", "flexShrink": "0",
+            }),
+            html.Div(
+                html.Div(style={"width": f"{w:.0f}%", "height": "100%",
+                                "background": clr, "borderRadius": "2px"}),
+                style={
+                    "flex": "1", "height": "4px", "borderRadius": "2px",
+                    "background": "rgba(255,255,255,0.05)",
+                    "margin": "0 8px", "alignSelf": "center",
+                }
+            ),
+            html.Span(f"{round(w)}%", style={
+                "fontSize": "10px", "color": "#4b5563",
+                "width": "26px", "textAlign": "right", "flexShrink": "0",
+            }),
+        ], style={"display": "flex", "alignItems": "center", "marginBottom": "5px"})
+
+    if free_h < 0:
+        remaining_row = html.Div([
+            html.Span("Remaining", style={
+                "fontSize": "9px", "color": "#6b7280", "letterSpacing": "0.5px",
+                "textTransform": "uppercase", "width": "80px", "flexShrink": "0",
+            }),
+            html.Span(f"{free_h:.0f}h", style={
+                "fontSize": "12px", "fontWeight": "700", "color": _RED,
+                "width": "34px", "textAlign": "right", "flexShrink": "0",
+            }),
+            html.Span("OVER-ALLOC", style={
+                "flex": "1", "fontSize": "8px", "color": _RED,
+                "fontWeight": "700", "letterSpacing": "0.8px", "margin": "0 8px",
+            }),
+        ], style={"display": "flex", "alignItems": "center", "marginBottom": "5px"})
+    else:
+        remaining_row = _section_row("Remaining", free_h, "#60a5fa")
+
     return html.Div([
         html.Div([
             html.Span(f"{pct}%", style={
                 "fontSize": "20px", "fontWeight": "700", "color": pct_c,
             }),
             *([live_badge] if live_badge else []),
-        ], style={"marginBottom": "2px"}),
-        html.Div(subtitle, style={
-            "fontSize": "11px", "color": "#8892a4", "marginBottom": "6px",
-        }),
+        ], style={"marginBottom": "8px"}),
         html.Div([
-            html.Div(style={
-                "height": "5px", "borderRadius": "3px",
-                "background": _GOLD, "width": f"{ew:.0f}%", "marginBottom": "2px",
-            }),
-            html.Div(style={
-                "height": "5px", "borderRadius": "3px",
-                "background": _GREEN, "width": f"{iw:.0f}%",
-            }),
-        ], style={"width": "100%", "marginBottom": "8px"}),
+            _section_row("Feature Work",   feat_h,       _GOLD),
+            _section_row("Admin Overhead", standalone_h, "#a78bfa"),
+            remaining_row,
+        ], style={
+            "borderTop":    "1px solid rgba(255,255,255,0.05)",
+            "borderBottom": "1px solid rgba(255,255,255,0.05)",
+            "paddingTop": "7px", "paddingBottom": "3px",
+            "marginBottom": "8px",
+        }),
         *pills,
     ], style={"padding": "14px 16px"})
 
 
 # ── Grid renderers ────────────────────────────────────────────────────────────
 
-def _render_m012_grid(df, devs, yms, month_labels, view):
+def _render_m012_grid(df, devs, yms, month_labels, view, standalone_data=None):
     cols = "180px 1fr 1fr 1fr"
 
     banner = html.Div(
@@ -336,7 +518,8 @@ def _render_m012_grid(df, devs, yms, month_labels, view):
         *[_mhdr(lbl, i) for i, lbl in enumerate(month_labels)],
     ], style={"display": "grid", "gridTemplateColumns": cols})
 
-    team_totals = [{"enh": 0.0, "iss": 0.0, "cap": 0.0, "rem": m0_remaining_h if i == 0 else 0.0}
+    sd = standalone_data or {}
+    team_totals = [{"enh": 0.0, "iss": 0.0, "oh": 0.0, "cap": 0.0, "rem": m0_remaining_h if i == 0 else 0.0}
                    for i in range(3)]
     dev_rows = []
 
@@ -361,8 +544,11 @@ def _render_m012_grid(df, devs, yms, month_labels, view):
                 enh_h = sum(i["dev_h"] for i in enh_items)
                 iss_h = sum(i["dev_h"] for i in iss_items)
 
+            oh_h = sd.get(dev["name"], {}).get(ym_str, {}).get("total_h", 0.0)
+
             team_totals[m_idx]["enh"] += enh_h
             team_totals[m_idx]["iss"] += iss_h
+            team_totals[m_idx]["oh"]  += oh_h
             team_totals[m_idx]["cap"] += cap
 
             month_cells.append(html.Div(
@@ -370,6 +556,7 @@ def _render_m012_grid(df, devs, yms, month_labels, view):
                     display, enh_h, iss_h, cap,
                     pressure_mode=is_m0,
                     remaining_h=m0_remaining_h if is_m0 else None,
+                    standalone_h=oh_h,
                 ),
                 id={"type": "dcap-cell", "dev": dev["name"], "month": ym_str},
                 n_clicks=0,
@@ -404,12 +591,14 @@ def _render_m012_grid(df, devs, yms, month_labels, view):
         "color": "#6b7280", "textTransform": "uppercase", "letterSpacing": "1px",
     })]
     for t_idx, t in enumerate(team_totals):
-        total_h  = t["enh"] + t["iss"]
+        total_h  = t["enh"] + t["iss"] + t["oh"]
         is_m0    = (t_idx == 0)
         denom    = (t["rem"] * len(devs)) if (is_m0 and t["rem"]) else t["cap"]
         pct      = round(total_h / denom * 100) if denom > 0 else 0
         pct_c    = _RED if pct > 100 else (_GOLD if pct >= 80 else _GREEN)
-        sub_lbl  = f"{total_h:.0f}h open / {t['rem'] * len(devs):.0f}h left" if is_m0 else f"{total_h:.0f}h"
+        oh_lbl   = f" + {t['oh']:.0f}h OH" if t["oh"] > 0 else ""
+        sub_lbl  = (f"{t['enh']+t['iss']:.0f}h story{oh_lbl} / {t['rem']*len(devs):.0f}h left"
+                    if is_m0 else f"{t['enh']+t['iss']:.0f}h story{oh_lbl}")
         total_cells.append(html.Div([
             html.Div(f"{pct}%", style={
                 "fontSize": "18px", "fontWeight": "700", "color": pct_c,
@@ -792,6 +981,8 @@ def layout():
                 html.Span("Enh  ", style={"fontSize": "12px", "color": "#8892a4"}),
                 html.Span("■ ", style={"color": _GREEN, "fontSize": "10px"}),
                 html.Span("Issues  ", style={"fontSize": "12px", "color": "#8892a4"}),
+                html.Span("■ ", style={"color": "#a78bfa", "fontSize": "10px"}),
+                html.Span("Overhead  ", style={"fontSize": "12px", "color": "#8892a4"}),
                 html.Span("· Click any cell for month detail",
                           style={"fontSize": "12px", "color": "#4b5563"}),
             ], style={"marginLeft": "auto", "display": "flex", "alignItems": "center"}),
@@ -852,6 +1043,30 @@ def layout():
 
         # ── Gantt ─────────────────────────────────────────────────────────────
         html.Div(id="dcap-gantt"),
+
+        # ── Standalone Task Overhead ──────────────────────────────────────────
+        html.Div([
+            html.Div([
+                html.Div("STANDALONE TASK OVERHEAD", style={
+                    "fontSize": "9px", "fontWeight": "700", "color": "#a78bfa",
+                    "letterSpacing": "1.6px", "textTransform": "uppercase",
+                    "marginBottom": "6px",
+                }),
+                html.Div("Tasks not linked to any story or bug · Dev & Mobile team", style={
+                    "fontSize": "22px", "fontWeight": "700", "color": "#e2e8f0",
+                    "marginBottom": "4px",
+                }),
+                html.Div(
+                    "Classified by keyword rules + Ollama llama3.2:3b · "
+                    "Re-classified on every ADO sync · Purple bar = overhead",
+                    style={"fontSize": "12px", "color": "#6b7280"},
+                ),
+            ], style={"marginBottom": "20px"}),
+            html.Div(id="dcap-overhead"),
+        ], style={
+            "background": _CARD, "border": "1px solid rgba(167,139,250,0.2)",
+            "borderRadius": "14px", "padding": "24px", "marginTop": "28px",
+        }),
 
         # ── Function Delivery Timeline ────────────────────────────────────────
         html.Div([
@@ -1011,6 +1226,7 @@ def _render_func_timeline(size_filter):
     Output("dcap-grid",     "children"),
     Output("dcap-gantt",    "children"),
     Output("dcap-subtitle", "children"),
+    Output("dcap-overhead", "children"),
     Input("dcap-view",           "data"),
     Input("dcap-tab",            "data"),
     Input("dcap-gantt-show-all", "data"),
@@ -1023,14 +1239,19 @@ def _render(view, tab, show_all):
     lbls = [d.strftime("%b") for d in m012]
     devs = DEVELOPERS
 
+    # Load standalone overhead data
+    standalone_data = _load_standalone_data(yms)
+
     # KPIs
     m0_cap = sum(d["capacity_h"] for d in devs)
     m0_enh = 0.0
     m0_iss = 0.0
+    m0_oh  = 0.0
     for dev in devs:
         its = _dev_month_items(df, dev["name"], yms[0])
         m0_enh += sum(i["dev_h"] for i in its if IS_ENH(i["type"]))
         m0_iss += sum(i["dev_h"] for i in its if IS_ISSUE(i["type"]))
+        m0_oh  += standalone_data.get(dev["name"], {}).get(yms[0], {}).get("total_h", 0.0)
 
     fy_months    = [f"2026-{m:02d}" for m in range(4, 13)]
     fy_cap       = m0_cap * 9
@@ -1041,21 +1262,26 @@ def _render(view, tab, show_all):
             fy_committed += sum(i["dev_h"] for i in its)
     fy_free = max(fy_cap - fy_committed, 0.0)
 
+    oh_pct   = round(m0_oh / m0_cap * 100) if m0_cap else 0
+    feat_pct = round((m0_enh + m0_iss) / m0_cap * 100) if m0_cap else 0
+
     kpis = [
         _kpi(f"{m0_cap:,}h",          "M0 Capacity",        f"180h × {len(devs)} devs", _GOLD),
         _kpi(f"{m0_enh:,.0f}h",       "M0 Enhancements",    f"{m0_enh/m0_cap*100:.0f}% of M0" if m0_cap else "—", _GREEN),
         _kpi(f"{m0_iss:,.0f}h",       "M0 Issues",          f"{m0_iss/m0_cap*100:.0f}% of M0" if m0_cap else "—", _GOLD),
-        _kpi(f"{fy_cap:,}h",          "Full Year Capacity",  "Apr – Dec 2026", "#c084fc"),
-        _kpi(f"{fy_committed:,.0f}h", "Full Year Committed", f"{fy_committed/fy_cap*100:.0f}% of year" if fy_cap else "—", "#60a5fa"),
+        _kpi(f"{m0_oh:,.0f}h",        "M0 Overhead",        f"{oh_pct}% standalone tasks", "#a78bfa"),
+        _kpi(f"{feat_pct}%",          "Feature Work",        f"{oh_pct}% overhead · {100-feat_pct-oh_pct}% unallocated", _GREEN),
         _kpi(f"{fy_free:,.0f}h",      "Full Year Free",      f"{fy_free/fy_cap*100:.0f}% headroom"    if fy_cap else "—", _GREEN),
     ]
 
-    grid  = _render_m012_grid(df, devs, yms, lbls, view) if tab == "012" else _render_rest_grid(df, devs, view)
-    gantt = _render_gantt(df, eff, bool(show_all))
-    sub   = (f"{len(devs)} developers · 180h default monthly capacity · "
-             "Click any cell for M0/M1/M2 detail")
+    grid     = _render_m012_grid(df, devs, yms, lbls, view, standalone_data) if tab == "012" \
+               else _render_rest_grid(df, devs, view)
+    gantt    = _render_gantt(df, eff, bool(show_all))
+    sub      = (f"{len(devs)} developers · 180h default monthly capacity · "
+                "Click any cell for M0/M1/M2 detail · Purple bar = standalone overhead")
+    overhead = _render_overhead_section(standalone_data, devs, yms[0])
 
-    return kpis, grid, gantt, sub
+    return kpis, grid, gantt, sub, overhead
 
 
 @callback(
@@ -1071,6 +1297,75 @@ def _open_panel(clicks, ids):
         if c:
             return True, cid["dev"], cid["month"]
     return no_update, no_update, no_update
+
+
+def _standalone_section(items: list, is_m0: bool) -> list:
+    """Render standalone overhead task cards for the side panel."""
+    if not items:
+        return []
+
+    _OH = "#a78bfa"
+    total_h = sum(float(r.get("original_estimate") or 0) for r in items)
+    label   = f"STANDALONE OVERHEAD · {total_h:.0f}h" + (" OPEN" if is_m0 else "")
+
+    cards = []
+    for r in sorted(items, key=lambda x: -float(x.get("original_estimate") or 0)):
+        cat   = r.get("category", "Other")
+        h     = float(r.get("original_estimate") or 0)
+        meth  = r.get("method", "")
+        tid   = r.get("task_id")
+        title = r.get("title", f"#{tid}")
+        cat_c = _CAT_CLR.get(cat, "#6b7280")
+
+        method_badge = html.Span(
+            "rules" if meth == "rules" else "AI",
+            style={
+                "fontSize": "9px", "fontWeight": "700",
+                "color": "#0f0f1e" if meth == "rules" else "#e2e8f0",
+                "background": "#34d399" if meth == "rules" else "#818cf8",
+                "padding": "1px 5px", "borderRadius": "3px",
+                "marginLeft": "6px", "letterSpacing": "0.5px",
+            }
+        )
+
+        cards.append(
+            html.A(
+                href=f"{ADO_BASE_URL}{tid}", target="_blank",
+                style={"textDecoration": "none", "display": "block", "marginBottom": "8px"},
+                children=html.Div([
+                    html.Div(title, style={
+                        "fontSize": "13px", "color": "#e2e8f0",
+                        "fontWeight": "600", "marginBottom": "6px", "lineHeight": "1.45",
+                    }),
+                    html.Div([
+                        html.Span(cat, style={
+                            "fontSize": "10px", "fontWeight": "700", "color": cat_c,
+                            "background": f"{cat_c}22", "padding": "2px 7px",
+                            "borderRadius": "4px", "marginRight": "6px",
+                            "border": f"1px solid {cat_c}44",
+                        }),
+                        html.Span(f"{h:.0f}h", style={
+                            "fontSize": "12px", "color": "#8892a4", "marginRight": "4px",
+                        }),
+                        method_badge,
+                    ]),
+                ], style={
+                    "background": f"{_OH}08",
+                    "border": f"1px solid {_OH}33",
+                    "borderRadius": "8px", "padding": "10px 12px",
+                })
+            )
+        )
+
+    return [
+        html.Div(label, style={
+            "fontSize": "10px", "color": _OH, "fontWeight": "700",
+            "textTransform": "uppercase", "letterSpacing": "1px",
+            "margin": "16px 0 8px",
+            "borderTop": "1px solid rgba(255,255,255,0.07)", "paddingTop": "14px",
+        }),
+        *cards,
+    ]
 
 
 @callback(
@@ -1105,6 +1400,18 @@ def _panel_body(dev_name, ym_str, view):
     open_ids   = {i["id"] for i in open_items}
     done_items = [i for i in all_items if i["id"] not in open_ids] if is_m0 else []
 
+    # Standalone tasks for this dev + month
+    try:
+        from db.standalone import load_all_classifications
+        _all_sa = load_all_classifications()
+        standalone_items = [
+            r for r in _all_sa
+            if str(r.get("assigned_to", "")).split(" <")[0].strip() == dev_name
+            and _iter_ym(r.get("iteration_path", "")) == ym_str
+        ]
+    except Exception:
+        standalone_items = []
+
     def _filter_view(items):
         if view == "Enhancements": return [i for i in items if IS_ENH(i["type"])]
         if view == "Issues":       return [i for i in items if IS_ISSUE(i["type"])]
@@ -1120,9 +1427,11 @@ def _panel_body(dev_name, ym_str, view):
 
     remaining_h = _remaining_workday_hours(ym_str) if is_m0 else None
     display_cap = remaining_h if (is_m0 and remaining_h) else cap
-    free_h      = max(display_cap - enh_h - iss_h, 0.0)
+    oh_h        = sum(float(r.get("original_estimate") or 0) for r in standalone_items)
+    free_h      = max(display_cap - enh_h - iss_h - oh_h, 0.0)
     ew          = min(enh_h / display_cap * 100, 100) if display_cap > 0 else 0
     iw          = min(iss_h / display_cap * 100, 100) if display_cap > 0 else 0
+    ow          = min(oh_h  / display_cap * 100, 100) if display_cap > 0 else 0
 
     _sz_clrs = {
         "Big":    ("rgba(248,113,113,0.15)", _RED),
@@ -1246,12 +1555,14 @@ def _panel_body(dev_name, ym_str, view):
             _kpi_card(cap_val,          cap_label,      _GOLD),
             _kpi_card(f"{enh_h:.0f}h", "Enhancements", _GREEN),
             _kpi_card(f"{iss_h:.0f}h", "Issues",        _RED),
+            _kpi_card(f"{oh_h:.0f}h",  "Overhead",     "#a78bfa"),
             _kpi_card(f"{free_h:.0f}h","Free",          _BLU),
         ], style={"display": "flex", "gap": "8px", "marginBottom": "16px"}),
         html.Div([
-            html.Div(style={"flex": str(max(ew, 0.01)),          "background": _GREEN, "height": "16px"}),
-            html.Div(style={"flex": str(max(iw, 0.01)),          "background": _RED,   "height": "16px"}),
-            html.Div(style={"flex": str(max(100 - ew - iw, 0.01)),"background": "rgba(255,255,255,0.07)", "height": "16px"}),
+            html.Div(style={"flex": str(max(ew, 0.01)),                    "background": _GREEN,    "height": "16px"}),
+            html.Div(style={"flex": str(max(iw, 0.01)),                    "background": _RED,      "height": "16px"}),
+            html.Div(style={"flex": str(max(ow, 0.01)),                    "background": "#a78bfa", "height": "16px"}),
+            html.Div(style={"flex": str(max(100 - ew - iw - ow, 0.01)),   "background": "rgba(255,255,255,0.07)", "height": "16px"}),
         ], style={"display": "flex", "borderRadius": "8px", "overflow": "hidden", "marginBottom": "16px"}),
         html.Div(
             f"{total_open} OPEN ITEMS" if is_m0 else f"{total_open} ITEMS",
@@ -1262,4 +1573,5 @@ def _panel_body(dev_name, ym_str, view):
         *enh_section,
         *iss_section,
         *done_section,
+        *_standalone_section(standalone_items, is_m0),
     ], style={"padding": "16px"})
