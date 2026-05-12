@@ -168,7 +168,7 @@ def _update_avatar(pathname):
 
 if __name__ == "__main__":
     _in_reloader_child = os.environ.get("WERKZEUG_RUN_MAIN") == "true"
-    _debug_mode        = True
+    _debug_mode        = os.environ.get("DASH_DEBUG", "false").lower() == "true"
 
     if not _debug_mode or _in_reloader_child:
         from apscheduler.schedulers.background import BackgroundScheduler
@@ -208,4 +208,4 @@ if __name__ == "__main__":
         from data.loader import load_data as _load_data
         threading.Thread(target=_load_data, daemon=True, name="cache-warmup").start()
 
-    app.run(host="0.0.0.0", port=8050, debug=False)
+    app.run(host="0.0.0.0", port=8050, debug=_debug_mode)
