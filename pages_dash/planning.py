@@ -503,6 +503,17 @@ def _load_planning_data():
     enh["_mkey"] = enh["iteration_path"].apply(_parse_mkey)
     enh = enh[enh["_mkey"].notna()]
 
+    # ── Task-rollup estimation map (same logic as matrix) ────────────────────
+    # estimated / estimated_via_tasks → True, partial / unestimated → False
+    try:
+        _est_items = _load_unestimated_data()
+        _est_map   = {
+            s["id"]: s["est_status"] in ("estimated", "estimated_via_tasks")
+            for s in _est_items
+        }
+    except Exception:
+        _est_map = {}
+
     # ── Build stories list ────────────────────────────────────────────────────
     stories: list[dict] = []
     for _, row in enh.iterrows():
@@ -514,9 +525,12 @@ def _load_planning_data():
         est      = row.get("original_estimate")
         est_ok   = bool(pd.notna(est) and float(est) > 0) if pd.notna(est) else False
         wtype    = str(row.get("work_item_type", ""))
+        wid      = int(row["work_item_id"])
+        # Use task-rollup status when available, fall back to direct estimate
+        est_full = _est_map.get(wid, est_ok)
 
         stories.append({
-            "id":            int(row["work_item_id"]),
+            "id":            wid,
             "title":         str(row["title"])[:100] if pd.notna(row.get("title")) else "(No title)",
             "pri":           _fmt_pri(row.get("priority")),
             "type":          "ENH" if wtype == "Enhancement" else "ISSUE",
@@ -530,7 +544,7 @@ def _load_planning_data():
             "month":         row["_mkey"],
             "dor":           False,
             "story_written": False,
-            "estimation":    est_ok,
+            "estimation":    est_full,
             "in_dev":        False,
             "in_qa":         False,
             "ready_to_ship": False,
