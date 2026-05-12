@@ -8,6 +8,8 @@ Usage: python upload_uc35_test_cases.py
 """
 
 import requests, json, base64, html, sys, time, re, os
+from dotenv import load_dotenv
+load_dotenv()
 
 # ── CONFIG ─────────────────────────────────────────────────────────────
 PAT               = os.environ.get("ADO_PAT", "")

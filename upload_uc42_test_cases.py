@@ -6,6 +6,8 @@ Before running: pip install requests
 Usage: python upload_uc42_test_cases.py
 """
 import requests, json, base64, html, sys, time, re, os
+from dotenv import load_dotenv
+load_dotenv()
 
 PAT               = os.environ.get("ADO_PAT", "")
 ORG               = "expenseondemand"
