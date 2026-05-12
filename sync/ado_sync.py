@@ -447,7 +447,7 @@ def run_sync(full: bool = False) -> dict:
                 pruned = conn.execute(text(
                     "DELETE FROM standalone_task_classifications "
                     "WHERE task_id NOT IN ("
-                    "    SELECT id FROM work_items_main WHERE work_item_type = 'Task'"
+                    "    SELECT work_item_id FROM work_items_main WHERE work_item_type = 'Task'"
                     ")"
                 )).rowcount
                 if pruned:

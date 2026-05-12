@@ -576,7 +576,7 @@ def _render_summary(df, df_issues_scope, df_enh, type_filter):
             _cat_rows = conn.execute(text(
                 "SELECT stc.category, stc.method, COUNT(*) AS cnt "
                 "FROM standalone_task_classifications stc "
-                "JOIN work_items_main w ON w.id = stc.task_id "
+                "JOIN work_items_main w ON w.work_item_id = stc.task_id "
                 "GROUP BY stc.category, stc.method"
             )).fetchall()
     except Exception:

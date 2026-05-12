@@ -255,7 +255,6 @@ def _load_unestimated_data() -> list[dict]:
               )
         )
         SELECT * FROM classified
-        WHERE est_status IN ('unestimated', 'partial')
         ORDER BY priority, work_item_id
     """)
 
@@ -436,10 +435,12 @@ def _load_planning_data():
             if s["id"] in _db_gates:
                 _dg = _db_gates[s["id"]]
                 for _f in _GATE_FIELDS:
-                    s[_f] = _dg.get(_f, False)
+                    if _f != "estimation":
+                        s[_f] = _dg.get(_f, False)
             else:
                 for _f in _GATE_FIELDS:
-                    s[_f] = False
+                    if _f != "estimation":
+                        s[_f] = False
             stories.append(s)
         init_gates = {
             str(s["id"]): {f: s[f] for f in _GATE_FIELDS}
@@ -529,7 +530,7 @@ def _load_planning_data():
             "month":         row["_mkey"],
             "dor":           False,
             "story_written": False,
-            "estimation":    False,
+            "estimation":    est_ok,
             "in_dev":        False,
             "in_qa":         False,
             "ready_to_ship": False,
@@ -550,7 +551,8 @@ def _load_planning_data():
         if s["id"] in _db_gates:
             _dg = _db_gates[s["id"]]
             for _f in _GATE_FIELDS:
-                s[_f] = _dg.get(_f, False)
+                if _f != "estimation":
+                    s[_f] = _dg.get(_f, False)
 
     init_gates = {
         str(s["id"]): {f: s[f] for f in _GATE_FIELDS}
@@ -1604,18 +1606,19 @@ _FLT_PANEL_CLOSED = {**_FLT_PANEL_BASE, "transform": "translateX(-110%)"}
 
 def _build_unest_tab(items: list[dict]) -> html.Div:
     """Build full content for the Unestimated Items tab from pre-loaded items."""
+    unest_only = [s for s in items if s["est_status"] in ("unestimated", "partial")]
     if not items:
-        return html.Div("No unestimated items found — great job!",
+        return html.Div("No items found.",
                         style={"color": G, "fontSize": "14px", "padding": "32px"})
 
-    total        = len(items)
-    p1_count     = sum(1 for s in items if s["pri"] == "P1")
-    issues       = sum(1 for s in items if s["type"] == "Issue")
-    enhancements = sum(1 for s in items if s["type"] == "Enhancement")
-    partial      = sum(1 for s in items if s["est_status"] == "partial")
-    devs_p1      = len({s["dev"] for s in items
+    total        = len(unest_only)
+    p1_count     = sum(1 for s in unest_only if s["pri"] == "P1")
+    issues       = sum(1 for s in unest_only if s["type"] == "Issue")
+    enhancements = sum(1 for s in unest_only if s["type"] == "Enhancement")
+    partial      = sum(1 for s in unest_only if s["est_status"] == "partial")
+    devs_p1      = len({s["dev"] for s in unest_only
                         if s["pri"] == "P1" and s["dev"] not in ("Unassigned","Not Specified","")})
-    total_devs   = len({s["dev"] for s in items
+    total_devs   = len({s["dev"] for s in unest_only
                         if s["dev"] not in ("Unassigned","Not Specified","")})
 
     iss_pct = round(issues / total * 100) if total else 0
@@ -1648,7 +1651,7 @@ def _build_unest_tab(items: list[dict]) -> html.Div:
     months_present = sorted({s["month"] for s in items},
                             key=lambda x: month_order.index(x) if x in month_order else 99)
 
-    # Build dev → month → {total, p1, p2} counts
+    # Build dev → month → {est, unest, p1_unest, p2_unest} counts
     dev_month: dict = {}
     for s in items:
         dev = s["dev"]
@@ -1656,14 +1659,17 @@ def _build_unest_tab(items: list[dict]) -> html.Div:
             continue
         mon = s["month"]
         if dev not in dev_month:
-            dev_month[dev] = {m: {"n": 0, "p1": 0, "p2": 0} for m in month_order}
-        dev_month[dev][mon]["n"]  += 1
-        if s["pri"] == "P1": dev_month[dev][mon]["p1"] += 1
-        if s["pri"] == "P2": dev_month[dev][mon]["p2"] += 1
+            dev_month[dev] = {m: {"est": 0, "unest": 0, "p1_unest": 0, "p2_unest": 0} for m in month_order}
+        if s["est_status"] in ("estimated", "estimated_via_tasks"):
+            dev_month[dev][mon]["est"] += 1
+        else:
+            dev_month[dev][mon]["unest"] += 1
+            if s["pri"] == "P1": dev_month[dev][mon]["p1_unest"] += 1
+            if s["pri"] == "P2": dev_month[dev][mon]["p2_unest"] += 1
 
     # Sort devs by total unestimated desc
     sorted_devs = sorted(dev_month.keys(),
-                         key=lambda d: -sum(v["n"] for v in dev_month[d].values()))
+                         key=lambda d: -sum(v["unest"] for v in dev_month[d].values()))
 
     today_m = date.today().month
     _mlbl = {"M0": f"M0·{_CAL[today_m]}",
@@ -1684,52 +1690,72 @@ def _build_unest_tab(items: list[dict]) -> html.Div:
 
     mat_rows = []
     for dev in sorted_devs:
-        dm   = dev_month[dev]
-        role = _DEV_ROLE.get(TEAM_MAPPING.get(dev, ""), "Developer")
-        tot  = sum(dm[mk]["n"] for mk in months_present)
+        dm        = dev_month[dev]
+        role      = _DEV_ROLE.get(TEAM_MAPPING.get(dev, ""), "Developer")
+        tot       = sum(dm[mk]["est"] + dm[mk]["unest"] for mk in months_present)
+        unest_tot = sum(dm[mk]["unest"] for mk in months_present)
         cells = [html.Td([
             html.Div(dev,  style={"color": TX, "fontWeight": "600", "fontSize": "13px"}),
             html.Div(role, style={"color": MT, "fontSize": "10px"}),
         ], style={"padding": "10px 14px", "borderBottom": f"1px solid {BD}"})]
 
         for mk in months_present:
-            n  = dm[mk]["n"]
-            p1 = dm[mk]["p1"]
-            p2 = dm[mk]["p2"]
-            if n == 0:
+            est_n   = dm[mk]["est"]
+            unest_n = dm[mk]["unest"]
+            p1      = dm[mk]["p1_unest"]
+            p2      = dm[mk]["p2_unest"]
+            if est_n == 0 and unest_n == 0:
                 cells.append(html.Td("—", style={
                     "textAlign": "center", "color": "rgba(255,255,255,0.15)",
                     "fontSize": "12px", "padding": "10px 8px",
                     "borderBottom": f"1px solid {BD}",
                 }))
             else:
-                clr = R if p1 > 0 else A if p2 > 0 else G
-                cells.append(html.Td(
-                    html.Div([
-                        html.Div(str(n), style={"fontSize": "20px", "fontWeight": "700",
-                                                "color": clr, "lineHeight": "1"}),
-                        html.Div(f"P1:{p1}" if p1 else "",
-                                 style={"fontSize": "9px", "color": R, "marginTop": "2px"}),
+                clr_u = R if p1 > 0 else A if p2 > 0 else MT
+                sub_btns = []
+                if est_n > 0:
+                    sub_btns.append(html.Div([
+                        html.Div(str(est_n), style={"fontSize": "15px", "fontWeight": "700",
+                                                    "color": G, "lineHeight": "1"}),
+                        html.Div("est", style={"fontSize": "8px", "color": G,
+                                               "marginTop": "1px", "opacity": "0.7"}),
                     ],
-                    id={"type": "unest-matrix-cell", "dev": dev, "month": mk},
+                    id={"type": "unest-matrix-cell", "dev": dev, "month": mk, "est_type": "e"},
                     n_clicks=0,
-                    style={
-                        "background": f"{clr}18", "border": f"1px solid {clr}44",
-                        "borderRadius": "8px", "padding": "8px", "textAlign": "center",
-                        "cursor": "pointer", "transition": "opacity .15s",
-                    }),
-                    style={"padding": "6px", "borderBottom": f"1px solid {BD}"},
+                    style={"background": f"{G}18", "border": f"1px solid {G}44",
+                           "borderRadius": "6px", "padding": "5px 8px", "textAlign": "center",
+                           "cursor": "pointer", "transition": "opacity .15s", "marginBottom": "3px"},
+                    ))
+                if unest_n > 0:
+                    sub_btns.append(html.Div([
+                        html.Div(str(unest_n), style={"fontSize": "15px", "fontWeight": "700",
+                                                      "color": clr_u, "lineHeight": "1"}),
+                        html.Div(f"P1:{p1}" if p1 else "unest",
+                                 style={"fontSize": "8px", "color": R if p1 else MT,
+                                        "marginTop": "1px"}),
+                    ],
+                    id={"type": "unest-matrix-cell", "dev": dev, "month": mk, "est_type": "u"},
+                    n_clicks=0,
+                    style={"background": f"{clr_u}18", "border": f"1px solid {clr_u}44",
+                           "borderRadius": "6px", "padding": "5px 8px", "textAlign": "center",
+                           "cursor": "pointer", "transition": "opacity .15s"},
+                    ))
+                cells.append(html.Td(
+                    html.Div(sub_btns, style={"display": "flex", "flexDirection": "column"}),
+                    style={"padding": "4px 6px", "borderBottom": f"1px solid {BD}"},
                 ))
 
-        cells.append(html.Td(
-            html.Span(str(tot), style={"fontWeight": "700", "color": R if tot > 5 else A}),
-            style={"textAlign": "center", "padding": "10px 8px",
-                   "borderBottom": f"1px solid {BD}"},
-        ))
+        cells.append(html.Td([
+            html.Div(str(unest_tot), style={"fontWeight": "700", "fontSize": "14px",
+                                            "color": R if unest_tot > 5 else A}),
+            html.Div(f"+{tot - unest_tot} est" if (tot - unest_tot) > 0 else "",
+                     style={"fontSize": "9px", "color": G}),
+        ], style={"textAlign": "center", "padding": "10px 8px",
+                   "borderBottom": f"1px solid {BD}"}))
         mat_rows.append(html.Tr(cells, style={"background": CD}))
 
     matrix = html.Div([
-        html.Div("Unestimated Items · Developer × Month",
+        html.Div("Estimated vs Unestimated · Developer × Month",
                  style={"fontWeight": "700", "color": TX, "fontSize": "14px",
                         "marginBottom": "12px"}),
         html.Div(
@@ -1743,9 +1769,9 @@ def _build_unest_tab(items: list[dict]) -> html.Div:
     ])
 
     # ── Priority Breakdown table ───────────────────────────────────────────────
-    # Build dev → {P1, P2, P3, P4} counts
+    # Build dev → {P1, P2, P3, P4} counts (unestimated only)
     dev_pri: dict = {}
-    for s in items:
+    for s in unest_only:
         dev = s["dev"]
         if dev in ("Unassigned","Not Specified",""):
             continue
@@ -3490,6 +3516,7 @@ def _matrix_panel(cell_clicks, close_click, stories_data):
 def _unest_card_click(clicks, items, card_ids, currently_active):
     if not ctx.triggered_id or not items:
         return no_update, no_update, no_update
+    items = [s for s in items if s["est_status"] in ("unestimated", "partial")]
 
     active_f = ctx.triggered_id["filter"]
 
@@ -3598,7 +3625,7 @@ def _unest_card_click(clicks, items, card_ids, currently_active):
 # Toggle: matrix cell click / close / backdrop → store {dev, month} or None
 @callback(
     Output("unest-panel-filter", "data"),
-    Input({"type": "unest-matrix-cell", "dev": ALL, "month": ALL}, "n_clicks"),
+    Input({"type": "unest-matrix-cell", "dev": ALL, "month": ALL, "est_type": ALL}, "n_clicks"),
     Input("unest-panel-close", "n_clicks"),
     Input("unest-backdrop",    "n_clicks"),
     prevent_initial_call=True,
@@ -3608,7 +3635,7 @@ def _unest_matrix_toggle(cell_clicks, close_click, backdrop_click):
     if tid in ("unest-panel-close", "unest-backdrop"):
         return None
     if isinstance(tid, dict) and tid.get("type") == "unest-matrix-cell":
-        return {"dev": tid["dev"], "month": tid["month"]}
+        return {"dev": tid["dev"], "month": tid["month"], "est_type": tid.get("est_type", "u")}
     return no_update
 
 
@@ -3625,16 +3652,30 @@ def _unest_matrix_panel(cell_sel, items):
     if not cell_sel or not items:
         return _PANEL_CLOSED, _BACKDROP_CLOSED, "", []
 
-    dev   = cell_sel["dev"]
-    month = cell_sel["month"]
+    dev      = cell_sel["dev"]
+    month    = cell_sel["month"]
+    est_type = cell_sel.get("est_type", "u")  # "e" = estimated, "u" = unestimated
 
-    filtered = sorted(
-        [s for s in items if s["dev"] == dev and s["month"] == month],
-        key=lambda s: (s["pri"], s["title"]),
-    )
+    if est_type == "e":
+        filtered = sorted(
+            [s for s in items if s["dev"] == dev and s["month"] == month
+             and s["est_status"] in ("estimated", "estimated_via_tasks")],
+            key=lambda s: (s["pri"], s["title"]),
+        )
+    else:
+        filtered = sorted(
+            [s for s in items if s["dev"] == dev and s["month"] == month
+             and s["est_status"] in ("unestimated", "partial")],
+            key=lambda s: (s["pri"], s["title"]),
+        )
 
     def _item_card(s):
-        est_lbl, est_c = ("Partial", A) if s["est_status"] == "partial" else ("Missing", R)
+        if s["est_status"] in ("estimated", "estimated_via_tasks"):
+            est_lbl, est_c = "Estimated", G
+        elif s["est_status"] == "partial":
+            est_lbl, est_c = "Partial", A
+        else:
+            est_lbl, est_c = "Missing", R
         task_note = ""
         if s.get("task_count", 0) > 0:
             miss = s["task_missing"]
@@ -3679,9 +3720,13 @@ def _unest_matrix_panel(cell_sel, items):
             })
         )
 
+    _est_label = "Estimated" if est_type == "e" else "Unestimated"
     title_el = [
         html.Span(dev.split()[0], style={"color": TX}),
         html.Span(f"  ·  {month}", style={"color": P, "fontWeight": "700"}),
+        html.Span(f"  ·  {_est_label}",
+                  style={"color": G if est_type == "e" else R,
+                         "fontSize": "11px", "fontWeight": "700", "marginLeft": "4px"}),
         html.Span(f"  ·  {len(filtered)} item{'s' if len(filtered) != 1 else ''}",
                   style={"color": MT, "fontSize": "13px", "fontWeight": "400"}),
     ]
@@ -3712,8 +3757,9 @@ def _unest_matrix_panel(cell_sel, items):
         body_items.append(_section_header(label, len(group)))
         body_items.extend(_item_card(s) for s in group)
 
+    _empty_msg = f"No {_est_label.lower()} items for this cell."
     body = html.Div(body_items) if filtered else html.Div(
-        "No unestimated items for this cell.",
+        _empty_msg,
         style={"color": MT, "fontSize": "13px", "padding": "20px 0"},
     )
 
