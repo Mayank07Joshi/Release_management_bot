@@ -167,45 +167,42 @@ def _update_avatar(pathname):
 
 
 if __name__ == "__main__":
-    _in_reloader_child = os.environ.get("WERKZEUG_RUN_MAIN") == "true"
-    _debug_mode        = os.environ.get("DASH_DEBUG", "false").lower() == "true"
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from waitress import serve
+    import atexit
+    from sync.ado_sync import run_sync
+    from db.planning import init_planning_tables
 
-    if not _debug_mode or _in_reloader_child:
-        from apscheduler.schedulers.background import BackgroundScheduler
-        import atexit
-        from sync.ado_sync import run_sync
-        from db.planning import init_planning_tables
+    try:
+        init_planning_tables()
+    except Exception as _e:
+        logging.getLogger(__name__).warning("Planning table init failed: %s", _e)
 
-        # Ensure planning sign-off tables exist
-        try:
-            init_planning_tables()
-        except Exception as _e:
-            logging.getLogger(__name__).warning("Planning table init failed: %s", _e)
+    try:
+        from db.standalone import init_standalone_table
+        init_standalone_table()
+    except Exception as _e:
+        logging.getLogger(__name__).warning("Standalone table init failed: %s", _e)
 
-        # Ensure standalone task classification table exists
-        try:
-            from db.standalone import init_standalone_table
-            init_standalone_table()
-        except Exception as _e:
-            logging.getLogger(__name__).warning("Standalone table init failed: %s", _e)
+    try:
+        from db.focus import init_sprint_history_table
+        init_sprint_history_table()
+    except Exception as _e:
+        logging.getLogger(__name__).warning("Sprint history table init failed: %s", _e)
 
-        # Ensure sprint iteration history table exists
-        try:
-            from db.focus import init_sprint_history_table
-            init_sprint_history_table()
-        except Exception as _e:
-            logging.getLogger(__name__).warning("Sprint history table init failed: %s", _e)
+    scheduler = BackgroundScheduler(daemon=True)
+    scheduler.add_job(run_sync, "interval", minutes=15, id="ado_sync",
+                      misfire_grace_time=60)
+    scheduler.start()
+    atexit.register(lambda: scheduler.shutdown(wait=False))
 
-        scheduler = BackgroundScheduler(daemon=True)
-        scheduler.add_job(run_sync, "interval", minutes=15, id="ado_sync",
-                          misfire_grace_time=60)
-        scheduler.start()
-        atexit.register(lambda: scheduler.shutdown(wait=False))
+    threading.Thread(target=run_sync, daemon=True, name="ado-sync-startup").start()
 
-        threading.Thread(target=run_sync, daemon=True, name="ado-sync-startup").start()
+    from data.loader import load_data as _load_data
+    threading.Thread(target=_load_data, daemon=True, name="cache-warmup").start()
 
-        # Pre-warm the data cache so first page visit is instant
-        from data.loader import load_data as _load_data
-        threading.Thread(target=_load_data, daemon=True, name="cache-warmup").start()
-
-    app.run(host="0.0.0.0", port=8050, debug=_debug_mode)
+    if os.environ.get("PRODUCTION", "false").lower() == "true":
+        logging.getLogger(__name__).info("Starting Waitress on http://0.0.0.0:8050")
+        serve(app.server, host="0.0.0.0", port=8050, threads=8)
+    else:
+        app.run(host="0.0.0.0", port=8050, debug=True)
