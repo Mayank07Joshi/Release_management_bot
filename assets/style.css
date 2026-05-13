@@ -20,6 +20,76 @@
     --warning-dim: rgba(251, 146,  60, 0.12);
     --danger-dim:  rgba(248, 113, 113, 0.12);
     --topnav-h: 58px;
+
+    /* Semantic colour tokens (parallel to success/warning/danger/info) */
+    --red:    #f87171;
+    --amber:  #fb923c;
+    --green:  #34d399;
+    --blue:   #60a5fa;
+    --purple: #818cf8;
+    --gold:   #fbbf24;
+
+    /* Dim variants (~12% opacity — use as backgrounds) */
+    --red-dim:    rgba(248, 113, 113, 0.12);
+    --amber-dim:  rgba(251, 146,  60, 0.12);
+    --green-dim:  rgba( 52, 211, 153, 0.12);
+    --blue-dim:   rgba( 96, 165, 250, 0.12);
+    --purple-dim: rgba(129, 140, 248, 0.12);
+
+    /* Border variants (~35% opacity — use as borders / outlines) */
+    --red-border:    rgba(248, 113, 113, 0.35);
+    --amber-border:  rgba(251, 146,  60, 0.35);
+    --green-border:  rgba( 52, 211, 153, 0.35);
+    --blue-border:   rgba( 96, 165, 250, 0.35);
+    --purple-border: rgba(129, 140, 248, 0.35);
+
+    /* Navigation background — stays dark in both themes */
+    --nav-bg: #0e0e1a;
+}
+
+/* ── Light Theme Overrides ───────────────────────────────────────────────────── */
+[data-theme="light"] {
+    --bg-base:     #F6F8F8;
+    --bg-surface:  #E9EFF0;
+    --bg-elevated: #DDE6E7;
+    --bg-hover:    #D0DCDE;
+    --border:      rgba(0, 0, 0, 0.09);
+    --border-mid:  rgba(0, 0, 0, 0.15);
+    --accent:      #629CA6;
+    --accent-dim:  rgba(98, 156, 166, 0.15);
+    --accent-glow: rgba(98, 156, 166, 0.08);
+    --text-primary:   #222D2E;
+    --text-secondary: #607275;
+    --text-muted:     #82979A;
+
+    --success: #3B6D11;
+    --warning: #EF9F27;
+    --danger:  #E24B4A;
+    --info:    #185FA5;
+    --success-dim: rgba( 59, 109,  17, 0.12);
+    --warning-dim: rgba(239, 159,  39, 0.12);
+    --danger-dim:  rgba(226,  75,  74, 0.12);
+
+    --red:    #E24B4A;
+    --amber:  #EF9F27;
+    --green:  #3B6D11;
+    --blue:   #185FA5;
+    --purple: #7F77DD;
+
+    --red-dim:    rgba(226,  75,  74, 0.12);
+    --amber-dim:  rgba(239, 159,  39, 0.12);
+    --green-dim:  rgba( 59, 109,  17, 0.12);
+    --blue-dim:   rgba( 24,  95, 165, 0.12);
+    --purple-dim: rgba(127, 119, 221, 0.12);
+
+    --red-border:    rgba(226,  75,  74, 0.35);
+    --amber-border:  rgba(239, 159,  39, 0.35);
+    --green-border:  rgba( 59, 109,  17, 0.35);
+    --blue-border:   rgba( 24,  95, 165, 0.35);
+    --purple-border: rgba(127, 119, 221, 0.35);
+
+    /* Nav always stays dark */
+    --nav-bg: #273133;
 }
 
 /* ── Global Reset ────────────────────────────────────────────────────────────── */
@@ -41,8 +111,8 @@ body {
     position: fixed;
     top: 0; left: 0; right: 0;
     height: var(--topnav-h);
-    background: var(--bg-surface);
-    border-bottom: 1px solid var(--border);
+    background: var(--nav-bg);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
     display: flex;
     align-items: center;
     padding: 0 24px;
@@ -81,7 +151,7 @@ body {
 .topnav-brand-title {
     font-size: 14px;
     font-weight: 700;
-    color: var(--text-primary);
+    color: #e2e8f0;
     line-height: 1.2;
     white-space: nowrap;
 }
@@ -91,7 +161,7 @@ body {
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 1.2px;
-    color: var(--text-muted);
+    color: #505870;
     line-height: 1;
 }
 
@@ -114,7 +184,7 @@ body {
     border-radius: 7px;
     font-size: 12.5px;
     font-weight: 500;
-    color: var(--text-secondary) !important;
+    color: #8892a4 !important;
     text-decoration: none !important;
     white-space: nowrap;
     transition: background 0.15s, color 0.15s;
@@ -122,14 +192,14 @@ body {
 }
 
 .topnav-tab:hover {
-    background: var(--bg-hover) !important;
-    color: var(--text-primary) !important;
+    background: rgba(255, 255, 255, 0.07) !important;
+    color: #e2e8f0 !important;
 }
 
 .topnav-tab.active {
-    background: var(--accent-dim) !important;
+    background: rgba(129, 140, 248, 0.18) !important;
     color: var(--accent) !important;
-    border-color: rgba(129, 140, 248, 0.18) !important;
+    border-color: rgba(129, 140, 248, 0.22) !important;
 }
 
 .topnav-tab-icon { font-size: 13px; }
@@ -161,9 +231,9 @@ body {
 
 .topnav-planning-wrapper[open] .topnav-planning-arrow { transform: rotate(180deg); }
 .topnav-planning-wrapper[open] .topnav-planning-toggle {
-    background: var(--accent-dim) !important;
+    background: rgba(129, 140, 248, 0.18) !important;
     color: var(--accent) !important;
-    border-color: rgba(129, 140, 248, 0.18) !important;
+    border-color: rgba(129, 140, 248, 0.22) !important;
 }
 
 .topnav-planning-menu {
@@ -171,7 +241,7 @@ body {
     top: calc(100% + 6px);
     left: 50%;
     transform: translateX(-50%);
-    background: var(--bg-elevated);
+    background: #151524;
     border: 1px solid var(--border-mid);
     border-radius: 10px;
     padding: 6px;
@@ -236,7 +306,7 @@ body {
 
 .topnav-logout {
     font-size: 12px;
-    color: #64748b;
+    color: #8892a4;
     text-decoration: none;
     transition: color 0.2s;
 }
@@ -418,10 +488,10 @@ input:focus, select:focus, textarea:focus,
 .Select-arrow { border-top-color: var(--text-secondary) !important; }
 
 .Select-menu-outer {
-    background-color: #1a1a2e !important;
+    background-color: var(--bg-elevated) !important;
     border: 1px solid var(--border-mid) !important;
     border-radius: 8px !important;
-    box-shadow: 0 12px 32px rgba(0,0,0,0.6) !important;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.4) !important;
     z-index: 1000 !important;
 }
 
@@ -1002,9 +1072,9 @@ input:focus, select:focus, textarea:focus,
 }
 .gate-pill.gate-pending {
     background: transparent;
-    border-color: rgba(255, 255, 255, 0.09);
-    border-left: 3px solid rgba(255, 255, 255, 0.14);
-    color: #8892a4;
+    border-color: var(--border-mid);
+    border-left: 3px solid var(--border-mid);
+    color: var(--text-secondary);
 }
 
 /* ── Tracker modal gate cards ─────────────────────────────────────────────── */
@@ -1074,20 +1144,20 @@ input:focus, select:focus, textarea:focus,
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
-    color: #8892a4;
-    background: rgba(255,255,255,0.05);
-    border: 1px solid rgba(255,255,255,0.07);
+    color: var(--text-secondary);
+    background: var(--accent-glow);
+    border: 1px solid var(--border);
     transition: all 0.18s;
     user-select: none;
 }
 .focus-type-btn:hover {
-    color: #e2e8f0;
-    background: rgba(255,255,255,0.09);
+    color: var(--text-primary);
+    background: var(--accent-dim);
 }
 .focus-type-btn.focus-type-active {
-    color: #e2e8f0;
-    background: rgba(129,140,248,0.18);
-    border-color: rgba(129,140,248,0.50);
+    color: var(--text-primary);
+    background: var(--accent-dim);
+    border-color: var(--accent);
 }
 
 .focus-tab-btn {
@@ -1095,7 +1165,7 @@ input:focus, select:focus, textarea:focus,
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
-    color: #8892a4;
+    color: var(--text-secondary);
     background: transparent;
     border: none;
     border-bottom: 2px solid transparent;
@@ -1104,44 +1174,44 @@ input:focus, select:focus, textarea:focus,
     user-select: none;
 }
 .focus-tab-btn:hover {
-    color: #e2e8f0;
+    color: var(--text-primary);
 }
 .focus-tab-btn.focus-tab-active {
-    color: #818cf8;
-    border-bottom-color: #818cf8;
+    color: var(--purple);
+    border-bottom-color: var(--purple);
 }
 
-/* Focus Area state dropdown — dark theme override */
+/* Focus Area state dropdown */
 .focus-state-dropdown .Select-control,
 .focus-state-dropdown .Select-menu-outer {
-    background: #13132a !important;
-    border-color: rgba(255,255,255,0.07) !important;
-    color: #e2e8f0 !important;
+    background: var(--bg-elevated) !important;
+    border-color: var(--border) !important;
+    color: var(--text-primary) !important;
 }
 .focus-state-dropdown .Select-value-label,
 .focus-state-dropdown .Select-placeholder,
 .focus-state-dropdown .Select-input input {
-    color: #8892a4 !important;
+    color: var(--text-secondary) !important;
 }
 .focus-state-dropdown .Select-option {
-    background: #13132a !important;
-    color: #e2e8f0 !important;
+    background: var(--bg-elevated) !important;
+    color: var(--text-primary) !important;
 }
 .focus-state-dropdown .Select-option:hover,
 .focus-state-dropdown .Select-option.is-focused {
-    background: rgba(129,140,248,0.15) !important;
+    background: var(--purple-dim) !important;
 }
 .focus-state-dropdown .Select-multi-value-wrapper .Select-value {
-    background: rgba(129,140,248,0.18) !important;
-    border-color: rgba(129,140,248,0.40) !important;
-    color: #e2e8f0 !important;
+    background: var(--purple-dim) !important;
+    border-color: var(--purple-border) !important;
+    color: var(--text-primary) !important;
     border-radius: 4px;
 }
 .focus-state-dropdown .Select-value-icon {
-    border-right-color: rgba(129,140,248,0.40) !important;
-    color: #818cf8 !important;
+    border-right-color: var(--purple-border) !important;
+    color: var(--purple) !important;
 }
-.focus-state-dropdown .Select-arrow { border-top-color: #8892a4 !important; }
+.focus-state-dropdown .Select-arrow { border-top-color: var(--text-secondary) !important; }
 
 /* ── Developer Capacity page ─────────────────────────────────────────────── */
 .dcap-view-btn {
@@ -1149,22 +1219,22 @@ input:focus, select:focus, textarea:focus,
     font-size: 12px;
     font-weight: 500;
     cursor: pointer;
-    color: #8892a4;
+    color: var(--text-secondary);
     background: transparent;
-    border: 1px solid rgba(255,255,255,0.10);
+    border: 1px solid var(--border-mid);
     border-radius: 6px;
     margin-right: 6px;
     transition: all 0.15s;
     user-select: none;
 }
 .dcap-view-btn:hover {
-    color: #e2e8f0;
-    background: rgba(255,255,255,0.06);
+    color: var(--text-primary);
+    background: var(--bg-hover);
 }
 .dcap-view-btn.dcap-view-active {
-    color: #e2e8f0;
-    background: rgba(129,140,248,0.15);
-    border-color: rgba(129,140,248,0.45);
+    color: var(--text-primary);
+    background: var(--purple-dim);
+    border-color: var(--purple-border);
 }
 
 .dcap-subtab {
@@ -1172,7 +1242,7 @@ input:focus, select:focus, textarea:focus,
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
-    color: #8892a4;
+    color: var(--text-secondary);
     background: transparent;
     border: none;
     border-bottom: 2px solid transparent;
@@ -1181,11 +1251,11 @@ input:focus, select:focus, textarea:focus,
     user-select: none;
 }
 .dcap-subtab:hover {
-    color: #e2e8f0;
+    color: var(--text-primary);
 }
 .dcap-subtab.dcap-subtab-active {
-    color: #fbbf24;
-    border-bottom-color: #fbbf24;
+    color: var(--gold);
+    border-bottom-color: var(--gold);
 }
 
 /* ── Planning — collapsible filter bar ───────────────────────────────────── */
@@ -1220,12 +1290,138 @@ input:focus, select:focus, textarea:focus,
 .dev-matrix tbody tr:last-child td:nth-child(2),
 .dev-matrix tbody tr:last-child td:nth-child(3),
 .dev-matrix tbody tr:last-child td:nth-child(4) {
-    border-bottom: 2px solid #fbbf24 !important;
+    border-bottom: 2px solid var(--gold) !important;
 }
 /* Story matrix: Story=col1, Size=col2, M0=col3, M1=col4, M2=col5 */
 .story-matrix tbody tr:last-child td:nth-child(3),
 .story-matrix tbody tr:last-child td:nth-child(4),
 .story-matrix tbody tr:last-child td:nth-child(5) {
-    border-bottom: 2px solid #fbbf24 !important;
+    border-bottom: 2px solid var(--gold) !important;
 }
+
+/* ── Theme Toggle Button ──────────────────────────────────────────────────── */
+.theme-toggle-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.06);
+    color: #8892a4;
+    font-size: 15px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    flex-shrink: 0;
+    padding: 0;
+    line-height: 1;
+}
+.theme-toggle-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #e2e8f0;
+    border-color: rgba(255, 255, 255, 0.22);
+}
+
+/* ── Light-mode component overrides ─────────────────────────────────────── */
+[data-theme="light"] body {
+    background: var(--bg-base);
+    color: var(--text-primary);
+}
+
+[data-theme="light"] .main-content {
+    background: var(--bg-base);
+}
+
+[data-theme="light"] .metric-card,
+[data-theme="light"] .chart-card,
+[data-theme="light"] .home-card,
+[data-theme="light"] .filter-panel,
+[data-theme="light"] .accordion-item,
+[data-theme="light"] .accordion-body {
+    background: var(--bg-elevated) !important;
+    border-color: var(--border) !important;
+}
+
+[data-theme="light"] .metric-card:hover,
+[data-theme="light"] .home-card:hover {
+    border-color: var(--accent) !important;
+}
+
+[data-theme="light"] .modal-content {
+    background: var(--bg-surface) !important;
+    border-color: var(--border-mid) !important;
+}
+
+[data-theme="light"] .modal-header { border-bottom-color: var(--border) !important; }
+[data-theme="light"] .modal-footer { border-top-color: var(--border) !important; }
+[data-theme="light"] .modal-title  { color: var(--text-primary) !important; }
+[data-theme="light"] .btn-close    { filter: none !important; }
+
+[data-theme="light"] input,
+[data-theme="light"] select,
+[data-theme="light"] textarea,
+[data-theme="light"] .form-control,
+[data-theme="light"] .form-select {
+    background-color: var(--bg-hover) !important;
+    border-color: var(--border-mid) !important;
+    color: var(--text-primary) !important;
+}
+
+[data-theme="light"] .Select-control {
+    background-color: var(--bg-hover) !important;
+    border-color: var(--border-mid) !important;
+    color: var(--text-primary) !important;
+}
+[data-theme="light"] .Select-value-label,
+[data-theme="light"] .Select-placeholder,
+[data-theme="light"] .Select-input > input { color: var(--text-primary) !important; }
+[data-theme="light"] .Select-menu-outer    { background-color: var(--bg-surface) !important; }
+[data-theme="light"] .Select-option        { background-color: transparent !important; color: var(--text-secondary) !important; }
+[data-theme="light"] .Select-option:hover,
+[data-theme="light"] .Select-option.is-focused { background-color: var(--bg-hover) !important; color: var(--text-primary) !important; }
+
+[data-theme="light"] .accordion-button {
+    background: var(--bg-elevated) !important;
+    color: var(--text-primary) !important;
+    border-bottom-color: var(--border) !important;
+}
+[data-theme="light"] .accordion-button:not(.collapsed) {
+    background: var(--bg-hover) !important;
+    color: var(--accent) !important;
+}
+[data-theme="light"] .accordion-button::after { filter: none; }
+
+[data-theme="light"] .dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner td,
+[data-theme="light"] .dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner th {
+    background-color: var(--bg-elevated) !important;
+    color: var(--text-primary) !important;
+    border-color: var(--border) !important;
+}
+[data-theme="light"] .dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner th {
+    background-color: var(--bg-hover) !important;
+    color: var(--text-secondary) !important;
+    border-bottom-color: var(--border-mid) !important;
+}
+[data-theme="light"] .dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner tr:hover td {
+    background-color: var(--bg-hover) !important;
+}
+
+[data-theme="light"] .progress { background-color: var(--bg-hover) !important; }
+
+[data-theme="light"] .pl-nav-btn:hover  { background: var(--bg-hover); }
+[data-theme="light"] .pl-nav-btn--active { background: var(--accent-dim) !important; }
+
+[data-theme="light"] .tracker-gate-card { background: var(--bg-elevated); border-color: var(--border); }
+
+[data-theme="light"] .date-range-pair {
+    background: var(--bg-hover);
+    border-color: var(--border-mid);
+}
+[data-theme="light"] .date-range-pair input[type="date"] {
+    color-scheme: light;
+}
+
+[data-theme="light"] ::-webkit-scrollbar-thumb { background: var(--border-mid); }
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.18); }
 

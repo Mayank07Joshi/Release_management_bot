@@ -13,17 +13,17 @@ from sqlalchemy import text
 # Page no longer registered standalone — content embedded in Summary page via focus_tab_content()
 
 # ── Palette ───────────────────────────────────────────────────────────────────
-BG   = "#0f0f1e"
-CARD = "#13132a"
-BD   = "rgba(255,255,255,0.07)"
-ACC  = "#818cf8"
-G    = "#34d399"
-GOLD = "#fbbf24"
-RED  = "#f87171"
-ORG  = "#fb923c"
-MT   = "#8892a4"
-TXT  = "#e2e8f0"
-BLU  = "#60a5fa"
+BG   = "var(--bg-base)"
+CARD = "var(--bg-elevated)"
+BD   = "var(--border)"
+ACC  = "var(--purple)"
+G    = "var(--green)"
+GOLD = "var(--gold)"
+RED  = "var(--red)"
+ORG  = "var(--amber)"
+MT   = "var(--text-secondary)"
+TXT  = "var(--text-primary)"
+BLU  = "var(--blue)"
 
 ISSUE_TYPES = {"Bug", "Bug_UI", "Bug_Text"}
 ENH_TYPES   = {"Enhancement", "User Story"}
@@ -191,33 +191,13 @@ def focus_tab_content():
             ]),
         ], style={"marginBottom": "24px"}),
 
-        # ── Sticky filter bar: TYPE + STATE ───────────────────────────────────
+        # ── Sticky filter bar: STATE ──────────────────────────────────────────
         html.Div([
             html.Div([
-                html.Div([
-                    html.Span("TYPE ", style={
-                        "fontSize": "10px", "fontWeight": "700", "color": MT,
-                        "letterSpacing": "0.08em", "marginRight": "10px",
-                    }),
-                    html.Div("All", id="focus-btn-all", n_clicks=0,
-                             className="focus-type-btn focus-type-active"),
-                    html.Div("Issues", id="focus-btn-issues", n_clicks=0,
-                             className="focus-type-btn"),
-                    html.Div("Enhancements", id="focus-btn-enh", n_clicks=0,
-                             className="focus-type-btn"),
-                ], style={"display": "flex", "alignItems": "center", "gap": "6px"}),
-                html.Div(id="focus-last-refreshed", style={
-                    "fontSize": "12px", "color": MT,
-                }),
-            ], style={
-                "display": "flex", "justifyContent": "space-between",
-                "alignItems": "center", "marginBottom": "8px",
-            }),
-            html.Div([
-                html.Span("STATE ", style={
-                    "fontSize": "10px", "fontWeight": "700", "color": MT,
-                    "letterSpacing": "0.08em", "marginRight": "10px",
-                    "whiteSpace": "nowrap", "alignSelf": "center",
+                html.Span("STATE", style={
+                    "fontSize": "9px", "fontWeight": "700", "color": MT,
+                    "letterSpacing": "0.06em", "textTransform": "uppercase",
+                    "whiteSpace": "nowrap", "width": "52px", "flexShrink": "0",
                 }),
                 dcc.Dropdown(
                     id="focus-state-dropdown",
@@ -229,18 +209,16 @@ def focus_tab_content():
                     style={"flex": "1", "minWidth": "0"},
                     className="focus-state-dropdown",
                 ),
-            ], style={
-                "display": "flex", "alignItems": "center",
-                "background": "rgba(255,255,255,0.03)",
-                "border": f"1px solid {BD}",
-                "borderRadius": "8px", "padding": "6px 14px",
-            }),
+                html.Div(id="focus-last-refreshed", style={
+                    "fontSize": "11px", "color": MT,
+                    "whiteSpace": "nowrap", "marginLeft": "16px", "flexShrink": "0",
+                }),
+            ], style={"display": "flex", "alignItems": "center"}),
         ], style={
             "position": "sticky", "top": "58px", "zIndex": "20",
             "background": BG,
             "paddingTop": "8px", "paddingBottom": "10px",
             "marginBottom": "10px",
-            "boxShadow": "0 4px 20px rgba(0,0,0,0.45)",
         }),
 
         # ── Tab strip ─────────────────────────────────────────────────────────
@@ -269,27 +247,6 @@ def focus_tab_content():
 
 
 # ── Callbacks ─────────────────────────────────────────────────────────────────
-
-@callback(
-    Output("focus-type",          "data"),
-    Output("focus-btn-all",       "className"),
-    Output("focus-btn-issues",    "className"),
-    Output("focus-btn-enh",       "className"),
-    Input("focus-btn-all",        "n_clicks"),
-    Input("focus-btn-issues",     "n_clicks"),
-    Input("focus-btn-enh",        "n_clicks"),
-    prevent_initial_call=True,
-)
-def _select_type(n_all, n_issues, n_enh):
-    active  = "focus-type-btn focus-type-active"
-    default = "focus-type-btn"
-    trig = ctx.triggered_id
-    if trig == "focus-btn-issues":
-        return "Issues", default, active, default
-    if trig == "focus-btn-enh":
-        return "Enhancements", default, default, active
-    return "All", active, default, default
-
 
 @callback(
     Output("focus-tab",             "data"),

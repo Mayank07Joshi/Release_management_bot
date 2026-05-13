@@ -17,17 +17,31 @@ dash.register_page(__name__, path="/planning", name="Planning Tool")
 print(">>> [planning.py] LOADED — panel=680px card=#252548")
 
 # ─── Colour tokens ─────────────────────────────────────────────────────────────
-G  = "#34d399"   # green  – Ready / good
-R  = "#f87171"   # red    – Not Started / urgent
-A  = "#fb923c"   # amber  – Draft / warning
-B  = "#60a5fa"   # blue   – In Dev / M0
-P  = "#818cf8"   # purple – accent
-TX = "#e2e8f0"   # primary text
-MT = "#8892a4"   # muted text
-BD = "rgba(255,255,255,0.07)"
-CD = "#13131f"
-C2 = "#1a1a2e"
-C3 = "#0f0f1a"
+G  = "var(--green)"   # green  – Ready / good
+R  = "var(--red)"     # red    – Not Started / urgent
+A  = "var(--amber)"   # amber  – Draft / warning
+B  = "var(--blue)"    # blue   – In Dev / M0
+P  = "var(--purple)"  # purple – accent
+TX = "var(--text-primary)"
+MT = "var(--text-secondary)"
+BD = "var(--border)"
+CD = "var(--bg-elevated)"
+C2 = "var(--bg-hover)"
+C3 = "var(--bg-base)"
+
+# Dim (background ~12%) and border (~35%) variants for f-string replacements
+G_DIM = "var(--green-dim)";  G_BRD = "var(--green-border)"
+R_DIM = "var(--red-dim)";    R_BRD = "var(--red-border)"
+A_DIM = "var(--amber-dim)";  A_BRD = "var(--amber-border)"
+B_DIM = "var(--blue-dim)";   B_BRD = "var(--blue-border)"
+P_DIM = "var(--purple-dim)"; P_BRD = "var(--purple-border)"
+
+# Dim/border lookups for dynamic color variables
+_COLOR_DIM = {G: G_DIM, R: R_DIM, A: A_DIM, B: B_DIM, P: P_DIM}
+_COLOR_BRD = {G: G_BRD, R: R_BRD, A: A_BRD, B: B_BRD, P: P_BRD}
+
+def _dim(c): return _COLOR_DIM.get(c, f"{c}22")
+def _brd(c): return _COLOR_BRD.get(c, f"{c}44")
 
 STATUS_COLOR = {
     "NOT STARTED":   R,
@@ -47,11 +61,11 @@ _GATE_FILTER_MAP = {
     "estimation":    {"gates": ["g3"],       "phases": ["p5"]},
     "delivery":      {"gates": ["g4", "g5", "g6"], "phases": None},
 }
-_WIN_BORDER  = "#fbbf24"  # golden separator between planning window and rest of 2026
+_WIN_BORDER  = "var(--gold)"  # golden separator between planning window and rest of 2026
 
 # Tab button styles (active / idle) — used by _switch_tab callback
 _TAB_BTN_ACT = {
-    "background": f"{P}22", "border": f"1px solid {P}", "borderRadius": "8px",
+    "background": P_DIM, "border": f"1px solid {P}", "borderRadius": "8px",
     "color": TX, "fontSize": "13px", "fontWeight": "600",
     "padding": "7px 18px", "cursor": "pointer", "marginRight": "6px",
 }
@@ -443,7 +457,7 @@ def _load_planning_data():
                         s[_f] = False
             stories.append(s)
         init_gates = {
-            str(s["id"]): {f: s[f] for f in _GATE_FIELDS}
+            str(s["id"]): {f: s.get(f, False) for f in _GATE_FIELDS}
             for s in stories
         }
         return stories, months, init_gates, ba_names, dev_names, dev_matrix, story_matrix, dev_stories_flat
@@ -569,7 +583,7 @@ def _load_planning_data():
                     s[_f] = _dg.get(_f, False)
 
     init_gates = {
-        str(s["id"]): {f: s[f] for f in _GATE_FIELDS}
+        str(s["id"]): {f: s.get(f, False) for f in _GATE_FIELDS}
         for s in stories
     }
 
@@ -702,7 +716,7 @@ def _size_clr(s):  return {"Big": "#e879f9", "Medium": B, "Small": G, "Very Smal
 def _tag(text, color):
     return html.Span(text, style={
         "fontSize": "10px", "fontWeight": "700", "padding": "2px 7px",
-        "borderRadius": "4px", "background": f"{color}22", "color": color,
+        "borderRadius": "4px", "background": _dim(color), "color": color,
         "marginRight": "4px", "letterSpacing": "0.3px",
     })
 
@@ -781,7 +795,7 @@ def _status_badge(status):
         html.Span(status, style={"fontSize": "11px", "fontWeight": "700",
                                   "letterSpacing": "0.5px", "color": c}),
     ], style={
-        "background": f"{c}15", "border": f"1px solid {c}44",
+        "background": _dim(c), "border": f"1px solid {_brd(c)}",
         "borderRadius": "8px", "padding": "6px 12px",
         "display": "flex", "alignItems": "center",
         "minWidth": "130px", "justifyContent": "center",
@@ -872,8 +886,8 @@ def _matrix_cell(dev_key, month_key, val):
 
 def _alert(text, color=R):
     return html.Div(text, style={
-        "background":   f"{color}18",
-        "border":       f"1px solid {color}44",
+        "background":   _dim(color),
+        "border":       f"1px solid {_brd(color)}",
         "borderRadius": "8px", "padding": "10px 16px",
         "fontSize":     "12px", "color": color,
         "flex": "1", "lineHeight": "1.5",
@@ -1154,7 +1168,7 @@ def _build_dev_matrix(dev_matrix: dict, today_month: int) -> html.Table:
         html.Td("← 1+2 PLANNING WINDOW →", colSpan=3, style={
             "textAlign": "center", "fontSize": "10px", "color": P,
             "fontWeight": "700", "letterSpacing": "0.5px",
-            "padding": "6px", "background": f"{P}0a", "borderBottom": f"1px solid {BD}",
+            "padding": "6px", "background": P_DIM, "borderBottom": f"1px solid {BD}",
             "borderLeft":  f"2px solid {_WIN_BORDER}",
             "borderTop":   f"2px solid {_WIN_BORDER}",
             "borderRight": f"2px solid {_WIN_BORDER}",
@@ -1226,7 +1240,7 @@ def _build_story_matrix(story_matrix: list) -> html.Table:
         html.Td("← 1+2 PLANNING WINDOW →", colSpan=3, style={
             "textAlign": "center", "fontSize": "10px", "color": P,
             "fontWeight": "700", "padding": "6px",
-            "background": f"{P}0a", "borderBottom": f"1px solid {BD}",
+            "background": P_DIM, "borderBottom": f"1px solid {BD}",
             "borderLeft":  f"2px solid {_WIN_BORDER}",
             "borderTop":   f"2px solid {_WIN_BORDER}",
             "borderRight": f"2px solid {_WIN_BORDER}",
@@ -1305,7 +1319,7 @@ def _ba_role_card(role: dict, open_: bool = False) -> html.Div:
             html.Span(role["code"], style={
                 "fontSize": "10px", "fontWeight": "700", "color": A,
                 "fontFamily": "monospace", "marginRight": "14px",
-                "background": f"{A}18", "border": f"1px solid {A}44",
+                "background": A_DIM, "border": f"1px solid {A_BRD}",
                 "borderRadius": "4px", "padding": "2px 8px",
             }),
             html.Div([
@@ -1338,7 +1352,7 @@ def _build_ba_brief() -> html.Div:
     sub_tabs = html.Div([
         html.Button(lbl, id={"type": "ba-brief-tab", "tab": tid}, n_clicks=0,
                     style={
-                        "background":   f"{A}22" if i == 0 else "transparent",
+                        "background":   A_DIM if i == 0 else "transparent",
                         "border":       "none",
                         "borderBottom": f"2px solid {A}" if i == 0 else "2px solid transparent",
                         "color":        TX if i == 0 else MT,
@@ -1380,7 +1394,7 @@ def _build_ba_brief() -> html.Div:
             style={"color": MT, "fontSize": "13px", "lineHeight": "1.6", "margin": "0"},
         ),
     ], style={
-        "background": f"{G}0d", "border": f"1px solid {G}44",
+        "background": G_DIM, "border": f"1px solid {G_BRD}",
         "borderRadius": "10px", "padding": "16px 20px", "marginTop": "8px",
     })
 
@@ -1572,11 +1586,11 @@ _UNEST_CARD_COLORS = {
 
 def _kcard_style(color: str, active: bool) -> dict:
     return {
-        "background":   f"{color}22" if active else CD,
-        "border":       f"1px solid {color}" if active else f"1px solid {color}33",
+        "background":   _dim(color) if active else CD,
+        "border":       f"1px solid {color}" if active else f"1px solid {_brd(color)}",
         "borderRadius": "12px", "padding": "18px 22px", "flex": "1", "minWidth": "160px",
         "cursor": "pointer", "transition": "all .15s",
-        "boxShadow": f"0 0 18px {color}33" if active else "none",
+        "boxShadow": f"0 0 18px {_brd(color)}" if active else "none",
     }
 
 
@@ -1736,7 +1750,7 @@ def _build_unest_tab(items: list[dict]) -> html.Div:
                     ],
                     id={"type": "unest-matrix-cell", "dev": dev, "month": mk, "est_type": "e"},
                     n_clicks=0,
-                    style={"background": f"{G}18", "border": f"1px solid {G}44",
+                    style={"background": G_DIM, "border": f"1px solid {G_BRD}",
                            "borderRadius": "6px", "padding": "5px 8px", "textAlign": "center",
                            "cursor": "pointer", "transition": "opacity .15s", "marginBottom": "3px"},
                     ))
@@ -1750,7 +1764,7 @@ def _build_unest_tab(items: list[dict]) -> html.Div:
                     ],
                     id={"type": "unest-matrix-cell", "dev": dev, "month": mk, "est_type": "u"},
                     n_clicks=0,
-                    style={"background": f"{clr_u}18", "border": f"1px solid {clr_u}44",
+                    style={"background": _dim(clr_u), "border": f"1px solid {_brd(clr_u)}",
                            "borderRadius": "6px", "padding": "5px 8px", "textAlign": "center",
                            "cursor": "pointer", "transition": "opacity .15s"},
                     ))
@@ -1874,7 +1888,7 @@ def _build_unest_tab(items: list[dict]) -> html.Div:
                       "click a card to find them.",
                       style={"fontSize": "12px"}),
         ], style={
-            "background": f"{A}18", "border": f"1px solid {A}44",
+            "background": A_DIM, "border": f"1px solid {A_BRD}",
             "borderRadius": "8px", "padding": "10px 16px",
             "color": A, "marginBottom": "12px",
         })
@@ -2035,13 +2049,13 @@ def _build_full_layout():
     _cs_act = lambda c, p="5px 12px": {
         "padding": p, "borderRadius": "20px", "fontSize": "12px",
         "fontWeight": "600", "cursor": "pointer",
-        "background": f"{c}22", "color": c,
-        "border": f"1px solid {c}", "boxShadow": f"0 0 10px {c}44",
+        "background": _dim(c), "color": c,
+        "border": f"1px solid {c}", "boxShadow": f"0 0 10px {_brd(c)}",
     }
     _cs_idl = lambda p="5px 12px": {
         "padding": p, "borderRadius": "20px", "fontSize": "12px",
         "fontWeight": "500", "cursor": "pointer",
-        "background": "rgba(255,255,255,0.04)", "color": MT,
+        "background": "var(--bg-hover)", "color": MT,
         "border": "1px solid rgba(255,255,255,0.08)", "boxShadow": "none",
     }
 
@@ -2165,7 +2179,7 @@ def _build_full_layout():
             html.Div(_sprint_info, style={
                 "fontSize": "11px", "color": MT, "whiteSpace": "nowrap",
                 "alignSelf": "flex-start", "marginTop": "2px",
-                "background": "rgba(255,255,255,0.04)",
+                "background": "var(--bg-hover)",
                 "border": f"1px solid {BD}",
                 "borderRadius": "8px", "padding": "6px 14px",
             }),
@@ -2177,7 +2191,7 @@ def _build_full_layout():
             *[html.Button(
                 lbl, id={"type": "plan-main-tab-btn", "tab": tid}, n_clicks=0,
                 style={
-                    "background":   f"{P}22" if i == 0 else "transparent",
+                    "background":   P_DIM if i == 0 else "transparent",
                     "border":       f"1px solid {P}" if i == 0 else f"1px solid {BD}",
                     "borderRadius": "8px",
                     "color":        TX if i == 0 else MT,
@@ -2206,7 +2220,7 @@ def _build_full_layout():
                 *[html.Button(
                     lbl, id={"type": "plan-tab", "tab": tid}, n_clicks=0,
                     style={
-                        "background":   f"{P}22" if i == 0 else "transparent",
+                        "background":   P_DIM if i == 0 else "transparent",
                         "border":       f"1px solid {P}" if i == 0 else f"1px solid {BD}",
                         "borderRadius": "8px",
                         "color":        TX if i == 0 else MT,
@@ -2247,7 +2261,6 @@ def _build_full_layout():
                              "background": C3,
                              "paddingTop": "10px", "paddingBottom": "10px",
                              "marginBottom": "4px",
-                             "boxShadow": "0 4px 20px rgba(0,0,0,0.45)",
                          }),
                 dcc.Loading(
                     type="circle", color="#818cf8", style={"minHeight": "60px"},
@@ -2398,7 +2411,7 @@ def _build_full_layout():
                     ], style={"display": "flex", "alignItems": "center", "marginBottom": "10px"}),
                     html.Div([
                         *[html.Button(lbl, id={"type": "ba-type-btn", "v": lbl}, n_clicks=0, style={
-                            "background": f"{P}22" if lbl == "Enhancements" else "rgba(255,255,255,0.04)",
+                            "background": P_DIM if lbl == "Enhancements" else "var(--bg-hover)",
                             "border": f"1px solid {P}" if lbl == "Enhancements" else "1px solid rgba(255,255,255,0.08)",
                             "borderRadius": "20px",
                             "color": P if lbl == "Enhancements" else MT,
@@ -2491,7 +2504,7 @@ def _switch_tab(n_clicks, current, btn_ids):
 
 # ── 1b. Main section tab switching ────────────────────────────────────────────
 _MAIN_ACT = {
-    "background": f"{P}22", "border": f"1px solid {P}", "borderRadius": "8px",
+    "background": P_DIM, "border": f"1px solid {P}", "borderRadius": "8px",
     "color": TX, "fontSize": "13px", "fontWeight": "600",
     "padding": "7px 18px", "cursor": "pointer", "marginRight": "6px",
 }
@@ -2831,10 +2844,10 @@ def _bug_prev(_, page):
     prevent_initial_call=True,
 )
 def _ba_type_filter(n_clicks):
-    _act = {"background": f"{P}22", "border": f"1px solid {P}", "borderRadius": "20px",
+    _act = {"background": P_DIM, "border": f"1px solid {P}", "borderRadius": "20px",
             "color": P, "fontSize": "12px", "fontWeight": "600",
-            "padding": "5px 14px", "cursor": "pointer", "boxShadow": f"0 0 10px {P}44"}
-    _idl = {"background": "rgba(255,255,255,0.04)", "border": "1px solid rgba(255,255,255,0.08)",
+            "padding": "5px 14px", "cursor": "pointer", "boxShadow": f"0 0 10px {P_BRD}"}
+    _idl = {"background": "var(--bg-hover)", "border": f"1px solid {BD}",
             "borderRadius": "20px", "color": MT, "fontSize": "12px", "fontWeight": "500",
             "padding": "5px 14px", "cursor": "pointer", "boxShadow": "none"}
     triggered = ctx.triggered_id
@@ -2945,14 +2958,14 @@ def _chip_style(active, size="md", color=None):
         return {
             "padding": pad, "borderRadius": "20px", "fontSize": "12px",
             "fontWeight": "600", "cursor": "pointer",
-            "background": f"{c}22", "color": c,
-            "border": f"1px solid {c}", "boxShadow": f"0 0 10px {c}44",
+            "background": _dim(c), "color": c,
+            "border": f"1px solid {c}", "boxShadow": f"0 0 10px {_brd(c)}",
         }
     return {
         "padding": pad, "borderRadius": "20px", "fontSize": "12px",
         "fontWeight": "500", "cursor": "pointer",
-        "background": "rgba(255,255,255,0.04)", "color": MT,
-        "border": "1px solid rgba(255,255,255,0.08)", "boxShadow": "none",
+        "background": "var(--bg-hover)", "color": MT,
+        "border": f"1px solid {BD}", "boxShadow": "none",
     }
 
 
@@ -3085,7 +3098,7 @@ def _switch_ba_brief_tab(n_clicks, tab_ids):
     for tid in (tab_ids or []):
         active = tid["tab"] == tab
         btn_styles.append({
-            "background":   f"{A}22" if active else "transparent",
+            "background":   A_DIM if active else "transparent",
             "border":       "none",
             "borderBottom": f"2px solid {A}" if active else "2px solid transparent",
             "color":        TX if active else MT,
@@ -3391,8 +3404,8 @@ def _matrix_panel(cell_clicks, close_click, stories_data):
             "flex": "1", "minWidth": "0",
             "display": "flex", "flexDirection": "column",
             "alignItems": "center", "justifyContent": "center",
-            "padding": "20px 6px", "background": f"{color}12",
-            "borderRadius": "12px", "border": f"1px solid {color}55",
+            "padding": "20px 6px", "background": _dim(color),
+            "borderRadius": "12px", "border": f"1px solid {_brd(color)}",
             "borderBottom": f"3px solid {color}", "margin": "0 4px",
         })
 
@@ -3447,7 +3460,7 @@ def _matrix_panel(cell_clicks, close_click, stories_data):
                 _tag(s["pri"], _pri_clr(s["pri"])),
                 html.Span(s.get("size") or s["type"], style={
                     "fontSize": "10px", "fontWeight": "600", "color": A,
-                    "background": f"{A}18", "border": f"1px solid {A}44",
+                    "background": A_DIM, "border": f"1px solid {A_BRD}",
                     "borderRadius": "4px", "padding": "1px 7px", "marginLeft": "6px",
                 }),
                 html.Span(hrs_lbl, style={
@@ -3873,8 +3886,8 @@ def _ticket_log_render(sid, stories_data):
                            "fontSize": "11px", "fontWeight": "600"},
                 ),
             ], style={
-                "background":   f"{G}08" if is_conf else f"{R}08",
-                "border":       f"1px solid {G}22" if is_conf else f"1px solid {R}22",
+                "background":   G_DIM if is_conf else R_DIM,
+                "border":       f"1px solid {G_BRD}" if is_conf else f"1px solid {R_BRD}",
                 "borderLeft":   f"3px solid {G}" if is_conf else f"3px solid {R}",
                 "borderRadius": "8px", "padding": "10px 14px", "marginBottom": "8px",
             }))
@@ -4031,8 +4044,8 @@ def _build_tracker_body(state: dict, gate_filter: dict | None = None) -> list:
                                      "lineHeight": "1.4"}),
                 ], id={"type": "tracker-step-btn", "step": step["key"]}, n_clicks=0,
                 style={
-                    "background":   f"{clr}12" if checked else "transparent",
-                    "border":       f"1px solid {clr}44" if checked else f"1px solid {BD}",
+                    "background":   _dim(clr) if checked else "transparent",
+                    "border":       f"1px solid {_brd(clr)}" if checked else f"1px solid {BD}",
                     "borderLeft":   f"3px solid {clr}" if checked else f"3px solid transparent",
                     "borderRadius": "6px", "padding": "6px 12px",
                     "cursor": "pointer", "display": "flex", "alignItems": "flex-start",

@@ -14,12 +14,12 @@ from config.settings import ADO_BASE_URL
 
 dash.register_page(__name__, path="/dev-capacity", name="Developer Capacity")
 
-_GOLD   = "#fbbf24"
-_GREEN  = "#34d399"
-_RED    = "#f87171"
-_BLU    = "#818cf8"
-_CARD   = "rgba(255,255,255,0.03)"
-_BORDER = "rgba(255,255,255,0.07)"
+_GOLD   = "var(--gold)"
+_GREEN  = "var(--green)"
+_RED    = "var(--red)"
+_BLU    = "var(--purple)"
+_CARD   = "var(--bg-elevated)"
+_BORDER = "var(--border)"
 
 # ── Month helpers ─────────────────────────────────────────────────────────────
 
