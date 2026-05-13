@@ -92,8 +92,10 @@ topnav = html.Div([
         for item in _NAV
     ], className="topnav-tabs"),
 
-    # ── Right: user avatar + logout ───────────────────────────────────────────
+    # ── Right: theme toggle + user avatar + logout ────────────────────────────
     html.Div([
+        html.Button("☀", id="theme-toggle-btn", className="theme-toggle-btn",
+                    title="Toggle light/dark theme", n_clicks=0),
         html.Div(id="topnav-avatar-display"),
     ], className="topnav-right"),
 
@@ -106,6 +108,7 @@ register_auth_routes(app.server)
 
 app.layout = html.Div([
     dcc.Location(id="url-location"),
+    dcc.Store(id="theme-store", storage_type="local", data="dark"),
     topnav,
     html.Div(
         dash.page_container,
@@ -150,6 +153,27 @@ def _ado_failure_toast(n):
         }))
     return cards
 
+
+app.clientside_callback(
+    """
+    function(theme) {
+        var t = theme || 'dark';
+        document.documentElement.setAttribute('data-theme', t);
+        return t === 'dark' ? '🌙' : '☀️';
+    }
+    """,
+    Output("theme-toggle-btn", "children"),
+    Input("theme-store", "data"),
+)
+
+@app.callback(
+    Output("theme-store", "data", allow_duplicate=True),
+    Input("theme-toggle-btn", "n_clicks"),
+    State("theme-store", "data"),
+    prevent_initial_call=True,
+)
+def _toggle_theme(n, current):
+    return "light" if (current or "dark") == "dark" else "dark"
 
 @app.callback(
     Output("topnav-avatar-display", "children"),
