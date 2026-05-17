@@ -2,10 +2,12 @@
 
 import re
 import dash
+import calendar as _cal_lib
 import pandas as pd
-from datetime import date, datetime
+import plotly.graph_objects as go
+from datetime import date, datetime, timedelta
 
-from dash import dcc, html, Input, Output, State, ALL, callback, ctx, no_update
+from dash import dcc, html, Input, Output, State, ALL, callback, clientside_callback, ctx, no_update
 import dash_bootstrap_components as dbc
 
 from data.loader import load_data
@@ -1918,6 +1920,826 @@ def _build_unest_tab(items: list[dict]) -> html.Div:
 # ═══════════════════════════════════════════════════════════════════════════════
 # LAYOUT  (function — executed fresh on every page visit)
 # ═══════════════════════════════════════════════════════════════════════════════
+# DELIVERY TIMELINE (GANTT) HELPERS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _gantt_window(offset: int = 0):
+    """Return (window_start, window_end, label).
+    Default (offset=0): Apr 2026 → Dec 2026 (full remaining year).
+    offset shifts both ends by N months."""
+    def _shift(d: date, n: int) -> date:
+        m = d.month - 1 + n
+        return date(d.year + m // 12, m % 12 + 1, 1)
+
+    ws = _shift(date(2026, 4, 1),  offset)
+    we = _shift(date(2027, 1, 1),  offset)   # Jan 2027 = end of Dec 2026
+    label = f"{ws.strftime('%b %Y')} – {(we - timedelta(days=1)).strftime('%b %Y')}"
+    return ws, we, label
+
+
+def _parse_release_date(rd_str):
+    """Parse free-text release_date ('2026 July', '2026-07-31', …) → date or None.
+    'YYYY MonthName' strings (year + month only) resolve to the last day of that month."""
+    if not rd_str or rd_str in ("Not Specified", "nan", ""):
+        return None
+    # Check for "YYYY MonthName" pattern FIRST — pd.to_datetime would return the 1st,
+    # but a release target without a day should mean end-of-month.
+    m = re.match(r"^(\d{4})\s+([A-Za-z]+)$", str(rd_str).strip())
+    if m:
+        try:
+            ts = pd.to_datetime("1 " + m.group(2) + " " + m.group(1))
+            last = _cal_lib.monthrange(ts.year, ts.month)[1]
+            return date(ts.year, ts.month, last)
+        except Exception:
+            pass
+    try:
+        return pd.to_datetime(rd_str).date()
+    except Exception:
+        pass
+    return None
+
+
+def _build_gantt_html(
+    df: pd.DataFrame,
+    window_start: date,
+    window_end: date,
+    expanded_emps: set,
+    expanded_funcs: set,
+) -> html.Div:
+    """HTML/CSS Gantt — Function ▸ Enhancement.  No Plotly; uses app CSS variables."""
+    today  = date.today()
+    cur_m  = today.month
+    _NONE  = html.Div("No 2026 enhancements with valid release dates.",
+                      style={"color": MT, "padding": "20px", "fontSize": "12px"})
+
+    # ── Filter M0/M1/M2 enhancements ─────────────────────────────────────────
+    enh = df[
+        (df["work_item_type"] == "Enhancement") &
+        (~df["state"].isin(_CLOSED_STATES)) &
+        df["iteration_path"].str.contains(r"Iteration 2026 \d{2}-", regex=True, na=False)
+    ].copy()
+
+    def _delta(ip):
+        mm = re.search(r"Iteration 2026 (\d{2})-", str(ip))
+        return int(mm.group(1)) - cur_m if mm else None
+
+    enh["_delta"] = enh["iteration_path"].apply(_delta)
+    # Keep all 2026 iterations (M0 through Dec) — not just the nearest 3
+    enh = enh[enh["_delta"].notna()].copy()
+    if enh.empty:
+        return _NONE
+
+    # ── Parse dates ───────────────────────────────────────────────────────────
+    enh["_end"] = enh["release_date"].apply(_parse_release_date)
+    enh = enh[enh["_end"].notna()].copy()
+
+    def _start_dt(row):
+        ad = row.get("activated_date")
+        if ad is not None and pd.notna(ad):
+            return pd.Timestamp(ad).date()
+        mm = re.search(r"Iteration 2026 (\d{2})-", str(row["iteration_path"]))
+        return date(2026, int(mm.group(1)), 1) if mm else today
+
+    enh["_start"] = enh.apply(_start_dt, axis=1)
+    enh = enh[enh.apply(lambda r: r["_start"] < r["_end"], axis=1)].copy()
+    if enh.empty:
+        return _NONE
+
+    # ── Task rollup for completion % ──────────────────────────────────────────
+    task_rollup = (
+        df[df["work_item_type"] == "Task"]
+        .groupby("parent_id")[["completed_work", "remaining_work"]]
+        .sum()
+        .rename(columns={"completed_work": "t_done", "remaining_work": "t_rem"})
+    )
+    enh = enh.join(task_rollup, on="work_item_id", how="left")
+    enh["t_done"] = enh["t_done"].fillna(0)
+    enh["t_rem"]  = enh["t_rem"].fillna(0)
+
+    def _item_pct(row):
+        total = row["t_done"] + row["t_rem"]
+        if total > 0:
+            return int(row["t_done"] / total * 100)
+        t2 = (row.get("completed_work") or 0) + (row.get("remaining_work") or 0)
+        return int((row.get("completed_work") or 0) / t2 * 100) if t2 > 0 else 0
+
+    enh["_pct"] = enh.apply(_item_pct, axis=1)
+
+    if "function" in enh.columns:
+        enh["_func"] = enh["function"].fillna("General").replace(
+            {"Not Specified": "General", "nan": "General", "": "General"}
+        )
+    else:
+        enh["_func"] = "General"
+
+    # Employee column — main_developer (strip email suffix), fall back to assigned_to
+    def _get_emp(row):
+        md = str(row.get("main_developer", "") or "").strip()
+        md = md.split(" <")[0].strip()          # drop "<email>" suffix if present
+        if md and md not in ("", "nan", "None"):
+            return md
+        at = str(row.get("assigned_to", "Unassigned") or "").strip()
+        return at if at and at not in ("", "Unassigned") else "Unassigned"
+
+    enh["_emp"] = enh.apply(_get_emp, axis=1)
+
+    # Sort employees then functions by earliest release date
+    _emp_min_end  = enh.groupby("_emp")["_end"].min()
+    _sorted_emps  = _emp_min_end.sort_values().index.tolist()
+
+    # (func sort is computed per-employee inside the loop)
+    enh = enh.sort_values(["_emp", "_end", "_start"])
+
+    # ── Timeline helpers ───────────────────────────────────────────────────────
+    total_days = max((window_end - window_start).days, 1)
+
+    def _pp(d: date) -> float:
+        return max(0.0, min(100.0, (d - window_start).days / total_days * 100))
+
+    # Month list + proportional widths
+    _months: list = []
+    _m = date(window_start.year, window_start.month, 1)
+    while _m < window_end:
+        _months.append(_m)
+        _nm = _m.month % 12 + 1
+        _ny = _m.year + (1 if _m.month == 12 else 0)
+        _m  = date(_ny, _nm, 1)
+
+    _mon_ends = [
+        _months[i + 1] if i + 1 < len(_months) else window_end
+        for i in range(len(_months))
+    ]
+    _mon_widths = [
+        (min(me, window_end) - max(ms, window_start)).days / total_days * 100
+        for ms, me in zip(_months, _mon_ends)
+    ]
+
+    # ── Quarter header groups ─────────────────────────────────────────────────
+    _Q_MAP = {1:"Q1",2:"Q1",3:"Q1",4:"Q2",5:"Q2",6:"Q2",
+              7:"Q3",8:"Q3",9:"Q3",10:"Q4",11:"Q4",12:"Q4"}
+    _qtr_groups: list = []
+    _cur_q, _cur_w = None, 0.0
+    for i, m in enumerate(_months):
+        q = f"{_Q_MAP[m.month]} {m.year}"
+        if q != _cur_q:
+            if _cur_q is not None:
+                _qtr_groups.append((_cur_q, _cur_w))
+            _cur_q, _cur_w = q, _mon_widths[i]
+        else:
+            _cur_w += _mon_widths[i]
+    if _cur_q is not None:
+        _qtr_groups.append((_cur_q, _cur_w))
+
+    # ── Release cut dates ─────────────────────────────────────────────────────
+    _RELEASES = {
+        "R1": date(2026, 3, 31),
+        "R2": date(2026, 6, 30),
+        "R3": date(2026, 9, 30),
+        "R4": date(2026, 12, 18),
+    }
+
+    # ── Design tokens ─────────────────────────────────────────────────────────
+    _B1 = "var(--border)"
+    _SF = "var(--bg-elevated)"
+    _RA = "var(--bg-hover)"
+    _T1 = "var(--text-primary)"
+    _T2 = "var(--text-secondary)"
+    _GR = "var(--green)"
+    _AM = "#C17D2A"
+    _BL = "var(--blue)"
+    _RE  = "rgba(211,111,104,0.5)"
+    _ACC = "var(--blue)"                 # employee accent strip colour
+    LEFT_W = 220                         # left pane width px
+    EMP_H, GRP_H, ROW_H = 38, 30, 34   # employee / function / enhancement row heights
+
+    # ── Month dividers helper ─────────────────────────────────────────────────
+    def _divs():
+        return [
+            html.Div(style={
+                "position": "absolute", "top": 0, "bottom": 0,
+                "left": f"{_pp(m)}%", "width": "0.5px",
+                "background": _B1, "pointerEvents": "none",
+            })
+            for m in _months[1:]
+        ]
+
+    # ── Shared helpers ─────────────────────────────────────────────────────────
+    def _badge_row(items, height, bg, border_top="none"):
+        """Build the right-side summary row (summary bar + per-month % badges)."""
+        els: list = [*_divs()]
+        # Faint span bar
+        _s = max(min(it["_start"] for it in items), window_start)
+        _e = min(max(it["_end"]   for it in items), window_end)
+        if _s < _e:
+            els.append(html.Div(style={
+                "position": "absolute",
+                "left": f"{_pp(_s):.2f}%",
+                "width": f"{(_e - _s).days / total_days * 100:.2f}%",
+                "height": "5px", "top": "50%", "transform": "translateY(-50%)",
+                "background": _GR, "opacity": "0.18", "borderRadius": "3px",
+                "pointerEvents": "none",
+            }))
+        for i, mon in enumerate(_months):
+            mon_end  = _mon_ends[i]
+            rel      = [it for it in items if it["_start"] < mon_end and it["_end"] > mon]
+            pct_val  = int(sum(it["_pct"] for it in rel) / len(rel)) if rel else 0
+            bleft    = f"calc({_pp(mon):.1f}% + {_mon_widths[i]/2:.1f}% - 24px)"
+            inner = html.Div([
+                html.Div(style={"width": "6px", "height": "6px", "borderRadius": "50%",
+                                "background": _GR, "flexShrink": "0"}),
+                html.Span(f"{pct_val}%", style={"fontSize": "10px", "color": _T2}),
+            ], style={
+                "display": "inline-flex", "alignItems": "center", "gap": "4px",
+                "background": bg, "border": f"0.5px solid {_B1}",
+                "borderRadius": "20px", "padding": "2px 8px 2px 5px",
+            }) if pct_val > 0 else html.Div("—", style={
+                "background": bg, "border": f"0.5px solid {_B1}",
+                "borderRadius": "20px", "padding": "2px 8px",
+                "fontSize": "10px", "color": _T2, "opacity": "0.25",
+            })
+            els.append(html.Div(inner, style={
+                "position": "absolute", "top": "50%",
+                "transform": "translateY(-50%)", "left": bleft,
+            }))
+        return html.Div(els, style={
+            "position": "relative", "height": f"{height}px",
+            "borderBottom": f"0.5px solid {_B1}",
+            "borderTop": border_top,
+            "background": bg,
+        })
+
+    def _enh_rows(items):
+        """Build left+right enhancement item rows for one function group."""
+        li, ri = [], []
+        for it in items:
+            s_cl    = max(it["_start"], window_start)
+            e_cl    = min(it["_end"],   window_end)
+            has_bar = s_cl < e_cl
+            wid     = it.get("work_item_id", "")
+            li.append(html.Div([
+                # Deep indent connector (matches function tree-line position)
+                html.Div(style={
+                    "width": "1px", "alignSelf": "stretch", "flexShrink": "0",
+                    "background": _B1, "marginLeft": "14px", "marginRight": "12px",
+                }),
+                html.Div(style={
+                    "width": "3px", "height": "3px", "borderRadius": "50%",
+                    "background": _T2, "flexShrink": "0", "marginRight": "6px",
+                }),
+                html.Span(f"#{wid}", style={
+                    "fontSize": "10px", "color": _T2,
+                    "flexShrink": "0", "marginRight": "5px",
+                }),
+                html.A(
+                    str(it.get("title", ""))[:50],
+                    href=f"{ADO_BASE_URL}{wid}", target="_blank",
+                    style={
+                        "fontSize": "11px", "color": _T1,
+                        "whiteSpace": "nowrap", "overflow": "hidden",
+                        "textOverflow": "ellipsis", "textDecoration": "none",
+                        "flex": "1", "minWidth": "0",
+                    },
+                ),
+            ], style={
+                "display": "flex", "alignItems": "center",
+                "height": f"{ROW_H}px", "padding": "0 8px 0 0",
+                "borderRight": f"0.5px solid {_B1}",
+                "borderBottom": f"0.5px solid {_B1}",
+            }))
+            row_ch: list = [*_divs()]
+            if has_bar:
+                bl, bw = _pp(s_cl), (e_cl - s_cl).days / total_days * 100
+                pct    = it["_pct"]
+                parts: list = []
+                if pct > 0:
+                    parts.append(html.Div(style={
+                        "width": f"{pct}%", "height": "100%", "background": _GR,
+                        "borderRadius": "3px 0 0 3px" if pct < 100 else "3px",
+                    }))
+                if pct < 100:
+                    parts.append(html.Div(style={
+                        "width": f"{100-pct}%", "height": "100%", "background": _AM,
+                        "borderRadius": "0 3px 3px 0" if pct > 0 else "3px",
+                    }))
+                row_ch.append(html.Div(parts, style={
+                    "position": "absolute",
+                    "left": f"{bl:.2f}%", "width": f"{bw:.2f}%",
+                    "height": "10px", "top": "50%", "transform": "translateY(-50%)",
+                    "display": "flex", "overflow": "hidden", "borderRadius": "3px",
+                }))
+            ms = it.get("_end")
+            if ms and window_start <= ms <= window_end:
+                mp = _pp(ms)
+                row_ch.append(html.Div(style={
+                    "position": "absolute",
+                    "left": f"calc({mp:.2f}% - 4.5px)",
+                    "top": "50%", "marginTop": "-4.5px",
+                    "width": "9px", "height": "9px",
+                    "background": _BL, "transform": "rotate(45deg)",
+                    "borderRadius": "1px", "zIndex": "5",
+                }))
+            ri.append(html.Div(row_ch, style={
+                "position": "relative", "height": f"{ROW_H}px",
+                "borderBottom": f"0.5px solid {_B1}",
+            }))
+        return li, ri
+
+    # ── Build rows  Employee ▸ Function ▸ Enhancement ──────────────────────────
+    left_rows:  list = []
+    right_rows: list = []
+
+    for emp in _sorted_emps:
+        emp_df   = enh[enh["_emp"] == emp]
+        if emp_df.empty:
+            continue
+        emp_items  = emp_df.to_dict("records")
+        is_emp_exp = emp in expanded_emps
+        _se        = re.sub(r"[^a-zA-Z0-9]", "_", emp)
+
+        # ── Employee group row — thick top separator + left accent strip ─────
+        _emp_top_border = "1.5px solid var(--border)" if left_rows else "none"
+        left_rows.append(html.Div([
+            # Coloured accent strip
+            html.Div(style={
+                "width": "3px", "alignSelf": "stretch", "flexShrink": "0",
+                "background": _ACC, "borderRadius": "1px", "marginRight": "8px",
+            }),
+            html.Button(
+                "▼" if is_emp_exp else "▶",
+                id={"type": "gantt-emp", "index": emp},
+                n_clicks=0,
+                style={
+                    "background": "none", "border": "none", "cursor": "pointer",
+                    "color": _ACC, "fontSize": "10px",
+                    "padding": "0 5px 0 0", "lineHeight": "1", "flexShrink": "0",
+                },
+            ),
+            html.Span(emp, style={
+                "fontSize": "12px", "fontWeight": "600", "color": _T1,
+                "whiteSpace": "nowrap", "overflow": "hidden", "textOverflow": "ellipsis",
+            }),
+        ], style={
+            "display": "flex", "alignItems": "center",
+            "height": f"{EMP_H}px", "padding": "0 10px 0 6px",
+            "borderRight": f"0.5px solid {_B1}",
+            "borderBottom": f"0.5px solid {_B1}",
+            "borderTop": _emp_top_border,
+            "background": _SF,
+        }))
+        right_rows.append(_badge_row(emp_items, EMP_H, _SF, border_top=_emp_top_border))
+
+        # ── Employee children container ───────────────────────────────────────
+        emp_left_ch:  list = []
+        emp_right_ch: list = []
+
+        # Sort functions within this employee by earliest end
+        _emp_func_end = emp_df.groupby("_func")["_end"].min()
+        _emp_funcs    = _emp_func_end.sort_values().index.tolist()
+
+        for func in _emp_funcs:
+            func_df   = emp_df[emp_df["_func"] == func]
+            func_items = func_df.to_dict("records")
+            func_key   = f"{emp}||{func}"
+            is_f_exp   = func_key in expanded_funcs
+            _sf        = re.sub(r"[^a-zA-Z0-9]", "_", func_key)
+
+            # Function group row — indented with left tree-line
+            emp_left_ch.append(html.Div([
+                # Tree-line indent (vertical connector)
+                html.Div(style={
+                    "width": "1px", "alignSelf": "stretch", "flexShrink": "0",
+                    "background": _B1, "marginLeft": "14px", "marginRight": "8px",
+                }),
+                html.Button(
+                    "▼" if is_f_exp else "▶",
+                    id={"type": "gantt-grp", "index": func_key},
+                    n_clicks=0,
+                    style={
+                        "background": "none", "border": "none", "cursor": "pointer",
+                        "color": _T2, "fontSize": "9px",
+                        "padding": "0 5px 0 0", "lineHeight": "1", "flexShrink": "0",
+                    },
+                ),
+                html.Span(func, style={
+                    "fontSize": "11px", "fontWeight": "500", "color": _T1,
+                    "whiteSpace": "nowrap", "overflow": "hidden", "textOverflow": "ellipsis",
+                }),
+            ], style={
+                "display": "flex", "alignItems": "center",
+                "height": f"{GRP_H}px", "padding": "0 8px 0 0",
+                "borderRight": f"0.5px solid {_B1}",
+                "borderBottom": f"0.5px solid {_B1}",
+                "background": _RA,
+            }))
+            emp_right_ch.append(_badge_row(func_items, GRP_H, _RA))
+
+            # Enhancement rows (wrapped in collapsible container)
+            fl, fr = _enh_rows(func_items)
+            emp_left_ch.append(html.Div(fl, id=f"gantt-li-{_sf}",
+                                        style={"display": "block" if is_f_exp else "none"}))
+            emp_right_ch.append(html.Div(fr, id=f"gantt-ri-{_sf}",
+                                         style={"display": "block" if is_f_exp else "none"}))
+
+        # Wrap all functions+enhancements in the employee container
+        left_rows.append(html.Div(emp_left_ch,  id=f"gantt-eli-{_se}",
+                                  style={"display": "block" if is_emp_exp else "none"}))
+        right_rows.append(html.Div(emp_right_ch, id=f"gantt-eri-{_se}",
+                                   style={"display": "block" if is_emp_exp else "none"}))
+
+    # ── Today line ─────────────────────────────────────────────────────────────
+    overlay_els: list = []
+    if window_start <= today < window_end:
+        tp = _pp(today)
+        overlay_els += [
+            html.Div(style={
+                "position": "absolute", "left": f"{tp:.2f}%", "top": 0, "bottom": 0,
+                "width": "1.5px", "background": "rgba(117,168,177,0.5)",
+                "zIndex": "10", "pointerEvents": "none",
+            }),
+            html.Div("Today", style={
+                "position": "absolute", "left": f"{tp:.2f}%", "top": "4px",
+                "transform": "translateX(-50%)", "whiteSpace": "nowrap",
+                "fontSize": "8px", "color": "var(--blue)",
+                "letterSpacing": "0.03em", "textTransform": "uppercase",
+                "pointerEvents": "none", "zIndex": "11",
+            }),
+        ]
+
+    # ── Release cut lines (body) ───────────────────────────────────────────────
+    _rel_hdr_labels: list = []
+    for lbl, rd in _RELEASES.items():
+        if window_start <= rd <= window_end:
+            rp = _pp(rd)
+            overlay_els.append(html.Div(style={
+                "position": "absolute", "left": f"{rp:.2f}%", "top": 0, "bottom": 0,
+                "width": "1.5px", "background": _RE,
+                "zIndex": "8", "pointerEvents": "none",
+            }))
+            _rel_hdr_labels.append(html.Div(lbl, style={
+                "position": "absolute", "left": f"{rp:.2f}%",
+                "top": "50%", "transform": "translate(-50%, -50%)",
+                "fontSize": "8px", "fontWeight": "600",
+                "color": "rgba(211,111,104,0.9)",
+                "background": _RA, "padding": "1px 4px",
+                "borderRadius": "3px", "pointerEvents": "none", "zIndex": "5",
+            }))
+
+    # ── Quarter header row ─────────────────────────────────────────────────────
+    qtr_cols = [
+        html.Div(lbl, style={
+            "width": f"{w:.2f}%", "flexShrink": "0",
+            "display": "flex", "alignItems": "center",
+            "padding": "0 10px", "height": "22px",
+            "borderRight": f"0.5px solid {_B1}" if i < len(_qtr_groups) - 1 else "none",
+            "fontSize": "9px", "color": "var(--blue)",
+            "letterSpacing": "0.06em", "textTransform": "uppercase", "fontWeight": "500",
+        })
+        for i, (lbl, w) in enumerate(_qtr_groups)
+    ]
+
+    # ── Month header row (with release labels overlaid) ───────────────────────
+    hdr_cols = [
+        html.Div(m.strftime("%b %Y"), style={
+            "width": f"{_mon_widths[i]:.2f}%", "flexShrink": "0",
+            "display": "flex", "alignItems": "center",
+            "padding": "0 10px", "height": "32px",
+            "borderRight": "none" if i == len(_months) - 1 else f"0.5px solid {_B1}",
+            "fontSize": "10px",
+            "color": _T1 if m.year == today.year and m.month == today.month else _T2,
+            "fontWeight": "500" if m.year == today.year and m.month == today.month else "400",
+            "letterSpacing": "0.03em",
+        })
+        for i, m in enumerate(_months)
+    ]
+
+    # ── Legend ─────────────────────────────────────────────────────────────────
+    def _swatch(s, label):
+        return html.Div([html.Div(style=s),
+                         html.Span(label, style={"fontSize": "10px", "color": _T2})],
+                        style={"display": "flex", "alignItems": "center", "gap": "5px"})
+
+    _sep = html.Div(style={"width": "0.5px", "height": "12px",
+                            "background": _B1, "margin": "0 4px"})
+
+    legend = html.Div([
+        _swatch({"width": "10px", "height": "6px", "borderRadius": "2px",
+                 "background": _GR, "flexShrink": "0"}, "Completed"),
+        _swatch({"width": "10px", "height": "6px", "borderRadius": "2px",
+                 "background": _AM, "flexShrink": "0"}, "Remaining"),
+        _swatch({"width": "8px", "height": "8px", "borderRadius": "1px",
+                 "background": _BL, "transform": "rotate(45deg)",
+                 "flexShrink": "0"}, "Target date"),
+        _sep,
+        _swatch({"width": "2px", "height": "12px", "borderRadius": "1px",
+                 "background": _RE, "flexShrink": "0"}, "Release cut"),
+        _swatch({"width": "2px", "height": "12px", "borderRadius": "1px",
+                 "background": "rgba(117,168,177,0.5)", "flexShrink": "0"}, "Today"),
+    ], style={
+        "display": "flex", "alignItems": "center", "gap": "14px",
+        "padding": "8px 14px",
+        "borderTop": f"0.5px solid {_B1}", "background": _SF,
+    })
+
+    # ── Assemble ───────────────────────────────────────────────────────────────
+    return html.Div([
+        html.Div([
+            # Left pane — fixed width
+            html.Div([
+                # Quarter header placeholder
+                html.Div(style={
+                    "height": "22px", "background": _RA,
+                    "borderBottom": f"0.5px solid {_B1}",
+                    "borderRight":  f"0.5px solid {_B1}",
+                }),
+                # Month header label
+                html.Div("WORK ITEM", style={
+                    "height": "32px", "display": "flex", "alignItems": "center",
+                    "padding": "0 12px", "background": _RA,
+                    "borderBottom": f"0.5px solid {_B1}",
+                    "borderRight":  f"0.5px solid {_B1}",
+                    "fontSize": "9px", "color": _T2,
+                    "letterSpacing": "0.05em", "textTransform": "uppercase",
+                }),
+                *left_rows,
+            ], style={"width": f"{LEFT_W}px", "flexShrink": "0",
+                      "borderRight": f"0.5px solid {_B1}"}),
+            # Right pane — flex 1
+            html.Div([
+                # Quarter row
+                html.Div(qtr_cols, style={
+                    "display": "flex", "height": "22px",
+                    "background": _RA, "borderBottom": f"0.5px solid {_B1}",
+                }),
+                # Month row (position:relative so release labels can overlay)
+                html.Div([*hdr_cols, *_rel_hdr_labels], style={
+                    "display": "flex", "height": "32px", "position": "relative",
+                    "background": _RA, "borderBottom": f"0.5px solid {_B1}",
+                }),
+                # Body rows + today line + release cut lines
+                html.Div([*right_rows, *overlay_els], style={"position": "relative"}),
+            ], style={"flex": "1", "overflow": "hidden"}),
+        ], style={"display": "flex"}),
+        legend,
+    ], style={
+        "background": "var(--bg-base)",
+        "border": f"0.5px solid {_B1}",
+        "borderRadius": "10px",
+        "overflow": "hidden",
+    })
+
+
+def _build_gantt_fig(
+    df: pd.DataFrame,
+    window_start: date,
+    window_end: date,
+    expanded_funcs=None,
+):
+    """Build collapsible delivery timeline: Function ▸ Enhancement.
+    expanded_funcs = set of EXPANDED function names; empty = all collapsed (default)."""
+    if expanded_funcs is None: expanded_funcs = set()
+
+    today = date.today()
+    cur_m = today.month
+
+    # ── Filter M0/M1/M2 enhancements ────────────────────────────────────────
+    enh = df[
+        (df["work_item_type"] == "Enhancement") &
+        (~df["state"].isin(_CLOSED_STATES)) &
+        df["iteration_path"].str.contains(r"Iteration 2026 \d{2}-", regex=True, na=False)
+    ].copy()
+
+    def _delta(ip):
+        mm = re.search(r"Iteration 2026 (\d{2})-", str(ip))
+        return int(mm.group(1)) - cur_m if mm else None
+
+    enh["_delta"] = enh["iteration_path"].apply(_delta)
+    enh = enh[enh["_delta"].isin([0, 1, 2])].copy()
+
+    if enh.empty:
+        fig = go.Figure()
+        fig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            height=160,
+            xaxis=dict(type="date", side="top",
+                       range=[window_start.isoformat(), window_end.isoformat()]),
+            annotations=[dict(text="No M0/M1/M2 enhancements found", showarrow=False,
+                              xref="paper", yref="paper", x=0.5, y=0.5,
+                              font=dict(color="#8892a4", size=13))],
+        )
+        return fig
+
+    # ── Parse dates ──────────────────────────────────────────────────────────
+    enh["_end"] = enh["release_date"].apply(_parse_release_date)
+    enh = enh[enh["_end"].notna()].copy()
+
+    def _start(row):
+        ad = row.get("activated_date")
+        if ad is not None and pd.notna(ad):
+            return pd.Timestamp(ad).date()
+        mm = re.search(r"Iteration 2026 (\d{2})-", str(row["iteration_path"]))
+        return date(2026, int(mm.group(1)), 1) if mm else today
+
+    enh["_start"] = enh.apply(_start, axis=1)
+    enh = enh[enh.apply(lambda r: r["_start"] < r["_end"], axis=1)].copy()
+
+    if enh.empty:
+        return go.Figure()
+
+    # ── Task rollup for completion % ─────────────────────────────────────────
+    task_rollup = (
+        df[df["work_item_type"] == "Task"]
+        .groupby("parent_id")[["completed_work", "remaining_work"]]
+        .sum()
+        .rename(columns={"completed_work": "t_done", "remaining_work": "t_rem"})
+    )
+    enh = enh.join(task_rollup, on="work_item_id", how="left")
+    enh["t_done"] = enh["t_done"].fillna(0)
+    enh["t_rem"]  = enh["t_rem"].fillna(0)
+
+    def _pct(row):
+        total = row["t_done"] + row["t_rem"]
+        if total > 0:
+            return row["t_done"] / total
+        total2 = (row.get("completed_work") or 0) + (row.get("remaining_work") or 0)
+        return (row.get("completed_work") or 0) / total2 if total2 > 0 else 0
+
+    enh["_pct"] = enh.apply(_pct, axis=1)
+
+    # ── Person + function columns ─────────────────────────────────────────────
+    def _person(row):
+        p = str(row.get("main_developer") or "")
+        if not p or p in ("Unassigned", "nan", ""):
+            p = str(row.get("assigned_to") or "Unassigned")
+        return p.split(" <")[0].strip()
+
+    enh["_person"] = enh.apply(_person, axis=1)
+    if "function" in enh.columns:
+        enh["_func"] = enh["function"].fillna("General").replace(
+            {"Not Specified": "General", "nan": "General", "": "General"}
+        )
+    else:
+        enh["_func"] = "General"
+
+    enh = enh.sort_values(["_func", "_start"])
+
+    # ── Build visible row list: Function ▸ Enhancement ───────────────────────
+    # Each entry: (label, row_type, row_data_or_None, func_key)
+    y_rows   = []
+    cur_fkey = None
+
+    for _, row in enh.iterrows():
+        func = row["_func"]
+
+        if func != cur_fkey:
+            cur_fkey = func
+            y_rows.append((f"  {func}", "func", None, func))
+
+        if func not in expanded_funcs:
+            continue
+
+        title_short = str(row.get("title", ""))[:55]
+        y_rows.append((f"      • {title_short}", "enh", row, func))
+
+    y_rows_rev = y_rows[::-1]   # Plotly index-0 = bottom; reverse → top-to-bottom
+    y_labels   = [r[0] for r in y_rows_rev]
+    n_rows     = len(y_labels)
+
+    # ── Bar & marker data ────────────────────────────────────────────────────
+    MS = 86_400_000
+
+    green_y,  green_base,  green_x  = [], [], []
+    orange_y, orange_base, orange_x = [], [], []
+    dia_x,    dia_y                  = [], []
+    # Toggle markers (scatter inside chart — always clickable unlike bars)
+    tog_x, tog_y, tog_sym, tog_cd   = [], [], [], []
+    tog_date = (window_start + timedelta(days=1)).isoformat()
+
+    for entry in y_rows_rev:
+        label, row_type, row, fkey = entry
+
+        if row_type == "func":
+            tog_x.append(tog_date);  tog_y.append(label)
+            tog_sym.append("triangle-down" if fkey in expanded_funcs else "triangle-right")
+            tog_cd.append(["func", fkey])
+            continue
+
+        s, e, pct = row["_start"], row["_end"], row["_pct"]
+        dur = (e - s).days
+        if dur <= 0:
+            continue
+        split = s + timedelta(days=max(0, min(dur, int(dur * pct))))
+
+        ds = max(s, window_start)
+        de = min(e, window_end)
+        if ds >= de:
+            continue
+
+        g_end = min(split, de)
+        if g_end > ds:
+            green_y.append(label);  green_base.append(ds.isoformat())
+            green_x.append((g_end - ds).days * MS)
+
+        o_start = max(split, ds)
+        if de > o_start:
+            orange_y.append(label);  orange_base.append(o_start.isoformat())
+            orange_x.append((de - o_start).days * MS)
+
+        if window_start <= e <= window_end:
+            dia_x.append(e.isoformat());  dia_y.append(label)
+
+    # ── Shapes ───────────────────────────────────────────────────────────────
+    shapes = []
+    for i, entry in enumerate(y_rows_rev):
+        if entry[1] == "func":
+            shapes.append(dict(
+                type="rect", xref="paper", yref="y",
+                x0=0, x1=1, y0=i - 0.48, y1=i + 0.48,
+                fillcolor="rgba(129,140,248,0.08)",
+                line=dict(width=0), layer="below",
+            ))
+    shapes.append(dict(
+        type="line", xref="x", yref="paper",
+        x0=today.isoformat(), x1=today.isoformat(), y0=0, y1=1,
+        line=dict(color="rgba(255,255,255,0.25)", width=1.5, dash="dot"),
+    ))
+
+    # ── Traces ───────────────────────────────────────────────────────────────
+    traces = []
+    if green_x:
+        traces.append(go.Bar(
+            y=green_y, x=green_x, base=green_base, orientation="h",
+            marker=dict(color="#22c55e", opacity=0.85, line=dict(width=0)),
+            name="Completed",
+            hovertemplate="<b>%{y}</b><br>Completed<extra></extra>",
+        ))
+    if orange_x:
+        traces.append(go.Bar(
+            y=orange_y, x=orange_x, base=orange_base, orientation="h",
+            marker=dict(color="#f97316", opacity=0.82, line=dict(width=0)),
+            name="Remaining",
+            hovertemplate="<b>%{y}</b><br>Remaining<extra></extra>",
+        ))
+    if dia_x:
+        traces.append(go.Scatter(
+            x=dia_x, y=dia_y, mode="markers",
+            marker=dict(symbol="diamond", size=11, color="#60a5fa",
+                        line=dict(color="#93c5fd", width=1.5)),
+            name="Target date",
+            hovertemplate="<b>%{y}</b><br>Target: %{x|%b %d, %Y}<extra></extra>",
+        ))
+    if tog_x:
+        # Visible ▶/▼ triangle markers inside chart — scatter is always reliably clickable.
+        traces.append(go.Scatter(
+            x=tog_x, y=tog_y,
+            mode="markers",
+            marker=dict(symbol=tog_sym, size=9, color="#818cf8",
+                        line=dict(color="#a5b4fc", width=1)),
+            customdata=tog_cd,
+            hovertemplate="Click to expand / collapse<extra></extra>",
+            showlegend=False, name="",
+        ))
+
+    fig = go.Figure(traces)
+    fig.update_layout(
+        barmode="overlay",
+        height=max(260, n_rows * 30 + 80),
+        margin=dict(l=280, r=24, t=40, b=16),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Inter, system-ui, sans-serif", color="#8892a4", size=11),
+        xaxis=dict(
+            type="date",
+            side="top",
+            range=[window_start.isoformat(), window_end.isoformat()],
+            gridcolor="rgba(255,255,255,0.06)",
+            tickformat="%b %Y", dtick="M1",
+            tickfont=dict(color="#94a3b8", size=12),
+            linecolor="rgba(0,0,0,0)", zerolinecolor="rgba(255,255,255,0.07)",
+        ),
+        yaxis=dict(
+            autorange=False, range=[-0.5, n_rows - 0.5],
+            tickvals=list(range(n_rows)), ticktext=y_labels,
+            tickfont=dict(size=11, color="#8892a4"),
+            gridcolor="rgba(0,0,0,0)", linecolor="rgba(0,0,0,0)",
+        ),
+        shapes=shapes,
+        legend=dict(
+            orientation="h", x=0, y=-0.04,
+            bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#8892a4", size=11),
+            itemsizing="constant",
+        ),
+        hoverlabel=dict(
+            bgcolor="#151524", bordercolor="rgba(255,255,255,0.10)",
+            font=dict(color="#e2e8f0"),
+        ),
+        clickmode="event",
+        dragmode=False,
+    )
+    return fig
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def layout(**_):
     """Returns a shell immediately — content loaded via _init_plan callback."""
@@ -2136,6 +2958,8 @@ def _build_full_layout():
         dcc.Store(id="story-page",          data=1),
         dcc.Store(id="bug-page",            data=1),
         dcc.Store(id="ba-type-f",           data="Enhancements"),
+        dcc.Store(id="gantt-window-offset", data=0),
+        dcc.Store(id="gantt-expanded",      data={"e": [], "f": []}),
     ])
 
     # ── Sprint info strip (dynamic) ──────────────────────────────────────────
@@ -2185,6 +3009,46 @@ def _build_full_layout():
             }),
         ], style={"display": "flex", "justifyContent": "space-between",
                   "alignItems": "flex-start", "marginBottom": "20px"}),
+
+        # ── Delivery Timeline (Gantt) ──────────────────────────────────────────
+        html.Div([
+            html.Div([
+                html.Div([
+                    html.Span("DELIVERY TIMELINE", style={
+                        "fontSize": "9px", "fontWeight": "800", "color": P,
+                        "letterSpacing": "2px", "textTransform": "uppercase",
+                    }),
+                    html.Span(" · Developer › Function › Enhancement  —  click ▼/▶ to expand", style={
+                        "fontSize": "11px", "color": MT, "marginLeft": "8px",
+                    }),
+                ], style={"display": "flex", "alignItems": "center"}),
+                html.Div([
+                    html.Button("Today", id="gantt-today-btn", n_clicks=0, style={
+                        **_TAB_BTN_IDL, "padding": "5px 12px", "fontSize": "12px",
+                        "marginRight": "0",
+                    }),
+                    html.Button("◀", id="gantt-prev-btn", n_clicks=0, style={
+                        **_TAB_BTN_IDL, "padding": "5px 10px", "fontSize": "12px",
+                        "marginRight": "0",
+                    }),
+                    html.Div(id="gantt-window-label", children=_gantt_window(0)[2], style={
+                        "fontSize": "12px", "color": MT,
+                        "padding": "5px 14px", "minWidth": "180px", "textAlign": "center",
+                    }),
+                    html.Button("▶", id="gantt-next-btn", n_clicks=0, style={
+                        **_TAB_BTN_IDL, "padding": "5px 10px", "fontSize": "12px",
+                        "marginRight": "0",
+                    }),
+                ], style={"display": "flex", "alignItems": "center", "gap": "4px"}),
+            ], style={"display": "flex", "justifyContent": "space-between",
+                      "alignItems": "center", "marginBottom": "12px",
+                      "padding": "0 16px"}),
+            html.Div(id="gantt-chart", style={"overflowY": "auto", "maxHeight": "640px"}),
+        ], style={
+            "background": CD, "border": f"1px solid {BD}",
+            "borderRadius": "12px", "padding": "14px 0 0",
+            "marginBottom": "20px", "overflow": "hidden",
+        }),
 
         # ── Main tab navigation ────────────────────────────────────────────────
         html.Div([
@@ -4289,3 +5153,113 @@ def _reset_tracker_sid_on_close(is_open):
     if not is_open:
         return None
     return no_update
+
+
+# ── 16a. Gantt window navigation ─────────────────────────────────────────────
+@callback(
+    Output("gantt-window-offset", "data"),
+    Output("gantt-window-label",  "children"),
+    Input("gantt-prev-btn",   "n_clicks"),
+    Input("gantt-next-btn",   "n_clicks"),
+    Input("gantt-today-btn",  "n_clicks"),
+    State("gantt-window-offset", "data"),
+    prevent_initial_call=True,
+)
+def _gantt_nav(prev_n, next_n, today_n, offset):
+    offset = offset or 0
+    tid    = ctx.triggered_id
+    if   tid == "gantt-today-btn": offset  = 0
+    elif tid == "gantt-prev-btn":  offset -= 1
+    elif tid == "gantt-next-btn":  offset += 1
+    _, _, label = _gantt_window(offset)
+    return offset, label
+
+
+# ── 16b-i. Employee toggle — clientside ───────────────────────────────────────
+clientside_callback(
+    """
+    function(nClicks, expanded) {
+        var ctx = window.dash_clientside.callback_context;
+        if (!ctx || !ctx.triggered || !ctx.triggered.length)
+            return window.dash_clientside.no_update;
+
+        var id  = JSON.parse(ctx.triggered[0].prop_id.replace('.n_clicks', ''));
+        var emp = id.index;
+
+        var expandedEmps = (expanded && expanded.e) ? expanded.e.slice() : [];
+        var isExp = expandedEmps.indexOf(emp) !== -1;
+        if (isExp) expandedEmps = expandedEmps.filter(function(e){ return e !== emp; });
+        else        expandedEmps.push(emp);
+
+        var willExpand = !isExp;
+        var safeId = emp.replace(/[^a-zA-Z0-9]/g, '_');
+        var lEl = document.getElementById('gantt-eli-' + safeId);
+        var rEl = document.getElementById('gantt-eri-' + safeId);
+        var disp = willExpand ? 'block' : 'none';
+        if (lEl) lEl.style.display = disp;
+        if (rEl) rEl.style.display = disp;
+
+        var btnId = '{"index":"' + emp + '","type":"gantt-emp"}';
+        var btnEl = document.getElementById(btnId);
+        if (btnEl) btnEl.textContent = willExpand ? '\\u25BC' : '\\u25BA';
+
+        return {e: expandedEmps, f: (expanded && expanded.f) ? expanded.f : []};
+    }
+    """,
+    Output("gantt-expanded", "data"),
+    Input({"type": "gantt-emp", "index": ALL}, "n_clicks"),
+    State("gantt-expanded", "data"),
+    prevent_initial_call=True,
+)
+
+# ── 16b-ii. Function toggle — clientside ──────────────────────────────────────
+clientside_callback(
+    """
+    function(nClicks, expanded) {
+        var ctx = window.dash_clientside.callback_context;
+        if (!ctx || !ctx.triggered || !ctx.triggered.length)
+            return window.dash_clientside.no_update;
+
+        var id  = JSON.parse(ctx.triggered[0].prop_id.replace('.n_clicks', ''));
+        var key = id.index;   // "emp||func"
+
+        var expandedFuncs = (expanded && expanded.f) ? expanded.f.slice() : [];
+        var isExp = expandedFuncs.indexOf(key) !== -1;
+        if (isExp) expandedFuncs = expandedFuncs.filter(function(f){ return f !== key; });
+        else        expandedFuncs.push(key);
+
+        var willExpand = !isExp;
+        var safeId = key.replace(/[^a-zA-Z0-9]/g, '_');
+        var lEl = document.getElementById('gantt-li-' + safeId);
+        var rEl = document.getElementById('gantt-ri-' + safeId);
+        var disp = willExpand ? 'block' : 'none';
+        if (lEl) lEl.style.display = disp;
+        if (rEl) rEl.style.display = disp;
+
+        var btnId = '{"index":"' + key + '","type":"gantt-grp"}';
+        var btnEl = document.getElementById(btnId);
+        if (btnEl) btnEl.textContent = willExpand ? '\\u25BC' : '\\u25BA';
+
+        return {e: (expanded && expanded.e) ? expanded.e : [], f: expandedFuncs};
+    }
+    """,
+    Output("gantt-expanded", "data", allow_duplicate=True),
+    Input({"type": "gantt-grp", "index": ALL}, "n_clicks"),
+    State("gantt-expanded", "data"),
+    prevent_initial_call=True,
+)
+
+
+# ── 16c. Gantt chart render (fires on nav only — toggle is clientside) ─────────
+@callback(
+    Output("gantt-chart", "children"),
+    Input("gantt-window-offset", "data"),
+    State("gantt-expanded",      "data"),
+)
+def _gantt_render(offset, expanded):
+    ws, we, _ = _gantt_window(offset or 0)
+    return _build_gantt_html(
+        load_data(), ws, we,
+        set(expanded.get("e", [])),
+        set(expanded.get("f", [])),
+    )

@@ -63,6 +63,7 @@ _FIELDS = [
     "Custom.Userstoryowner",
     "System.Parent",
     "Microsoft.VSTS.Common.Activity",
+    "Microsoft.VSTS.Common.ActivatedDate",
 ]
 
 # ── Engine (singleton) ────────────────────────────────────────────────────────
@@ -191,6 +192,7 @@ def _transform(work_items) -> pd.DataFrame:
             "story_owner":       f.get("Custom.Userstoryowner", ""),
             "parent_id":         f.get("System.Parent"),   # int or None
             "activity":          f.get("Microsoft.VSTS.Common.Activity", ""),
+            "activated_date":    f.get("Microsoft.VSTS.Common.ActivatedDate"),
         })
 
     if not rows:
@@ -203,7 +205,7 @@ def _transform(work_items) -> pd.DataFrame:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
     # Datetime columns — strip timezone so PostgreSQL (no-tz) doesn't choke
-    for col in ("created_date", "changed_date", "closed_date"):
+    for col in ("created_date", "changed_date", "closed_date", "activated_date"):
         df[col] = (
             pd.to_datetime(df[col], errors="coerce", utc=True)
             .dt.tz_localize(None)
@@ -396,15 +398,19 @@ def run_sync(full: bool = False) -> dict:
         engine     = _get_engine()
         wit_client = _get_wit_client()
 
-        # Ensure activity column exists before any upsert attempt
+        # Ensure activity + activated_date columns exist before any upsert attempt
         try:
             with engine.begin() as conn:
                 conn.execute(text(
                     "ALTER TABLE work_items_main "
                     "ADD COLUMN IF NOT EXISTS activity VARCHAR(100) DEFAULT ''"
                 ))
+                conn.execute(text(
+                    "ALTER TABLE work_items_main "
+                    "ADD COLUMN IF NOT EXISTS activated_date TIMESTAMP"
+                ))
         except Exception as _col_err:
-            log.warning("activity column migration (non-fatal): %s", _col_err)
+            log.warning("column migration (non-fatal): %s", _col_err)
 
         since = (
             datetime(2023, 1, 1, tzinfo=timezone.utc)

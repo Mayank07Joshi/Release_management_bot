@@ -86,7 +86,7 @@ def load_data(force_refresh=False):
                     df[col] = df[col].replace(["None", "nan", ""], "Not Specified")
 
         # 3. Handle Date Conversions
-        date_cols = ['created_date', 'closed_date', 'changed_date']
+        date_cols = ['created_date', 'closed_date', 'changed_date', 'activated_date']
         for col in date_cols:
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col], errors='coerce')
