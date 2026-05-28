@@ -309,7 +309,7 @@ def _render(type_filter, tab, state_filter):
 
     df_issues = df[df["work_item_type"].isin(ISSUE_TYPES)]
     df_issues_scope = df_issues[
-        pd.to_datetime(df_issues["created_date"], errors="coerce") >= pd.Timestamp("2024-01-01")
+        pd.to_datetime(df_issues["created_date"], errors="coerce", utc=True) >= pd.Timestamp("2024-01-01", tz="UTC")
     ]
     df_enh = df[df["work_item_type"].isin(ENH_TYPES)]
 
