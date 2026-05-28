@@ -65,6 +65,7 @@ FIELD_MAP: dict[str, str] = {
 # ── Internal: failure queue (capped, thread-safe via deque) ──────────────────
 
 _failures: deque[dict] = deque(maxlen=50)
+_successes: deque[dict] = deque(maxlen=20)
 _failures_lock = threading.Lock()
 
 # Background thread pool for fire-and-forget writes
@@ -184,10 +185,16 @@ def write_fields_sync(ado_id: int, fields_dict: dict[str, Any]) -> tuple[bool, s
 
 
 def _write_task(ado_id: int, fields_dict: dict[str, Any]) -> None:
-    """Background thread target — runs write and records failures."""
+    """Background thread target — runs write and records failures/successes."""
     ok, msg = write_fields_sync(ado_id, fields_dict)
-    if not ok:
-        with _failures_lock:
+    with _failures_lock:
+        if ok:
+            _successes.append({
+                "ado_id": ado_id,
+                "fields": list(fields_dict.keys()),
+                "time":   time.strftime("%H:%M:%S"),
+            })
+        else:
             _failures.append({
                 "ado_id":  ado_id,
                 "fields":  list(fields_dict.keys()),
@@ -212,14 +219,22 @@ def write_fields(ado_id: int, fields_dict: dict[str, Any]) -> None:
 def get_pending_failures() -> list[dict]:
     """
     Return and clear all queued write failures.
-    Call this from a Dash dcc.Interval callback to surface toast notifications.
-
-    Each failure dict:
-        {"ado_id": int, "fields": [str], "message": str, "time": str}
+    Each failure dict: {"ado_id": int, "fields": [str], "message": str, "time": str}
     """
     with _failures_lock:
         result = list(_failures)
         _failures.clear()
+    return result
+
+
+def get_pending_successes() -> list[dict]:
+    """
+    Return and clear all queued write successes.
+    Each success dict: {"ado_id": int, "fields": [str], "time": str}
+    """
+    with _failures_lock:
+        result = list(_successes)
+        _successes.clear()
     return result
 
 

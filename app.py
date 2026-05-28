@@ -68,9 +68,10 @@ app = Dash(
 
 # ── Top nav structure ──────────────────────────────────────────────────────────
 _NAV = [
-    {"label": "Home",         "href": "/",         "icon": "🏠"},
-    {"label": "Summary",      "href": "/summary",  "icon": "📊"},
-    {"label": "Planning Tool","href": "/planning", "icon": "📅"},
+    {"label": "Home",            "href": "/",                "icon": "🏠"},
+    {"label": "Summary",         "href": "/summary",         "icon": "📊"},
+    {"label": "Planning Tool",   "href": "/planning",        "icon": "📅"},
+    {"label": "Iteration Audit", "href": "/iteration-audit", "icon": "📋"},
 ]
 
 topnav = html.Div([
@@ -92,8 +93,11 @@ topnav = html.Div([
         for item in _NAV
     ], className="topnav-tabs"),
 
-    # ── Right: theme toggle + user avatar + logout ────────────────────────────
+    # ── Right: freshness + theme toggle + user avatar + logout ───────────────
     html.Div([
+        html.Div(id="data-freshness-display", title="Time since last data sync",
+                 style={"fontSize": "11px", "color": "var(--text-secondary, #64748b)",
+                        "whiteSpace": "nowrap"}),
         html.Button("☀", id="theme-toggle-btn", className="theme-toggle-btn",
                     title="Toggle light/dark theme", n_clicks=0),
         html.Div(id="topnav-avatar-display"),
@@ -115,8 +119,9 @@ app.layout = html.Div([
         className="main-content",
         id="main-content",
     ),
-    # ── ADO write-back failure toasts ─────────────────────────────────────────
+    # ── ADO write-back failure/success toasts + data freshness ───────────────
     dcc.Interval(id="ado-failure-poll", interval=5000, n_intervals=0),
+    dcc.Interval(id="data-freshness-poll", interval=30000, n_intervals=0),
     html.Div(id="ado-failure-toast-container", style={
         "position": "fixed", "bottom": "24px", "right": "24px",
         "zIndex": 9999, "display": "flex", "flexDirection": "column", "gap": "10px",
@@ -130,11 +135,29 @@ app.layout = html.Div([
     Input("ado-failure-poll", "n_intervals"),
 )
 def _ado_failure_toast(n):
-    from sync.ado_write import get_pending_failures
+    from sync.ado_write import get_pending_failures, get_pending_successes
     failures = get_pending_failures()
-    if not failures:
+    successes = get_pending_successes()
+    if not failures and not successes:
         return []
     cards = []
+    for s in successes:
+        label = ", ".join(s["fields"][:3]) + ("…" if len(s["fields"]) > 3 else "")
+        cards.append(html.Div([
+            html.Div([
+                html.Span("✓ ADO synced", style={
+                    "fontWeight": "600", "fontSize": "13px", "color": "#34d399",
+                }),
+                html.Span(s["time"], style={"fontSize": "11px", "color": "#64748b", "marginLeft": "8px"}),
+            ], style={"marginBottom": "4px"}),
+            html.Div(f"Work item #{s['ado_id']} — {label}", style={
+                "fontSize": "12px", "color": "#94a3b8",
+            }),
+        ], style={
+            "background": "#0f2a1f", "border": "1px solid rgba(52,211,153,0.3)",
+            "borderRadius": "10px", "padding": "12px 16px",
+            "boxShadow": "0 4px 20px rgba(0,0,0,0.4)",
+        }))
     for f in failures:
         cards.append(html.Div([
             html.Div([
@@ -152,6 +175,27 @@ def _ado_failure_toast(n):
             "boxShadow": "0 4px 20px rgba(0,0,0,0.4)",
         }))
     return cards
+
+
+@app.callback(
+    Output("data-freshness-display", "children"),
+    Input("data-freshness-poll", "n_intervals"),
+    Input("url-location", "pathname"),
+)
+def _data_freshness(n, _path):
+    from data.loader import get_last_load_time
+    import time as _time
+    t = get_last_load_time()
+    if not t:
+        return "data: loading…"
+    age = int(_time.time() - t)
+    if age < 60:
+        label = f"{age}s ago"
+    elif age < 3600:
+        label = f"{age // 60}m ago"
+    else:
+        label = f"{age // 3600}h ago"
+    return f"↻ {label}"
 
 
 app.clientside_callback(
@@ -213,6 +257,12 @@ if __name__ == "__main__":
         init_sprint_history_table()
     except Exception as _e:
         logging.getLogger(__name__).warning("Sprint history table init failed: %s", _e)
+
+    try:
+        from db.aggregations import init_aggregation_tables
+        init_aggregation_tables()
+    except Exception as _e:
+        logging.getLogger(__name__).warning("Aggregation table init failed: %s", _e)
 
     scheduler = BackgroundScheduler(daemon=True)
     scheduler.add_job(run_sync, "interval", minutes=15, id="ado_sync",

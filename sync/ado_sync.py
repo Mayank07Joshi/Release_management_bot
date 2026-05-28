@@ -375,6 +375,195 @@ def _sync_sprint_iteration_history(wit_client, engine) -> None:
     log.info("Sprint history sync complete: %d records upserted for %s", len(records), sprint_path)
 
 
+# ── State history sync ───────────────────────────────────────────────────────
+
+def _sync_state_history(wit_client, engine, item_ids: list) -> int:
+    """
+    For each item_id, fetch ADO update revisions and persist any System.State
+    transitions to item_state_history.  UNIQUE(work_item_id, revision) makes
+    this idempotent — safe to re-run on the same items.
+
+    Throttled to ~90 req/min to stay within ADO limits.
+    Returns number of new rows inserted.
+    """
+    if not item_ids:
+        return 0
+
+    inserted = 0
+    for idx, item_id in enumerate(item_ids):
+        if idx > 0:
+            time.sleep(0.67)
+        try:
+            updates = wit_client.get_updates(item_id) or []
+        except Exception as exc:
+            log.debug("state_history: get_updates(%s) failed: %s", item_id, exc)
+            continue
+
+        prev_state = None
+        rows = []
+        for upd in updates:
+            if not upd.fields:
+                continue
+            state_change = upd.fields.get("System.State")
+            if state_change is None:
+                continue
+            to_state = getattr(state_change, "new_value", None)
+            if not to_state:
+                continue
+
+            revision    = getattr(upd, "rev", None) or 0
+            changed_at  = getattr(upd, "revised_date", None)
+            changed_by  = None
+            if upd.revised_by:
+                changed_by = getattr(upd.revised_by, "display_name", None)
+
+            iter_change = upd.fields.get("System.IterationPath")
+            iter_path   = getattr(iter_change, "new_value", None) if iter_change else None
+
+            rows.append({
+                "work_item_id":   item_id,
+                "revision":       revision,
+                "from_state":     prev_state,
+                "to_state":       to_state,
+                "changed_by":     changed_by,
+                "changed_at":     changed_at,
+                "iteration_path": iter_path,
+            })
+            prev_state = to_state
+
+        if not rows:
+            continue
+
+        sql = text("""
+            INSERT INTO item_state_history
+                (work_item_id, revision, from_state, to_state, changed_by, changed_at, iteration_path)
+            VALUES
+                (:work_item_id, :revision, :from_state, :to_state, :changed_by, :changed_at, :iteration_path)
+            ON CONFLICT (work_item_id, revision) DO NOTHING
+        """)
+        try:
+            with engine.begin() as conn:
+                result = conn.execute(sql, rows)
+                inserted += result.rowcount
+        except Exception as exc:
+            log.warning("state_history: insert failed for item %s: %s", item_id, exc)
+
+        if (idx + 1) % 50 == 0:
+            log.info("  state_history: %d / %d items processed", idx + 1, len(item_ids))
+
+    log.info("state_history sync: %d new rows for %d items", inserted, len(item_ids))
+    return inserted
+
+
+# ── Production bugs sync ──────────────────────────────────────────────────────
+
+_BUG_TYPE_MAP = {
+    "Bug":      "functional",
+    "Bug_UI":   "ui",
+    "Bug_Text": "text",
+    "User Story": "functional",
+}
+
+
+def _sync_production_bugs(engine) -> int:
+    """
+    Upsert Bug/Bug_UI/Bug_Text items from work_items_main into p_bugs.
+
+    Inclusion criteria (any of):
+      - tags contain 'production' or 'hotfix' or 'customer' (case-insensitive)
+      - priority = '1'  (P1 items are always tracked)
+
+    Uses ado_id (= work_item_id) as the stable key for ON CONFLICT.
+    Returns number of rows upserted.
+    """
+    sql_fetch = text("""
+        SELECT
+            work_item_id,
+            title,
+            work_item_type,
+            priority,
+            severity,
+            state,
+            assigned_to,
+            main_developer,
+            area,
+            function,
+            iteration_path,
+            tags
+        FROM work_items_main
+        WHERE work_item_type IN ('Bug', 'Bug_UI', 'Bug_Text')
+          AND (
+              priority = '1'
+              OR LOWER(COALESCE(tags, '')) LIKE '%production%'
+              OR LOWER(COALESCE(tags, '')) LIKE '%hotfix%'
+              OR LOWER(COALESCE(tags, '')) LIKE '%customer%'
+          )
+    """)
+
+    sql_upsert = text("""
+        INSERT INTO p_bugs
+            (ado_id, title, bug_type, priority, severity, state,
+             area, func, found_in_iteration)
+        VALUES
+            (:ado_id, :title, :bug_type, :priority, :severity, :state,
+             :area, :func, :found_in_iteration)
+        ON CONFLICT (ado_id) DO UPDATE SET
+            title              = EXCLUDED.title,
+            state              = EXCLUDED.state,
+            severity           = EXCLUDED.severity,
+            found_in_iteration = EXCLUDED.found_in_iteration
+    """)
+
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(sql_fetch).fetchall()
+    except Exception as exc:
+        log.warning("production_bugs: fetch failed: %s", exc)
+        return 0
+
+    if not rows:
+        log.info("production_bugs: no qualifying bugs found in work_items_main")
+        return 0
+
+    # p_bugs.ado_id needs a UNIQUE constraint — add if missing
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE p_bugs ADD COLUMN IF NOT EXISTS ado_id INTEGER"
+            ))
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_p_bugs_ado_id ON p_bugs (ado_id) WHERE ado_id IS NOT NULL"
+            ))
+    except Exception as exc:
+        log.warning("production_bugs: schema prep (non-fatal): %s", exc)
+
+    records = [
+        {
+            "ado_id":             r.work_item_id,
+            "title":              r.title,
+            "bug_type":           _BUG_TYPE_MAP.get(r.work_item_type, "functional"),
+            "priority":           r.priority,
+            "severity":           r.severity or "",
+            "state":              r.state,
+            "area":               r.area or "",
+            "func":               r.function or "",
+            "found_in_iteration": r.iteration_path or "",
+        }
+        for r in rows
+    ]
+
+    try:
+        with engine.begin() as conn:
+            result = conn.execute(sql_upsert, records)
+            count = result.rowcount
+    except Exception as exc:
+        log.warning("production_bugs: upsert failed: %s", exc)
+        return 0
+
+    log.info("production_bugs: %d rows upserted (P1 + tagged bugs)", count)
+    return count
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 _last_sync_result: dict = {"status": "never", "timestamp": None, "count": 0}
 
@@ -440,6 +629,19 @@ def run_sync(full: bool = False) -> dict:
         except Exception as _sh_err:
             log.warning("Sprint history sync failed (non-fatal): %s", _sh_err)
 
+        try:
+            # Limit state-history fetches to max 150 items per incremental sync
+            # to avoid long runtimes. Full sync processes all changed items.
+            history_ids = ids if full else ids[:150]
+            _sync_state_history(wit_client, engine, history_ids)
+        except Exception as _ish_err:
+            log.warning("State history sync failed (non-fatal): %s", _ish_err)
+
+        try:
+            _sync_production_bugs(engine)
+        except Exception as _pb_err:
+            log.warning("Production bugs sync failed (non-fatal): %s", _pb_err)
+
         _bust_loader_cache()
 
         try:
@@ -460,6 +662,12 @@ def run_sync(full: bool = False) -> dict:
                     log.info("Pruned %d stale task classifications", pruned)
         except Exception as _prune_err:
             log.warning("Classification prune (non-fatal): %s", _prune_err)
+
+        try:
+            from sync.aggregator import run_aggregations
+            run_aggregations()
+        except Exception as _agg_err:
+            log.warning("Aggregator (non-fatal): %s", _agg_err)
 
         elapsed = round(time.time() - t0, 1)
         log.info(f"✅ Sync complete — {count} items upserted in {elapsed}s")

@@ -282,10 +282,29 @@ def _sync_state_filter(value):
     Input("focus-state-filter",   "data"),
 )
 def _render(type_filter, tab, state_filter):
-    df_raw = load_data()
+    # Lightweight query — only the 7 columns needed for summary stats and sprint count
+    try:
+        with engine.connect() as _conn:
+            df_raw = pd.read_sql(text("""
+                SELECT work_item_type, state, priority,
+                       COALESCE(original_estimate, 0) AS original_estimate,
+                       type, iteration_path, created_date
+                FROM work_items_main
+                WHERE created_date >= '2025-01-01'
+                   OR closed_date  >= '2025-01-01'
+                   OR changed_date >= '2025-01-01'
+                   OR (created_date < '2025-01-01'
+                       AND (closed_date IS NULL OR closed_date >= '2025-01-01'))
+            """), _conn)
+    except Exception:
+        df_raw = pd.DataFrame(columns=[
+            "work_item_type", "state", "priority",
+            "original_estimate", "type", "iteration_path", "created_date",
+        ])
+    df_raw["priority"] = pd.to_numeric(df_raw["priority"], errors="coerce").fillna(4).astype(int)
+    df_raw["original_estimate"] = pd.to_numeric(df_raw["original_estimate"], errors="coerce").fillna(0)
 
-    # State filter applies to summary analysis only — sprint tab needs all states
-    # (including Closed) to correctly count added/closed items during the sprint.
+    # State filter applies to summary analysis only
     df = df_raw[df_raw["state"].isin(state_filter)] if state_filter else df_raw
 
     df_issues = df[df["work_item_type"].isin(ISSUE_TYPES)]
@@ -650,53 +669,25 @@ def _render_sprint(df, df_issues_scope, df_enh, type_filter):
             & df["iteration_path"].str.contains(month_str, na=False, case=False)
         ].copy()
 
-    # ── Sprint history ────────────────────────────────────────────────────────
-    history = _load_sprint_history(sprint_path) if sprint_path else {}
-
-    # ── Added dates per day ───────────────────────────────────────────────────
-    added_by_day: dict[int, int] = {d: 0 for d in range(1, last_day + 1)}
-
-    # Source 1: revision history
-    for wid, added_at in history.items():
-        if added_at is None:
-            continue
-        ts = pd.Timestamp(added_at)
-        if ts.tzinfo is not None:
-            ts = ts.tz_localize(None)
-        if ts >= sprint_ts:
-            day_n = ts.day
-            if day_n in added_by_day:
-                added_by_day[day_n] += 1
-
-    # Source 2: created_date fallback for items not in history
-    for _, row in df_sprint.iterrows():
-        wid = int(row["work_item_id"])
-        if wid in history:
-            continue
-        cd = pd.Timestamp(row["created_date"]) if pd.notna(row.get("created_date")) else None
-        if cd is not None:
-            if cd.tzinfo is not None:
-                cd = cd.tz_localize(None)
-            if cd >= sprint_ts:
-                day_n = cd.day
-                if day_n in added_by_day:
-                    added_by_day[day_n] += 1
-
-    # ── Closed dates per day ──────────────────────────────────────────────────
+    # ── Daily activity from pre-computed table ────────────────────────────────
+    ym_str = today.strftime("%Y-%m")
+    added_by_day:  dict[int, int] = {d: 0 for d in range(1, last_day + 1)}
     closed_by_day: dict[int, int] = {d: 0 for d in range(1, last_day + 1)}
-    sprint_ids = set(history.keys()) | set(df_sprint["work_item_id"].astype(int))
-    df_closed = df[
-        df["work_item_id"].astype(int).isin(sprint_ids)
-        & df["closed_date"].notna()
-        & (pd.to_datetime(df["closed_date"], errors="coerce") >= sprint_ts)
-    ]
-    for _, row in df_closed.iterrows():
-        cd = pd.Timestamp(row["closed_date"])
-        if cd.tzinfo is not None:
-            cd = cd.tz_localize(None)
-        day_n = cd.day
-        if day_n in closed_by_day:
-            closed_by_day[day_n] += 1
+    try:
+        from data.loader import engine as _engine
+        from sqlalchemy import text as _text
+        with _engine.connect() as _conn:
+            _rows = _conn.execute(_text(
+                "SELECT day_date, added_count, closed_count "
+                "FROM agg_sprint_daily_activity WHERE ym_str = :ym"
+            ), {"ym": ym_str}).fetchall()
+        for day_date, added, closed in _rows:
+            d = pd.Timestamp(day_date).day
+            if d in added_by_day:
+                added_by_day[d]  = int(added  or 0)
+                closed_by_day[d] = int(closed or 0)
+    except Exception:
+        pass
 
     # ── Totals ────────────────────────────────────────────────────────────────
     added_total  = sum(v for k, v in added_by_day.items() if k <= days_elapsed)

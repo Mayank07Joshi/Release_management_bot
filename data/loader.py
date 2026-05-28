@@ -23,7 +23,21 @@ engine = create_engine(CONN_STR, pool_size=10, max_overflow=20)
 # Global cache for data
 _DATA_CACHE = None
 _LAST_LOAD_TIME = 0
-CACHE_TTL = 300  # 5 minutes cache duration
+CACHE_TTL = 300  # 5 minutes
+
+# Separate cache for the expensive DISTINCT ON relations query
+_REL_MAP_CACHE: dict | None = None
+_REL_MAP_TIME: float = 0
+REL_MAP_TTL = 1800  # 30 minutes — relations change rarely
+
+_COLUMNS = [
+    "work_item_id", "title", "work_item_type", "state", "priority",
+    "created_date", "closed_date", "changed_date", "activated_date",
+    "assigned_to", "main_developer", "main_designer", "story_owner",
+    "iteration_path", "release_date", "function", "area",
+    "original_estimate", "completed_work", "remaining_work",
+    "parent_id", "tags", "severity", "stage", "type",
+]
 
 def get_db_connection():
     """Fallback for raw psycopg2 if needed, but engine is preferred."""
@@ -35,19 +49,54 @@ def get_db_connection():
         port=DB_PORT
     )
 
+def _load_rel_map() -> dict:
+    """Return {task_id: parent_id} for tasks linked via Related. Cached 30 min."""
+    global _REL_MAP_CACHE, _REL_MAP_TIME
+    now = time.time()
+    if _REL_MAP_CACHE is not None and (now - _REL_MAP_TIME) < REL_MAP_TTL:
+        return _REL_MAP_CACHE
+    try:
+        with engine.connect() as conn:
+            rel_df = pd.read_sql(text("""
+                SELECT DISTINCT ON (t.work_item_id)
+                       t.work_item_id AS task_id,
+                       CASE WHEN rel.source_id = t.work_item_id
+                            THEN rel.target_id
+                            ELSE rel.source_id END AS parent_id
+                FROM work_items_main t
+                JOIN work_items_relations rel
+                    ON rel.relation_type = 'System.LinkTypes.Related'
+                    AND (rel.source_id = t.work_item_id
+                         OR rel.target_id = t.work_item_id)
+                JOIN work_items_main e
+                    ON e.work_item_id = CASE
+                        WHEN rel.source_id = t.work_item_id
+                        THEN rel.target_id ELSE rel.source_id END
+                WHERE t.work_item_type = 'Task'
+                  AND t.parent_id IS NULL
+                  AND e.work_item_type IN ('Enhancement','Bug','Bug_UI','Bug_Text')
+                ORDER BY t.work_item_id, parent_id
+            """), conn)
+        result = rel_df.set_index("task_id")["parent_id"].to_dict() if not rel_df.empty else {}
+    except Exception as _re:
+        print(f"⚠️  Related-task map load skipped: {_re}")
+        result = _REL_MAP_CACHE or {}
+    _REL_MAP_CACHE = result
+    _REL_MAP_TIME = now
+    return result
+
+
 def load_data(force_refresh=False):
-    """
-    Load data from PostgreSQL with memory caching.
-    Ensures that multiple concurrent dashboards don't overload the DB.
-    """
+    """Load work items from PostgreSQL with in-memory caching (5-min TTL)."""
     global _DATA_CACHE, _LAST_LOAD_TIME
-    
+
     now = time.time()
     if not force_refresh and _DATA_CACHE is not None and (now - _LAST_LOAD_TIME) < CACHE_TTL:
         return _DATA_CACHE.copy()
-    
-    query = """
-    SELECT *
+
+    col_list = ", ".join(_COLUMNS)
+    query = f"""
+    SELECT {col_list}
     FROM work_items_main
     WHERE
         created_date >= '2025-01-01'
@@ -107,43 +156,14 @@ def load_data(force_refresh=False):
             df["main_dev_team"] = "Unassigned"
 
         # 6. Patch parent_id for Tasks linked via "Related" instead of "Child"
-        #    People sometimes create tasks under Related instead of Child in ADO.
-        #    Pick lowest Enhancement/Bug ID when a task relates to multiple.
-        try:
-            with engine.connect() as _rc:
-                rel_df = pd.read_sql(text("""
-                    SELECT DISTINCT ON (t.work_item_id)
-                           t.work_item_id AS task_id,
-                           CASE WHEN rel.source_id = t.work_item_id
-                                THEN rel.target_id
-                                ELSE rel.source_id END AS parent_id
-                    FROM work_items_main t
-                    JOIN work_items_relations rel
-                        ON rel.relation_type = 'System.LinkTypes.Related'
-                        AND (rel.source_id = t.work_item_id
-                             OR rel.target_id = t.work_item_id)
-                    JOIN work_items_main e
-                        ON e.work_item_id = CASE
-                            WHEN rel.source_id = t.work_item_id
-                            THEN rel.target_id ELSE rel.source_id END
-                    WHERE t.work_item_type = 'Task'
-                      AND t.parent_id IS NULL
-                      AND e.work_item_type IN (
-                            'Enhancement','Bug','Bug_UI','Bug_Text')
-                    ORDER BY t.work_item_id, parent_id
-                """), _rc)
-            if not rel_df.empty:
-                rel_map = rel_df.set_index("task_id")["parent_id"].to_dict()
-                mask = (
-                    (df["work_item_type"] == "Task")
-                    & df["parent_id"].isna()
-                    & df["work_item_id"].isin(rel_map)
-                )
-                df.loc[mask, "parent_id"] = (
-                    df.loc[mask, "work_item_id"].map(rel_map)
-                )
-        except Exception as _re:
-            print(f"⚠️  Related-task patch skipped: {_re}")
+        rel_map = _load_rel_map()
+        if rel_map:
+            mask = (
+                (df["work_item_type"] == "Task")
+                & df["parent_id"].isna()
+                & df["work_item_id"].isin(rel_map)
+            )
+            df.loc[mask, "parent_id"] = df.loc[mask, "work_item_id"].map(rel_map)
 
         # Update cache
         _DATA_CACHE = df
@@ -156,6 +176,16 @@ def load_data(force_refresh=False):
         if _DATA_CACHE is not None:
             return _DATA_CACHE.copy()
         raise e
+
+def bust_loader_cache() -> None:
+    global _DATA_CACHE
+    _DATA_CACHE = None
+
+
+def get_last_load_time() -> float:
+    """Return Unix timestamp of last successful cache load. 0 if never loaded."""
+    return _LAST_LOAD_TIME
+
 
 def update_db_workitem(work_item_id, field_name, new_value):
     """

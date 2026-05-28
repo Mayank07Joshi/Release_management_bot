@@ -8,7 +8,7 @@ import pandas as pd
 from datetime import date
 import calendar
 
-from data.loader import load_data
+
 from config.dev_capacity import DEVELOPERS, DEV_MAP
 from config.settings import ADO_BASE_URL
 
@@ -200,32 +200,88 @@ def _dev_month_items(df: pd.DataFrame, dev: str, ym_str: str, open_only: bool = 
 def _load_standalone_data(yms: list[str]) -> dict:
     """
     Returns {dev_name: {ym: {"total_h": float, "by_category": {cat: float}}}}
-    for open standalone tasks, Dev+Mobile team only.
+    from the pre-computed agg_standalone_overhead table.
     """
+    from data.loader import engine
+    from sqlalchemy import text as _text
+    if not yms:
+        return {}
+    ym_list = ", ".join(f"'{y}'" for y in yms)
     try:
-        from db.standalone import load_all_classifications
-        records = load_all_classifications()
+        with engine.connect() as _conn:
+            rows = _conn.execute(_text(
+                f"SELECT assigned_to, ym_str, category, total_hours "
+                f"FROM agg_standalone_overhead WHERE ym_str IN ({ym_list})"
+            )).fetchall()
     except Exception:
         return {}
-
-    from config.team_mapping import TEAM_MAPPING
     result: dict = {}
-    for r in records:
-        dev = str(r.get("assigned_to", "")).split(" <")[0].strip()
-        if TEAM_MAPPING.get(dev, "") not in ("Development", "Mobile"):
+    for dev, ym, cat, h in rows:
+        if not dev:
             continue
-        ym = _iter_ym(r.get("iteration_path", ""))
-        if ym not in yms:
-            continue
-        cat = r.get("category", "Other")
-        h   = float(r.get("original_estimate") or 0)
-        if dev not in result:
-            result[dev] = {}
-        if ym not in result[dev]:
-            result[dev][ym] = {"total_h": 0.0, "by_category": {}}
+        h = float(h or 0)
+        result.setdefault(dev, {}).setdefault(ym, {"total_h": 0.0, "by_category": {}})
         result[dev][ym]["total_h"] += h
-        result[dev][ym]["by_category"][cat] = \
-            result[dev][ym]["by_category"].get(cat, 0.0) + h
+        result[dev][ym]["by_category"][cat] = result[dev][ym]["by_category"].get(cat, 0.0) + h
+    return result
+
+
+def _load_cap_agg(yms: list[str]) -> dict:
+    """Pre-computed capacity rows from agg_dev_monthly_capacity.
+    Returns {(dev, ym_str, item_type): {"item_count": int, "estimated_hours": float}}.
+    """
+    from data.loader import engine
+    from sqlalchemy import text as _text
+    if not yms:
+        return {}
+    ym_list = ", ".join(f"'{y}'" for y in yms)
+    try:
+        with engine.connect() as _conn:
+            rows = _conn.execute(_text(
+                f"SELECT main_developer, ym_str, item_type, item_count, estimated_hours "
+                f"FROM agg_dev_monthly_capacity WHERE ym_str IN ({ym_list})"
+            )).fetchall()
+    except Exception:
+        return {}
+    result: dict = {}
+    for dev, ym, itype, cnt, hrs in rows:
+        result[(dev, ym, itype)] = {
+            "item_count": int(cnt or 0),
+            "estimated_hours": float(hrs or 0),
+        }
+    return result
+
+
+def _load_top_items(yms: list[str]) -> dict:
+    """Top work items per (dev, ym) for cell pills.
+    Returns {(dev, ym_str): [{"title": str, "type": str, "dev_h": float}, ...]}.
+    """
+    from data.loader import engine
+    from sqlalchemy import text as _text
+    if not yms:
+        return {}
+    ym_list = ", ".join(f"'{y}'" for y in yms)
+    _TYPE_MAP = {"enh": "Enhancement", "bug": "Bug"}
+    try:
+        with engine.connect() as _conn:
+            rows = _conn.execute(_text(
+                f"SELECT main_developer, "
+                f"  '2026-' || LPAD(month_num::TEXT, 2, '0') AS ym_str, "
+                f"  title, item_type, COALESCE(original_estimate, 0) AS dev_h "
+                f"FROM agg_gantt_items "
+                f"WHERE '2026-' || LPAD(month_num::TEXT, 2, '0') IN ({ym_list}) "
+                f"  AND main_developer IS NOT NULL "
+                f"ORDER BY main_developer, month_num, COALESCE(original_estimate, 0) DESC"
+            )).fetchall()
+    except Exception:
+        return {}
+    result: dict = {}
+    for dev, ym, title, itype, dev_h in rows:
+        result.setdefault((dev, ym), []).append({
+            "title": title or "",
+            "type": _TYPE_MAP.get(itype, "Enhancement"),
+            "dev_h": float(dev_h or 0),
+        })
     return result
 
 
@@ -473,7 +529,7 @@ def _cell_content(items: list, enh_h: float, issue_h: float, capacity: float,
 
 # ── Grid renderers ────────────────────────────────────────────────────────────
 
-def _render_m012_grid(df, devs, yms, month_labels, view, standalone_data=None):
+def _render_m012_grid(cap_data, top_items, devs, yms, month_labels, view, standalone_data=None):
     cols = "180px 1fr 1fr 1fr"
 
     banner = html.Div(
@@ -529,20 +585,18 @@ def _render_m012_grid(df, devs, yms, month_labels, view, standalone_data=None):
 
         for m_idx, ym_str in enumerate(yms):
             is_m0 = (m_idx == 0)
-            items = _dev_month_items(df, dev["name"], ym_str, open_only=is_m0)
-            enh_items = [i for i in items if IS_ENH(i["type"])]
-            iss_items = [i for i in items if IS_ISSUE(i["type"])]
+            enh_h = cap_data.get((dev["name"], ym_str, "enhancement"), {}).get("estimated_hours", 0.0)
+            iss_h = cap_data.get((dev["name"], ym_str, "bug"),          {}).get("estimated_hours", 0.0)
+            all_pills = top_items.get((dev["name"], ym_str), [])
 
             if view == "Enhancements":
-                display = enh_items
-                enh_h, iss_h = sum(i["dev_h"] for i in enh_items), 0.0
+                display = [i for i in all_pills if IS_ENH(i["type"])]
+                iss_h = 0.0
             elif view == "Issues":
-                display = iss_items
-                enh_h, iss_h = 0.0, sum(i["dev_h"] for i in iss_items)
+                display = [i for i in all_pills if IS_ISSUE(i["type"])]
+                enh_h = 0.0
             else:
-                display = items
-                enh_h = sum(i["dev_h"] for i in enh_items)
-                iss_h = sum(i["dev_h"] for i in iss_items)
+                display = all_pills
 
             oh_h = sd.get(dev["name"], {}).get(ym_str, {}).get("total_h", 0.0)
 
@@ -617,7 +671,7 @@ def _render_m012_grid(df, devs, yms, month_labels, view, standalone_data=None):
     return html.Div([banner_row, col_hdr, *dev_rows, total_row])
 
 
-def _render_rest_grid(df, devs, view):
+def _render_rest_grid(cap_data, devs, view):
     rest_months = [
         (f"2026-{m:02d}", date(2026, m, 1).strftime("%b"))
         for m in range(7, 13)
@@ -645,9 +699,8 @@ def _render_rest_grid(df, devs, view):
         ], style={"padding": "12px 16px"})]
 
         for ym_str, _ in rest_months:
-            items = _dev_month_items(df, dev["name"], ym_str)
-            enh_h = sum(i["dev_h"] for i in items if IS_ENH(i["type"]))
-            iss_h = sum(i["dev_h"] for i in items if IS_ISSUE(i["type"]))
+            enh_h = cap_data.get((dev["name"], ym_str, "enhancement"), {}).get("estimated_hours", 0.0)
+            iss_h = cap_data.get((dev["name"], ym_str, "bug"),          {}).get("estimated_hours", 0.0)
             if view == "Enhancements": iss_h = 0.0
             elif view == "Issues":     enh_h = 0.0
             total = enh_h + iss_h
@@ -677,7 +730,10 @@ def _render_rest_grid(df, devs, view):
 
 # ── Gantt ─────────────────────────────────────────────────────────────────────
 
-def _render_gantt(df, eff, show_all):
+def _render_gantt(show_all):
+    from data.loader import engine as _engine
+    from sqlalchemy import text as _text
+
     gantt_months = [
         (f"2026-{m:02d}", date(2026, m, 1).strftime("%b"))
         for m in range(4, 13)
@@ -685,23 +741,29 @@ def _render_gantt(df, eff, show_all):
     cur_ym = date.today().strftime("%Y-%m")
     cols   = "240px " + " ".join(["1fr"] * 9)
 
-    enhs = df[
-        df["work_item_type"].str.contains("Enhancement", na=False, case=False)
-    ].drop_duplicates("work_item_id")
+    try:
+        with _engine.connect() as _conn:
+            _rows = _conn.execute(_text(
+                "SELECT title, original_estimate, t_done, t_rem, has_tasks, bar_end "
+                "FROM agg_gantt_items WHERE item_type = 'enh' ORDER BY bar_end"
+            )).fetchall()
+    except Exception:
+        _rows = []
 
     rows_data = []
-    for _, row in enhs.iterrows():
-        eid = row["work_item_id"]
-        h   = eff.get(eid, row["_est"])
-        sz  = _size(h)
+    for row in _rows:
+        h = float((row.t_done or 0) + (row.t_rem or 0)) if row.has_tasks else float(row.original_estimate or 0)
+        sz = _size(h)
         if not show_all and sz == "Small":
             continue
-        rdm = _parse_release_ym(str(row.get("release_date", "")))
-        if not rdm or rdm < "2026-04" or rdm > "2026-12":
+        try:
+            rdm = pd.Timestamp(row.bar_end).strftime("%Y-%m")
+        except Exception:
+            continue
+        if rdm < "2026-04" or rdm > "2026-12":
             continue
         rows_data.append({
-            "title": row["title"], "eff_h": h, "size": sz,
-            "rdm": rdm, "priority": row.get("priority", 4),
+            "title": str(row.title or ""), "eff_h": h, "size": sz, "rdm": rdm,
         })
 
     if not rows_data:
@@ -826,7 +888,10 @@ _SIZE_CLR = {
 _SIZE_ORDER = {"Big": 0, "Medium": 1, "Small": 2}
 
 
-def _render_function_timeline(df, eff, size_filter="All"):
+def _render_function_timeline(size_filter="All"):
+    from data.loader import engine as _engine
+    from sqlalchemy import text as _text
+
     timeline_months = [
         (f"2026-{m:02d}", date(2026, m, 1).strftime("%b"))
         for m in range(4, 13)
@@ -834,28 +899,40 @@ def _render_function_timeline(df, eff, size_filter="All"):
     cur_ym = date.today().strftime("%Y-%m")
     cols   = "200px " + " ".join(["1fr"] * 9)
 
-    enhs = df[
-        df["work_item_type"].str.contains("Enhancement", na=False, case=False)
-    ].drop_duplicates("work_item_id")
+    try:
+        with _engine.connect() as _conn:
+            _rows = _conn.execute(_text(
+                "SELECT work_item_id, title, function, original_estimate, "
+                "       t_done, t_rem, has_tasks, bar_end "
+                "FROM agg_gantt_items WHERE item_type = 'enh' "
+                "  AND function IS NOT NULL AND function != '' "
+                "ORDER BY bar_end"
+            )).fetchall()
+    except Exception:
+        _rows = []
 
     func_data: dict[str, dict] = {}
-    for _, row in enhs.iterrows():
-        func = str(row.get("function", "")).strip()
+    for row in _rows:
+        func = str(row.function or "").strip()
         if not func or func == "Not Specified":
             continue
-        eid = row["work_item_id"]
-        h   = eff.get(eid, row["_est"])
+        h = float((row.t_done or 0) + (row.t_rem or 0)) if row.has_tasks else float(row.original_estimate or 0)
         if h == 0:
             continue
         sz = _size(h)
         if size_filter != "All" and sz != size_filter:
             continue
-        rdm = _parse_release_ym(str(row.get("release_date", "")))
-        if not rdm or rdm < "2026-04" or rdm > "2026-12":
+        try:
+            rdm = pd.Timestamp(row.bar_end).strftime("%Y-%m")
+        except Exception:
+            continue
+        if rdm < "2026-04" or rdm > "2026-12":
             continue
         if func not in func_data:
             func_data[func] = {ym: [] for ym, _ in timeline_months}
-        func_data[func][rdm].append({"id": eid, "title": row["title"], "size": sz, "h": h})
+        func_data[func][rdm].append({
+            "id": int(row.work_item_id), "title": str(row.title or ""), "size": sz, "h": h,
+        })
 
     if not func_data:
         label = f"{size_filter} " if size_filter != "All" else ""
@@ -1216,9 +1293,7 @@ def _set_func_size(a, b, m, s):
     Input("dcap-func-size-filter", "data"),
 )
 def _render_func_timeline(size_filter):
-    df  = _prep(load_data())
-    eff = _eff_hours(df)
-    return _render_function_timeline(df, eff, size_filter or "All")
+    return _render_function_timeline(size_filter or "All")
 
 
 @callback(
@@ -1232,34 +1307,43 @@ def _render_func_timeline(size_filter):
     Input("dcap-gantt-show-all", "data"),
 )
 def _render(view, tab, show_all):
-    df   = _prep(load_data())
-    eff  = _eff_hours(df)
     m012 = _months012()
     yms  = [_ym(d) for d in m012]
     lbls = [d.strftime("%b") for d in m012]
     devs = DEVELOPERS
 
+    fy_months = [f"2026-{m:02d}" for m in range(4, 13)]
+    all_yms   = list(dict.fromkeys([*yms, *fy_months]))  # M012 first, then rest, deduped
+
+    # Pre-computed capacity + top items (replaces per-cell _dev_month_items calls)
+    cap_data  = _load_cap_agg(all_yms)
+    top_items = _load_top_items(yms)
+
     # Load standalone overhead data
     standalone_data = _load_standalone_data(yms)
 
-    # KPIs
+    # KPIs — read from pre-computed table
     m0_cap = sum(d["capacity_h"] for d in devs)
-    m0_enh = 0.0
-    m0_iss = 0.0
-    m0_oh  = 0.0
-    for dev in devs:
-        its = _dev_month_items(df, dev["name"], yms[0])
-        m0_enh += sum(i["dev_h"] for i in its if IS_ENH(i["type"]))
-        m0_iss += sum(i["dev_h"] for i in its if IS_ISSUE(i["type"]))
-        m0_oh  += standalone_data.get(dev["name"], {}).get(yms[0], {}).get("total_h", 0.0)
+    m0_enh = sum(
+        cap_data.get((d["name"], yms[0], "enhancement"), {}).get("estimated_hours", 0.0)
+        for d in devs
+    )
+    m0_iss = sum(
+        cap_data.get((d["name"], yms[0], "bug"), {}).get("estimated_hours", 0.0)
+        for d in devs
+    )
+    m0_oh  = sum(
+        standalone_data.get(d["name"], {}).get(yms[0], {}).get("total_h", 0.0)
+        for d in devs
+    )
 
-    fy_months    = [f"2026-{m:02d}" for m in range(4, 13)]
     fy_cap       = m0_cap * 9
-    fy_committed = 0.0
-    for dev in devs:
-        for ym_str in fy_months:
-            its = _dev_month_items(df, dev["name"], ym_str)
-            fy_committed += sum(i["dev_h"] for i in its)
+    fy_committed = sum(
+        cap_data.get((d["name"], ym, it), {}).get("estimated_hours", 0.0)
+        for d in devs
+        for ym in fy_months
+        for it in ("enhancement", "bug")
+    )
     fy_free = max(fy_cap - fy_committed, 0.0)
 
     oh_pct   = round(m0_oh / m0_cap * 100) if m0_cap else 0
@@ -1271,12 +1355,12 @@ def _render(view, tab, show_all):
         _kpi(f"{m0_iss:,.0f}h",       "M0 Issues",          f"{m0_iss/m0_cap*100:.0f}% of M0" if m0_cap else "—", _GOLD),
         _kpi(f"{m0_oh:,.0f}h",        "M0 Overhead",        f"{oh_pct}% standalone tasks", "#a78bfa"),
         _kpi(f"{feat_pct}%",          "Feature Work",        f"{oh_pct}% overhead · {100-feat_pct-oh_pct}% unallocated", _GREEN),
-        _kpi(f"{fy_free:,.0f}h",      "Full Year Free",      f"{fy_free/fy_cap*100:.0f}% headroom"    if fy_cap else "—", _GREEN),
+        _kpi(f"{fy_free:,.0f}h",      "Full Year Free",      f"{fy_free/fy_cap*100:.0f}% headroom" if fy_cap else "—", _GREEN),
     ]
 
-    grid     = _render_m012_grid(df, devs, yms, lbls, view, standalone_data) if tab == "012" \
-               else _render_rest_grid(df, devs, view)
-    gantt    = _render_gantt(df, eff, bool(show_all))
+    grid     = _render_m012_grid(cap_data, top_items, devs, yms, lbls, view, standalone_data) if tab == "012" \
+               else _render_rest_grid(cap_data, devs, view)
+    gantt    = _render_gantt(bool(show_all))
     sub      = (f"{len(devs)} developers · 180h default monthly capacity · "
                 "Click any cell for M0/M1/M2 detail · Purple bar = standalone overhead")
     overhead = _render_overhead_section(standalone_data, devs, yms[0])
@@ -1379,8 +1463,9 @@ def _panel_body(dev_name, ym_str, view):
     if not dev_name or not ym_str:
         return html.Div("Select a cell")
 
-    df  = _prep(load_data())
-    eff = _eff_hours(df)
+    from data.loader import engine as _engine
+    from sqlalchemy import text as _text
+
     dev = DEV_MAP.get(dev_name, {"name": dev_name, "capacity_h": 180, "role": ""})
     cap = dev["capacity_h"]
 
@@ -1394,11 +1479,35 @@ def _panel_body(dev_name, ym_str, view):
         mo_label, mo_tag, mo_idx = ym_str, "", 999
 
     is_m0 = (mo_idx == 0)
+    mn    = int(ym_str[5:7]) if len(ym_str) >= 7 else None
 
-    all_items  = _dev_month_items(df, dev_name, ym_str)
-    open_items = _dev_month_items(df, dev_name, ym_str, open_only=True) if is_m0 else all_items
-    open_ids   = {i["id"] for i in open_items}
-    done_items = [i for i in all_items if i["id"] not in open_ids] if is_m0 else []
+    # Load open items from agg_gantt_items (pct < 100 by definition)
+    open_items: list[dict] = []
+    if mn:
+        try:
+            with _engine.connect() as _conn:
+                _agg_rows = _conn.execute(_text(
+                    "SELECT work_item_id, title, work_item_type, item_type, "
+                    "       original_estimate, t_done, t_rem, has_tasks, priority "
+                    "FROM agg_gantt_items "
+                    "WHERE main_developer = :dev AND month_num = :mn"
+                ), {"dev": dev_name, "mn": mn}).fetchall()
+            for r in _agg_rows:
+                dev_h = float((r.t_done or 0) + (r.t_rem or 0)) if r.has_tasks else float(r.original_estimate or 0)
+                wtype = str(r.work_item_type or "")
+                if not wtype:
+                    wtype = "Enhancement" if r.item_type == "enh" else "Bug"
+                open_items.append({
+                    "id":       int(r.work_item_id),
+                    "title":    str(r.title or ""),
+                    "type":     wtype,
+                    "dev_h":    dev_h,
+                    "priority": int(r.priority or 4),
+                })
+        except Exception:
+            pass
+
+    done_items: list[dict] = []  # done items not tracked in agg_gantt_items
 
     # Standalone tasks for this dev + month
     try:
@@ -1456,7 +1565,7 @@ def _panel_body(dev_name, ym_str, view):
             "borderRadius": "4px", "marginRight": "6px",
         })]
         if show_size:
-            sz     = _size(eff.get(item["id"], item["dev_h"]))
+            sz     = _size(item["dev_h"])
             s_bg, s_tc = _sz_clrs.get(sz, _sz_clrs["Small"])
             badges.append(html.Span(sz, style={
                 "fontSize": "10px", "fontWeight": "700", "color": s_tc,

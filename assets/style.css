@@ -45,6 +45,20 @@
 
     /* Navigation background — stays dark in both themes */
     --nav-bg: #0e0e1a;
+
+    /* ── Short aliases for audit pages ──────────────────────────────────────── */
+    --ac: var(--accent);
+    --bg: var(--bg-base);
+    --sf: var(--bg-surface);
+    --ra: var(--bg-elevated);
+    --b1: var(--border);
+    --b2: var(--border-mid);
+    --t1: var(--text-primary);
+    --t2: var(--text-secondary);
+    --t3: var(--text-muted);
+    --re: var(--red);           --re-bg: var(--red-dim);    --re-bd: var(--red-border);
+    --am: var(--amber);         --am-bg: var(--amber-dim);  --am-bd: var(--amber-border);
+    --gr: var(--green);         --gr-bg: var(--green-dim);  --gr-bd: var(--green-border);
 }
 
 /* ── Light Theme Overrides ───────────────────────────────────────────────────── */
@@ -90,6 +104,20 @@
 
     /* Nav always stays dark */
     --nav-bg: #273133;
+
+    /* Short aliases — light theme overrides */
+    --ac: var(--accent);
+    --bg: var(--bg-base);
+    --sf: var(--bg-surface);
+    --ra: var(--bg-elevated);
+    --b1: var(--border);
+    --b2: var(--border-mid);
+    --t1: var(--text-primary);
+    --t2: var(--text-secondary);
+    --t3: var(--text-muted);
+    --re: var(--red);           --re-bg: var(--red-dim);    --re-bd: var(--red-border);
+    --am: var(--amber);         --am-bg: var(--amber-dim);  --am-bd: var(--amber-border);
+    --gr: var(--green);         --gr-bg: var(--green-dim);  --gr-bd: var(--green-border);
 }
 
 /* ── Global Reset ────────────────────────────────────────────────────────────── */
@@ -1424,4 +1452,38 @@ input:focus, select:focus, textarea:focus,
 
 [data-theme="light"] ::-webkit-scrollbar-thumb { background: var(--border-mid); }
 [data-theme="light"] ::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.18); }
+
+/* ── Gantt hover tooltip ──────────────────────────────────────────────────── */
+.gantt-bar-wrap {
+    position: absolute;
+    overflow: visible !important;
+    border-radius: 3px;
+    cursor: default;
+}
+.gantt-tooltip {
+    display: none;
+    position: absolute;
+    bottom: calc(100% + 7px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg-elevated, #151524);
+    border: 1px solid var(--border, rgba(255,255,255,0.1));
+    border-radius: 8px;
+    padding: 7px 11px;
+    font-size: 11px;
+    white-space: nowrap;
+    z-index: 9999;
+    pointer-events: none;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.55);
+    line-height: 1.85;
+    min-width: 160px;
+    font-family: Inter, system-ui, sans-serif;
+}
+.gantt-bar-wrap:hover .gantt-tooltip { display: block; }
+
+[data-theme="light"] .gantt-tooltip {
+    background: #ffffff;
+    border-color: rgba(0,0,0,0.12);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+}
 
