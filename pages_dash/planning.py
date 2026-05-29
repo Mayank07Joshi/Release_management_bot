@@ -18,6 +18,10 @@ from config.lifecycle import LIFECYCLE, STEP_INDEX, STEP_LABELS, TOTAL_STEPS
 dash.register_page(__name__, path="/planning", name="Planning Tool")
 print(">>> [planning.py] LOADED — panel=680px card=#252548")
 
+import time as _time_mod
+_GANTT_CACHE: dict = {"items": None, "tasks": None, "ts": 0.0}
+_GANTT_TTL = 300  # 5-minute cache
+
 # ─── Colour tokens ─────────────────────────────────────────────────────────────
 G  = "var(--green)"   # green  – Ready / good
 R  = "var(--red)"     # red    – Not Started / urgent
@@ -1717,16 +1721,25 @@ def _build_unest_tab(items: list[dict]) -> html.Div:
 # DELIVERY TIMELINE (GANTT) HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _gantt_window(offset: int = 0):
-    """Return (window_start, window_end, label).
-    Default (offset=0): Apr 2026 → Dec 2026 (full remaining year).
-    offset shifts both ends by N months."""
-    def _shift(d: date, n: int) -> date:
+def _gantt_window(view: str = "0-12"):
+    """Return (window_start, window_end, label) for a rolling view.
+    view: '0-12' rolling 12M from today | '12-24' months 12-24 | '24+' months 24-36.
+    """
+    def _add_months(d: date, n: int) -> date:
         m = d.month - 1 + n
         return date(d.year + m // 12, m % 12 + 1, 1)
 
-    ws = _shift(date(2026, 4, 1),  offset)
-    we = _shift(date(2027, 1, 1),  offset)   # Jan 2027 = end of Dec 2026
+    base = date.today()
+    base = date(base.year, base.month, 1)   # snap to month start
+    if view == "12-24":
+        ws = _add_months(base, 12)
+        we = _add_months(base, 24)
+    elif view == "24+":
+        ws = _add_months(base, 24)
+        we = _add_months(base, 36)
+    else:                                    # default "0-12"
+        ws = base
+        we = _add_months(base, 12)
     label = f"{ws.strftime('%b %Y')} – {(we - timedelta(days=1)).strftime('%b %Y')}"
     return ws, we, label
 
@@ -1756,13 +1769,14 @@ def _parse_release_date(rd_str):
 def _build_gantt_html(
     window_start: date,
     window_end: date,
-    expanded_sprints: set,   # repurposed: expanded developer keys
-    expanded_items: set,     # repurposed: expanded function keys
+    expanded_sprints: set,   # expanded developer keys
+    expanded_items: set,     # expanded function keys + expanded item wids
     dev_filter: set | None = None,
     type_filter: str = "all",        # "all" | "enh" | "bug"
     prio_filter: list | None = None, # None = all; list of "1","2","3","4+"
+    year_filter: list | None = None, # None = all; list of int years
 ) -> html.Div:
-    """HTML/CSS Gantt — Developer > Function hierarchy."""
+    """HTML/CSS Gantt — Developer > Function > Item > Task hierarchy."""
     from data.loader import engine
     from sqlalchemy import text as _text
 
@@ -1770,13 +1784,38 @@ def _build_gantt_html(
     _NONE = html.Div("No active work items match the current filters.",
                      style={"color": MT, "padding": "20px", "fontSize": "12px"})
 
-    # ── Load pre-computed items from aggregate table ───────────────────────────
-    with engine.connect() as _conn:
-        items_df = pd.read_sql(
-            _text("SELECT * FROM agg_gantt_items ORDER BY main_developer, function, bar_start"),
-            _conn,
-        )
+    # ── Load from module-level cache (refreshes every 5 min) ──────────────────
+    _now = _time_mod.time()
+    if _GANTT_CACHE["items"] is None or _now - _GANTT_CACHE["ts"] > _GANTT_TTL:
+        with engine.connect() as _c:
+            _GANTT_CACHE["items"] = pd.read_sql(
+                _text("SELECT * FROM agg_gantt_items ORDER BY main_developer, function, bar_start"),
+                _c,
+            )
+            _GANTT_CACHE["tasks"] = pd.read_sql(
+                _text("SELECT * FROM agg_gantt_tasks"), _c,
+            )
+        _GANTT_CACHE["ts"] = _now
 
+    items_df = _GANTT_CACHE["items"].copy()
+    _task_df  = _GANTT_CACHE["tasks"].copy()
+
+    # ── Date conversion ────────────────────────────────────────────────────────
+    for _dc in ("bar_start", "bar_end", "release_date"):
+        if _dc in items_df.columns:
+            items_df[_dc] = pd.to_datetime(items_df[_dc], errors="coerce").dt.date
+    for _dc in ("bar_start", "bar_end"):
+        if _dc in _task_df.columns:
+            _task_df[_dc] = pd.to_datetime(_task_df[_dc], errors="coerce").dt.date
+
+    # ── Build tasks-by-parent lookup ──────────────────────────────────────────
+    tasks_by_parent: dict[int, list] = {}
+    for _tr in _task_df.to_dict("records"):
+        _pid = _tr.get("parent_id")
+        if _pid is not None and _pid == _pid:  # NaN check (NaN != NaN)
+            tasks_by_parent.setdefault(int(_pid), []).append(_tr)
+
+    # ── Apply filters ─────────────────────────────────────────────────────────
     if dev_filter:
         items_df = items_df[items_df["main_developer"].isin(dev_filter)]
 
@@ -1795,12 +1834,13 @@ def _build_gantt_html(
                 except (ValueError, TypeError): pass
         items_df = items_df[items_df["priority"].isin(_eff_prios)]
 
+    if year_filter:
+        items_df = items_df[items_df["bar_start"].apply(
+            lambda x: x.year if isinstance(x, date) else None
+        ).isin(year_filter)]
+
     if items_df.empty:
         return _NONE
-
-    for _dc in ("bar_start", "bar_end", "release_date"):
-        if _dc in items_df.columns:
-            items_df[_dc] = pd.to_datetime(items_df[_dc], errors="coerce").dt.date
 
     # ── Timeline helpers ───────────────────────────────────────────────────────
     total_days = max((window_end - window_start).days, 1)
@@ -1886,6 +1926,8 @@ def _build_gantt_html(
             for m in _months[1:]
         ]
 
+    _DIV_CELLS = _divs()  # compute once; list() copy at each use site
+
     # ── Progress cell ──────────────────────────────────────────────────────────
     def _prog_cell(pct):
         if pct >= 100:   bar_color = _GR
@@ -1918,7 +1960,7 @@ def _build_gantt_html(
     # ── Timeline bar with CSS hover tooltip ───────────────────────────────────
     def _bar_with_tooltip(it, s_cl, e_cl, pct, is_bug, row_h):
         rem_color = _RE_COL if is_bug else _AM
-        tl_ch = [*_divs()]
+        tl_ch = list(_DIV_CELLS)
 
         if s_cl < e_cl:
             bl = _pp(s_cl)
@@ -1987,13 +2029,23 @@ def _build_gantt_html(
             "flex": "1", "position": "relative", "height": f"{row_h}px",
         })
 
-    # ── Item sub-row (under a function, no ID shown) ──────────────────────────
-    def _func_item_row(it):
+    TASK_H = 26
+
+    # ── Item sub-row (under a function; expandable if it has tasks) ────────────
+    def _func_item_row(it, has_tasks, is_item_exp):
         s_cl  = max(it.get("bar_start") or today, window_start)
         e_cl  = min(it.get("bar_end")   or today, window_end)
         pct   = it.get("pct", 0) or 0
         is_bug = it.get("item_type", "enh") == "bug"
         wid   = it.get("work_item_id", "")
+
+        toggle_btn = html.Button(
+            "▼" if is_item_exp else "▶",
+            id={"type": "gantt-toggle", "index": f"item:{wid}"}, n_clicks=0,
+            style={"background": "none", "border": "none", "cursor": "pointer",
+                   "color": _T2, "fontSize": "8px",
+                   "padding": "0 3px 0 4px", "lineHeight": "1", "flexShrink": "0"},
+        ) if has_tasks else html.Div(style={"width": "18px", "flexShrink": "0"})
 
         return html.Div([
             html.Div(style={
@@ -2001,10 +2053,11 @@ def _build_gantt_html(
                 "background": _RA, "borderRight": f"0.5px solid {_COL_DIV}",
             }),
             html.Div([
-                html.Div(style={"width": "20px", "flexShrink": "0"}),  # indent
+                html.Div(style={"width": "14px", "flexShrink": "0"}),  # indent
+                toggle_btn,
                 _type_tag(it.get("item_type", "enh")),
                 html.A(
-                    str(it.get("title", ""))[:46],
+                    str(it.get("title", ""))[:44],
                     href=f"{ADO_BASE_URL}{wid}", target="_blank",
                     style={
                         "fontSize": "10px", "color": _T2,
@@ -2016,33 +2069,98 @@ def _build_gantt_html(
             ], style={
                 "width": f"{FUNC_W}px", "flexShrink": "0", "height": f"{ITEM_H}px",
                 "display": "flex", "alignItems": "center",
-                "padding": "0 8px 0 0", "gap": "5px",
+                "padding": "0 8px 0 0", "gap": "4px",
                 "borderRight": f"0.5px solid {_B1}", "overflow": "hidden",
                 "background": _RA,
             }),
             _bar_with_tooltip(it, s_cl, e_cl, pct, is_bug, ITEM_H),
         ], style={"display": "flex", "borderBottom": f"0.5px solid rgba(255,255,255,0.04)"})
 
+    # ── Task sub-row (child of an item) ────────────────────────────────────────
+    def _task_row(task):
+        t_start = task.get("bar_start") or window_start
+        t_end   = task.get("bar_end")   or window_end
+        t_start = max(t_start, window_start)
+        t_end   = min(t_end,   window_end)
+        pct_t   = int(task.get("pct") or 0)
+        state   = str(task.get("state") or "To Do")
+        task_id = task.get("task_id", "")
+        t_color = (_GR if pct_t >= 100 else
+                   _BL if state in ("Active", "In Progress") else
+                   "var(--red)" if state == "Blocked" else _AM)
+        tl_ch = list(_DIV_CELLS)
+        if t_start < t_end:
+            tl_ch.append(html.Div(style={
+                "position": "absolute",
+                "left": f"{_pp(t_start):.2f}%",
+                "width": f"{(t_end - t_start).days / total_days * 100:.2f}%",
+                "height": "5px", "top": "50%", "transform": "translateY(-50%)",
+                "background": t_color, "opacity": "0.7", "borderRadius": "2px",
+            }))
+        return html.Div([
+            html.Div(style={
+                "width": f"{DEV_W}px", "flexShrink": "0", "height": f"{TASK_H}px",
+                "background": "var(--bg-hover)", "borderRight": f"0.5px solid {_COL_DIV}",
+            }),
+            html.Div([
+                html.Div(style={"width": "34px", "flexShrink": "0"}),  # indent
+                html.Span("TASK", style={
+                    "fontSize": "7px", "fontWeight": "600", "padding": "1px 4px",
+                    "borderRadius": "3px", "flexShrink": "0", "lineHeight": "14px",
+                    "background": "rgba(152,131,199,0.12)", "color": "var(--purple)",
+                    "border": "0.5px solid rgba(152,131,199,0.25)",
+                }),
+                html.A(str(task.get("title", ""))[:40],
+                    href=f"{ADO_BASE_URL}{task_id}", target="_blank",
+                    style={"fontSize": "9px", "color": _T2, "whiteSpace": "nowrap",
+                           "overflow": "hidden", "textOverflow": "ellipsis",
+                           "textDecoration": "none", "flex": "1", "minWidth": "0"}),
+            ], style={
+                "width": f"{FUNC_W}px", "flexShrink": "0", "height": f"{TASK_H}px",
+                "display": "flex", "alignItems": "center", "gap": "4px",
+                "padding": "0 8px 0 0", "borderRight": f"0.5px solid {_B1}",
+                "overflow": "hidden", "background": "var(--bg-hover)",
+            }),
+            html.Div(tl_ch, style={
+                "flex": "1", "position": "relative", "height": f"{TASK_H}px",
+                "background": "var(--bg-hover)",
+            }),
+        ], style={"display": "flex",
+                  "borderBottom": f"0.5px solid rgba(255,255,255,0.03)"})
+
+    # ── Pre-group records once: dev -> func -> [item dicts] ───────────────────
+    # Avoids repeated DataFrame slicing (was 274 to_dict calls, one per func group)
+    def _norm(v, default):
+        return default if v is None or v != v else str(v)  # v != v catches NaN
+
+    _dev_func_map: dict[str, dict[str, list]] = {}
+    _dev_order: list[str] = []
+    for _rec in items_df.to_dict("records"):
+        _dv = _norm(_rec.get("main_developer"), "Unassigned")
+        _fn = _norm(_rec.get("function"), "—")
+        if _dv not in _dev_func_map:
+            _dev_func_map[_dv] = {}
+            _dev_order.append(_dv)
+        _dev_func_map[_dv].setdefault(_fn, []).append(_rec)
+
     # ── Build all rows (Developer > Function hierarchy) ────────────────────────
     all_rows: list = []
-    _devs = list(dict.fromkeys(items_df["main_developer"].fillna("Unassigned").tolist()))
 
-    for dev in _devs:
-        dev_df    = items_df[items_df["main_developer"].fillna("Unassigned") == dev]
-        if dev_df.empty:
-            continue
+    for dev in _dev_order:
+        dev_funcs  = _dev_func_map[dev]
+        _funcs     = list(dev_funcs.keys())
+        _dev_items = [it for grp in dev_funcs.values() for it in grp]
+        n_items    = len(_dev_items)
+        n_funcs    = len(_funcs)
         safe_dev   = re.sub(r"[^a-zA-Z0-9]", "_", str(dev))
         is_dev_exp = safe_dev in expanded_sprints
-        _funcs     = list(dict.fromkeys(dev_df["function"].fillna("—").tolist()))
-        n_items    = len(dev_df)
-        n_funcs    = len(_funcs)
 
         # Developer aggregate bar
-        _dev_starts = [s for s in dev_df["bar_start"].tolist() if s and pd.notna(s)]
-        _dev_ends   = [e for e in dev_df["bar_end"].tolist()   if e and pd.notna(e)]
+        _dev_starts = [it["bar_start"] for it in _dev_items if it.get("bar_start") and it["bar_start"] == it["bar_start"]]
+        _dev_ends   = [it["bar_end"]   for it in _dev_items if it.get("bar_end")   and it["bar_end"]   == it["bar_end"]]
         dev_s = max(min(_dev_starts, default=window_start), window_start)
         dev_e = min(max(_dev_ends,   default=window_end),   window_end)
-        dev_tl = [*_divs()]
+        dev_tl = list(_DIV_CELLS)
         if dev_s < dev_e:
             dev_tl.append(html.Div(style={
                 "position": "absolute",
@@ -2083,10 +2201,9 @@ def _build_gantt_html(
         # Function rows (children of developer)
         func_children: list = []
         for func in _funcs:
-            func_df    = dev_df[dev_df["function"].fillna("—") == func]
-            if func_df.empty:
+            func_items = dev_funcs[func]
+            if not func_items:
                 continue
-            func_items = func_df.to_dict("records")
             safe_fk    = re.sub(r"[^a-zA-Z0-9]", "_", f"{dev}_{func}")
             is_func_exp = safe_fk in expanded_items
 
@@ -2102,7 +2219,7 @@ def _build_gantt_html(
             avg_pct = int(sum(it.get("pct", 0) or 0 for it in func_items) / len(func_items)) if func_items else 0
             rem_color = _RE_COL if has_bugs else _AM
 
-            func_tl = [*_divs()]
+            func_tl = list(_DIV_CELLS)
             if f_s < f_e:
                 _bl = _pp(f_s)
                 _bw = (f_e - f_s).days / total_days * 100
@@ -2181,9 +2298,22 @@ def _build_gantt_html(
                 }),
             ], style={"display": "flex", "borderBottom": f"0.5px solid {_B1}"}))
 
-            # Item sub-rows (expandable from function)
+            # Item sub-rows + task children (expandable from function)
+            _item_rows = []
+            for _it in func_items:
+                _wid      = _it.get("work_item_id")
+                _it_tasks = tasks_by_parent.get(_wid, [])
+                _has_t    = len(_it_tasks) > 0
+                _is_ie    = str(_wid) in expanded_items
+                _item_rows.append(_func_item_row(_it, _has_t, _is_ie))
+                if _it_tasks:
+                    _item_rows.append(html.Div(
+                        [_task_row(t) for t in _it_tasks],
+                        id=f"gantt-it-{_wid}",
+                        style={"display": "block" if _is_ie else "none"},
+                    ))
             func_children.append(html.Div(
-                [_func_item_row(it) for it in func_items],
+                _item_rows,
                 id=f"gantt-it-func-{safe_fk}",
                 style={"display": "block" if is_func_exp else "none"},
             ))
@@ -2815,7 +2945,7 @@ def _build_full_layout():
         dcc.Store(id="story-page",          data=1),
         dcc.Store(id="bug-page",            data=1),
         dcc.Store(id="ba-type-f",           data="Enhancements"),
-        dcc.Store(id="gantt-window-offset", data=0),
+        dcc.Store(id="gantt-view", data="0-12"),
         dcc.Store(id="gantt-expanded",      data={"s": [], "t": []}),
     ])
 
@@ -3062,24 +3192,46 @@ def _build_full_layout():
                             "fontSize": "9px", "fontWeight": "800", "color": P,
                             "letterSpacing": "2px", "textTransform": "uppercase",
                         }),
-                        html.Span(" · Developer › Function  —  click ▶ to expand", style={
-                            "fontSize": "11px", "color": MT, "marginLeft": "8px",
-                        }),
+                        html.Span(id="gantt-window-label",
+                                  children=f" · {_gantt_window('0-12')[2]}",
+                                  style={"fontSize": "11px", "color": MT, "marginLeft": "6px"}),
                     ], style={"display": "flex", "alignItems": "center"}),
                     html.Div([
+                        dcc.Dropdown(
+                            id="gantt-view-select",
+                            options=[
+                                {"label": "Rolling 12M",  "value": "0-12"},
+                                {"label": "12 – 24M",     "value": "12-24"},
+                                {"label": "24M+",         "value": "24+"},
+                            ],
+                            value="0-12",
+                            clearable=False,
+                            style={"minWidth": "140px", "fontSize": "12px"},
+                        ),
+                        dcc.Dropdown(
+                            id="gantt-year-filter",
+                            options=[
+                                {"label": "2025", "value": 2025},
+                                {"label": "2026", "value": 2026},
+                                {"label": "2027", "value": 2027},
+                            ],
+                            multi=True,
+                            placeholder="All years…",
+                            style={"minWidth": "130px", "fontSize": "12px"},
+                        ),
                         dcc.Dropdown(
                             id="gantt-dev-filter",
                             multi=True,
                             placeholder="All developers…",
                             options=[],
-                            style={"minWidth": "200px", "fontSize": "12px"},
+                            style={"minWidth": "190px", "fontSize": "12px"},
                         ),
                         dcc.Dropdown(
                             id="gantt-type-filter",
                             options=[
-                                {"label": "All types",      "value": "all"},
-                                {"label": "Enhancements",   "value": "enh"},
-                                {"label": "Bugs",           "value": "bug"},
+                                {"label": "All types",    "value": "all"},
+                                {"label": "Enhancements", "value": "enh"},
+                                {"label": "Bugs",         "value": "bug"},
                             ],
                             value="all",
                             clearable=False,
@@ -3095,29 +3247,19 @@ def _build_full_layout():
                             ],
                             multi=True,
                             placeholder="All priorities…",
-                            style={"minWidth": "160px", "fontSize": "12px"},
+                            style={"minWidth": "150px", "fontSize": "12px"},
                         ),
-                        html.Button("Today", id="gantt-today-btn", n_clicks=0, style={
-                            **_TAB_BTN_IDL, "padding": "5px 12px", "fontSize": "12px",
-                            "marginRight": "0",
-                        }),
-                        html.Button("◀", id="gantt-prev-btn", n_clicks=0, style={
-                            **_TAB_BTN_IDL, "padding": "5px 10px", "fontSize": "12px",
-                            "marginRight": "0",
-                        }),
-                        html.Div(id="gantt-window-label", children=_gantt_window(0)[2], style={
-                            "fontSize": "12px", "color": MT,
-                            "padding": "5px 14px", "minWidth": "180px", "textAlign": "center",
-                        }),
-                        html.Button("▶", id="gantt-next-btn", n_clicks=0, style={
-                            **_TAB_BTN_IDL, "padding": "5px 10px", "fontSize": "12px",
-                            "marginRight": "0",
-                        }),
                     ], style={"display": "flex", "alignItems": "center", "gap": "8px", "flexWrap": "wrap"}),
                 ], style={"display": "flex", "justifyContent": "space-between",
                           "alignItems": "center", "marginBottom": "12px",
                           "padding": "0 16px", "gap": "12px"}),
-                html.Div(id="gantt-chart", style={"overflowY": "auto", "maxHeight": "640px"}),
+                dcc.Loading(
+                    id="gantt-loading",
+                    type="default",
+                    color="var(--accent)",
+                    children=html.Div(id="gantt-chart",
+                                      style={"overflowY": "auto", "maxHeight": "680px"}),
+                ),
             ], style={
                 "background": CD, "border": f"1px solid {BD}",
                 "borderRadius": "12px", "padding": "14px 0 0",
@@ -5043,28 +5185,17 @@ def _reset_tracker_sid_on_close(is_open):
     return no_update
 
 
-# ── 16a. Gantt window navigation ─────────────────────────────────────────────
+# ── 16a. Gantt window label (updates when view dropdown changes) ───────────────
 @callback(
-    Output("gantt-window-offset", "data"),
-    Output("gantt-window-label",  "children"),
-    Input("gantt-prev-btn",   "n_clicks"),
-    Input("gantt-next-btn",   "n_clicks"),
-    Input("gantt-today-btn",  "n_clicks"),
-    State("gantt-window-offset", "data"),
-    prevent_initial_call=True,
+    Output("gantt-window-label", "children"),
+    Input("gantt-view-select",   "value"),
 )
-def _gantt_nav(prev_n, next_n, today_n, offset):
-    offset = offset or 0
-    tid    = ctx.triggered_id
-    if   tid == "gantt-today-btn": offset  = 0
-    elif tid == "gantt-prev-btn":  offset -= 1
-    elif tid == "gantt-next-btn":  offset += 1
-    _, _, label = _gantt_window(offset)
-    return offset, label
+def _gantt_label(view):
+    _, _, label = _gantt_window(view or "0-12")
+    return f" · {label}"
 
 
 # ── 16b. Unified Gantt toggle — external JS (assets/gantt_toggle.js) ──────────
-# Using ClientsideFunction avoids Dash 4.0 inline-script hash mismatch issues.
 clientside_callback(
     ClientsideFunction(namespace="gantt", function_name="toggle"),
     Output("gantt-expanded", "data"),
@@ -5074,20 +5205,21 @@ clientside_callback(
 )
 
 
-# ── 16c. Gantt chart render (fires on nav + tab switch to devcap) ─────────────
+# ── 16c. Gantt chart render ────────────────────────────────────────────────────
 @callback(
     Output("gantt-chart", "children"),
-    Input("gantt-window-offset", "data"),
+    Input("gantt-view-select",   "value"),
     Input("plan-main-tab",       "data"),
     Input("gantt-dev-filter",    "value"),
     Input("gantt-type-filter",   "value"),
     Input("gantt-prio-filter",   "value"),
+    Input("gantt-year-filter",   "value"),
     State("gantt-expanded",      "data"),
 )
-def _gantt_render(offset, active_tab, dev_filter, type_filter, prio_filter, expanded):
+def _gantt_render(view, active_tab, dev_filter, type_filter, prio_filter, year_filter, expanded):
     if ctx.triggered_id == "plan-main-tab" and active_tab != "devcap":
         return no_update
-    ws, we, _ = _gantt_window(offset or 0)
+    ws, we, _ = _gantt_window(view or "0-12")
     return _build_gantt_html(
         ws, we,
         set((expanded or {}).get("s", [])),
@@ -5095,6 +5227,7 @@ def _gantt_render(offset, active_tab, dev_filter, type_filter, prio_filter, expa
         set(dev_filter or []) or None,
         type_filter or "all",
         prio_filter or None,
+        year_filter or None,
     )
 
 

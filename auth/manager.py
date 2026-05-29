@@ -18,18 +18,17 @@ def setup_login_manager(server):
     def load_user(user_id):
         return User.get(int(user_id))
 
-    # Auth disabled — open access for now
-    # @server.before_request
-    # def require_login():
-    #     from flask import request, redirect, url_for, jsonify
-    #     from flask_login import current_user
-    #     public = {"/login", "/logout"}
-    #     path   = request.path
-    #     if path in public or path.startswith("/assets/"):
-    #         return None
-    #     if not current_user.is_authenticated:
-    #         if path.startswith("/_dash"):
-    #             return jsonify({"error": "unauthenticated"}), 401
-    #         return redirect("/login")
+    @server.before_request
+    def require_login():
+        from flask import request, redirect, jsonify
+        from flask_login import current_user
+        public = {"/login", "/logout"}
+        path   = request.path
+        if path in public or path.startswith("/assets/") or path.startswith("/_reload-hash"):
+            return None
+        if not current_user.is_authenticated:
+            if path.startswith("/_dash"):
+                return jsonify({"error": "unauthenticated"}), 401
+            return redirect("/login")
 
     return login_manager
