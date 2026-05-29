@@ -226,23 +226,43 @@ def _load_standalone_data(yms: list[str]) -> dict:
     return result
 
 
-def _load_cap_agg(yms: list[str]) -> dict:
-    """Pre-computed capacity rows from agg_dev_monthly_capacity.
-    Returns {(dev, ym_str, item_type): {"item_count": int, "estimated_hours": float}}.
+def _load_cap_agg(yms: list[str], cust_filter: str = "All") -> dict:
+    """Capacity hours per (dev, ym_str, item_type).
+
+    cust_filter "All"      → use pre-computed agg_dev_monthly_capacity (fast)
+    cust_filter "Customer" → filter agg_gantt_items by customer_type='Customer'
+    cust_filter "Internal" → filter agg_gantt_items by customer_type='Internal'
     """
     from data.loader import engine
     from sqlalchemy import text as _text
     if not yms:
         return {}
     ym_list = ", ".join(f"'{y}'" for y in yms)
+
     try:
         with engine.connect() as _conn:
-            rows = _conn.execute(_text(
-                f"SELECT main_developer, ym_str, item_type, item_count, estimated_hours "
-                f"FROM agg_dev_monthly_capacity WHERE ym_str IN ({ym_list})"
-            )).fetchall()
+            if cust_filter in ("Customer", "Internal"):
+                # agg_gantt_items has customer_type; derive hours directly
+                rows = _conn.execute(_text(f"""
+                    SELECT main_developer,
+                           '2026-' || LPAD(month_num::TEXT, 2, '0') AS ym_str,
+                           item_type,
+                           COUNT(*)                                  AS item_count,
+                           SUM(COALESCE(original_estimate, 0))       AS estimated_hours
+                    FROM agg_gantt_items
+                    WHERE '2026-' || LPAD(month_num::TEXT, 2, '0') IN ({ym_list})
+                      AND customer_type = '{cust_filter}'
+                      AND main_developer IS NOT NULL
+                    GROUP BY main_developer, ym_str, item_type
+                """)).fetchall()
+            else:
+                rows = _conn.execute(_text(
+                    f"SELECT main_developer, ym_str, item_type, item_count, estimated_hours "
+                    f"FROM agg_dev_monthly_capacity WHERE ym_str IN ({ym_list})"
+                )).fetchall()
     except Exception:
         return {}
+
     result: dict = {}
     for dev, ym, itype, cnt, hrs in rows:
         result[(dev, ym, itype)] = {
@@ -1342,8 +1362,13 @@ def _render_func_timeline(size_filter):
     Input("dcap-view",           "data"),
     Input("dcap-tab",            "data"),
     Input("dcap-gantt-show-all", "data"),
+    Input("gantt-cust-filter",   "value"),
 )
-def _render(view, tab, show_all):
+def _render(view, tab, show_all, cust_filter):
+    cust_filter = cust_filter or "all"
+    # Normalise to title-case for _load_cap_agg ("All"/"Customer"/"Internal")
+    cust_key = {"customer": "Customer", "internal": "Internal"}.get(cust_filter.lower(), "All")
+
     m012 = _months012()
     yms  = [_ym(d) for d in m012]
     lbls = [d.strftime("%b") for d in m012]
@@ -1353,7 +1378,7 @@ def _render(view, tab, show_all):
     all_yms   = list(dict.fromkeys([*yms, *fy_months]))  # M012 first, then rest, deduped
 
     # Pre-computed capacity + top items (replaces per-cell _dev_month_items calls)
-    cap_data  = _load_cap_agg(all_yms)
+    cap_data  = _load_cap_agg(all_yms, cust_key)
     top_items = _load_top_items(yms)
 
     # Load standalone overhead + leave data

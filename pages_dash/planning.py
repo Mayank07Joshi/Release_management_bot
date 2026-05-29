@@ -5201,10 +5201,9 @@ clientside_callback(
     Input("plan-main-tab",      "data"),
     Input("gantt-type-filter",  "value"),
     Input("gantt-prio-filter",  "value"),
-    Input("gantt-cust-filter",  "value"),
     State("gantt-expanded",     "data"),
 )
-def _gantt_render(view, active_tab, type_filter, prio_filter, cust_filter, expanded):
+def _gantt_render(view, active_tab, type_filter, prio_filter, expanded):
     if ctx.triggered_id == "plan-main-tab" and active_tab != "devcap":
         return no_update
     ws, we, _ = _gantt_window(view or "0-12")
@@ -5216,5 +5215,5 @@ def _gantt_render(view, active_tab, type_filter, prio_filter, cust_filter, expan
         type_filter=type_filter or "all",
         prio_filter=prio_filter or None,
         year_filter=None,
-        cust_filter=cust_filter or "all",
+        cust_filter="all",   # Customer/Internal never filters the Gantt
     )
