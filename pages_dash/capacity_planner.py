@@ -263,9 +263,12 @@ def _load_cap_agg(yms: list[str], cust_filter: str = "All") -> dict:
     except Exception:
         return {}
 
+    # agg_gantt_items uses "enh"; capacity grid expects "enhancement"
+    _ITYPE = {"enh": "enhancement"}
     result: dict = {}
     for dev, ym, itype, cnt, hrs in rows:
-        result[(dev, ym, itype)] = {
+        key = (dev, ym, _ITYPE.get(itype, itype))
+        result[key] = {
             "item_count": int(cnt or 0),
             "estimated_hours": float(hrs or 0),
         }

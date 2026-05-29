@@ -712,7 +712,7 @@ def run_aggregations() -> None:
                        assigned_to, main_developer, story_owner,
                        iteration_path, release_date, function,
                        original_estimate, completed_work, remaining_work,
-                       parent_id
+                       parent_id, type
                 FROM work_items_main
                 WHERE created_date >= '2025-01-01'
                    OR closed_date  >= '2025-01-01'
