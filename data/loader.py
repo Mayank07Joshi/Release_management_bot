@@ -23,7 +23,7 @@ engine = create_engine(CONN_STR, pool_size=10, max_overflow=20)
 # Global cache for data
 _DATA_CACHE = None
 _LAST_LOAD_TIME = 0
-CACHE_TTL = 300  # 5 minutes
+CACHE_TTL = 900  # 15 minutes — matches ADO sync interval
 
 # Separate cache for the expensive DISTINCT ON relations query
 _REL_MAP_CACHE: dict | None = None
@@ -57,25 +57,30 @@ def _load_rel_map() -> dict:
         return _REL_MAP_CACHE
     try:
         with engine.connect() as conn:
+            # UNION instead of OR so Postgres can use the (relation_type, source_id)
+            # and (relation_type, target_id) indexes independently.
             rel_df = pd.read_sql(text("""
-                SELECT DISTINCT ON (t.work_item_id)
-                       t.work_item_id AS task_id,
-                       CASE WHEN rel.source_id = t.work_item_id
-                            THEN rel.target_id
-                            ELSE rel.source_id END AS parent_id
-                FROM work_items_main t
-                JOIN work_items_relations rel
-                    ON rel.relation_type = 'System.LinkTypes.Related'
-                    AND (rel.source_id = t.work_item_id
-                         OR rel.target_id = t.work_item_id)
-                JOIN work_items_main e
-                    ON e.work_item_id = CASE
-                        WHEN rel.source_id = t.work_item_id
-                        THEN rel.target_id ELSE rel.source_id END
-                WHERE t.work_item_type = 'Task'
-                  AND t.parent_id IS NULL
-                  AND e.work_item_type IN ('Enhancement','Bug','Bug_UI','Bug_Text')
-                ORDER BY t.work_item_id, parent_id
+                SELECT DISTINCT task_id, parent_id FROM (
+                    SELECT t.work_item_id AS task_id, rel.target_id AS parent_id
+                    FROM work_items_main t
+                    JOIN work_items_relations rel
+                        ON rel.relation_type = 'System.LinkTypes.Related'
+                        AND rel.source_id = t.work_item_id
+                    JOIN work_items_main e ON e.work_item_id = rel.target_id
+                    WHERE t.work_item_type = 'Task'
+                      AND t.parent_id IS NULL
+                      AND e.work_item_type IN ('Enhancement','Bug','Bug_UI','Bug_Text')
+                    UNION
+                    SELECT t.work_item_id AS task_id, rel.source_id AS parent_id
+                    FROM work_items_main t
+                    JOIN work_items_relations rel
+                        ON rel.relation_type = 'System.LinkTypes.Related'
+                        AND rel.target_id = t.work_item_id
+                    JOIN work_items_main e ON e.work_item_id = rel.source_id
+                    WHERE t.work_item_type = 'Task'
+                      AND t.parent_id IS NULL
+                      AND e.work_item_type IN ('Enhancement','Bug','Bug_UI','Bug_Text')
+                ) _sub
             """), conn)
         result = rel_df.set_index("task_id")["parent_id"].to_dict() if not rel_df.empty else {}
     except Exception as _re:

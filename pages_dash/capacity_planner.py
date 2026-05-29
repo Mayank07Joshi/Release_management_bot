@@ -423,7 +423,9 @@ def _cell_content(items: list, enh_h: float, issue_h: float, capacity: float,
                   pressure_mode: bool = False, remaining_h: float = None,
                   standalone_h: float = 0.0):
     total  = enh_h + issue_h + standalone_h
-    denom  = remaining_h if (pressure_mode and remaining_h is not None) else capacity
+    # Headline % always uses full month capacity so M0 is comparable to M1/M2.
+    # Using remaining_h produced nonsensical values (e.g. 1572%) near month-end.
+    pct_denom = capacity
 
     if pressure_mode and (remaining_h is None or remaining_h == 0):
         return html.Div([
@@ -432,11 +434,13 @@ def _cell_content(items: list, enh_h: float, issue_h: float, capacity: float,
             html.Div("0h left", style={"fontSize": "11px", "color": "#4b5563"}),
         ], style={"padding": "14px 16px"})
 
-    pct   = round(total / denom * 100) if denom > 0 else 0
+    pct   = round(total / pct_denom * 100) if pct_denom > 0 else 0
     pct_c = _RED if pct > 100 else (_GOLD if pct >= 80 else _GREEN)
 
     feat_h = enh_h + issue_h
-    free_h = denom - feat_h - standalone_h  # negative = over-allocated
+    # Remaining uses remaining_h for live sprint view, full capacity otherwise
+    bar_denom = remaining_h if (pressure_mode and remaining_h) else capacity
+    free_h = bar_denom - feat_h - standalone_h  # negative = over-allocated
 
     top   = sorted(items, key=lambda x: -x["dev_h"])[:2]
     extra = len(items) - 2
@@ -463,7 +467,7 @@ def _cell_content(items: list, enh_h: float, issue_h: float, capacity: float,
     ) if pressure_mode else None
 
     def _section_row(label, h, clr):
-        w = min(h / denom * 100, 100) if denom > 0 else 0
+        w = min(h / bar_denom * 100, 100) if bar_denom > 0 else 0
         return html.Div([
             html.Span(label, style={
                 "fontSize": "9px", "color": "#6b7280", "letterSpacing": "0.5px",

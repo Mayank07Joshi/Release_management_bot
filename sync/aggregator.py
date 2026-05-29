@@ -235,6 +235,7 @@ def _build_gantt_items(df: pd.DataFrame, conn, m0: int) -> int:
             "has_tasks":         int(r["work_item_id"]) in task_parent_ids,
             "function":          str(r.get("function") or "").replace("Not Specified", "").strip(),
             "priority":          int(float(r.get("priority") or 4)) if r.get("priority") else 4,
+            "customer_type":     str(r.get("type") or "") or None,
         })
 
     conn.execute(text("TRUNCATE agg_gantt_items"))
@@ -245,12 +246,14 @@ def _build_gantt_items(df: pd.DataFrame, conn, m0: int) -> int:
                     (work_item_id, title, work_item_type, item_type, state,
                      iteration_path, month_num, month_label, main_developer,
                      assigned_to, release_date, bar_start, bar_end,
-                     original_estimate, t_done, t_rem, pct, has_tasks, function, priority, refreshed_at)
+                     original_estimate, t_done, t_rem, pct, has_tasks, function, priority,
+                     customer_type, refreshed_at)
                 VALUES
                     (:work_item_id, :title, :work_item_type, :item_type, :state,
                      :iteration_path, :month_num, :month_label, :main_developer,
                      :assigned_to, :release_date, :bar_start, :bar_end,
-                     :original_estimate, :t_done, :t_rem, :pct, :has_tasks, :function, :priority, NOW())
+                     :original_estimate, :t_done, :t_rem, :pct, :has_tasks, :function, :priority,
+                     :customer_type, NOW())
             """),
             rows,
         )

@@ -1772,9 +1772,10 @@ def _build_gantt_html(
     expanded_sprints: set,   # expanded developer keys
     expanded_items: set,     # expanded function keys + expanded item wids
     dev_filter: set | None = None,
-    type_filter: str = "all",        # "all" | "enh" | "bug"
-    prio_filter: list | None = None, # None = all; list of "1","2","3","4+"
-    year_filter: list | None = None, # None = all; list of int years
+    type_filter: str = "all",           # "all" | "enh" | "bug"
+    prio_filter: list | None = None,    # None = all; list of "1","2","3","4+"
+    year_filter: list | None = None,    # None = all; list of int years
+    cust_filter: str = "all",           # "all" | "Customer" | "Internal"
 ) -> html.Div:
     """HTML/CSS Gantt — Developer > Function > Item > Task hierarchy."""
     from data.loader import engine
@@ -1838,6 +1839,9 @@ def _build_gantt_html(
         items_df = items_df[items_df["bar_start"].apply(
             lambda x: x.year if isinstance(x, date) else None
         ).isin(year_filter)]
+
+    if cust_filter and cust_filter != "all" and "customer_type" in items_df.columns:
+        items_df = items_df[items_df["customer_type"].fillna("").str.strip() == cust_filter]
 
     if items_df.empty:
         return _NONE
@@ -3248,6 +3252,17 @@ def _build_full_layout():
                             multi=True,
                             placeholder="All priorities…",
                             style={"minWidth": "150px", "fontSize": "12px"},
+                        ),
+                        dcc.Dropdown(
+                            id="gantt-cust-filter",
+                            options=[
+                                {"label": "All types",  "value": "all"},
+                                {"label": "Customer",   "value": "Customer"},
+                                {"label": "Internal",   "value": "Internal"},
+                            ],
+                            value="all",
+                            clearable=False,
+                            style={"minWidth": "130px", "fontSize": "12px"},
                         ),
                     ], style={"display": "flex", "alignItems": "center", "gap": "8px", "flexWrap": "wrap"}),
                 ], style={"display": "flex", "justifyContent": "space-between",
@@ -5214,9 +5229,10 @@ clientside_callback(
     Input("gantt-type-filter",   "value"),
     Input("gantt-prio-filter",   "value"),
     Input("gantt-year-filter",   "value"),
+    Input("gantt-cust-filter",   "value"),
     State("gantt-expanded",      "data"),
 )
-def _gantt_render(view, active_tab, dev_filter, type_filter, prio_filter, year_filter, expanded):
+def _gantt_render(view, active_tab, dev_filter, type_filter, prio_filter, year_filter, cust_filter, expanded):
     if ctx.triggered_id == "plan-main-tab" and active_tab != "devcap":
         return no_update
     ws, we, _ = _gantt_window(view or "0-12")
@@ -5228,6 +5244,7 @@ def _gantt_render(view, active_tab, dev_filter, type_filter, prio_filter, year_f
         type_filter or "all",
         prio_filter or None,
         year_filter or None,
+        cust_filter or "all",
     )
 
 
