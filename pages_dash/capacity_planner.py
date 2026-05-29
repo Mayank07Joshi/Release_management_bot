@@ -242,18 +242,32 @@ def _load_cap_agg(yms: list[str], cust_filter: str = "All") -> dict:
     try:
         with engine.connect() as _conn:
             if cust_filter in ("Customer", "Internal"):
-                # agg_gantt_items has customer_type; derive hours directly
+                # Query work_items_main directly so closed/done items are included.
+                # (agg_gantt_items only holds open items — near month-end M0 shows 0.)
+                # Use LIKE for month extraction; regex fails on backslashes in path.
+                month_case = " ".join(
+                    f"WHEN iteration_path LIKE '%Iteration 2026 {ym[5:]}-%%' THEN '{ym}'"
+                    for ym in yms
+                )
                 rows = _conn.execute(_text(f"""
-                    SELECT main_developer,
-                           '2026-' || LPAD(month_num::TEXT, 2, '0') AS ym_str,
-                           item_type,
-                           COUNT(*)                                  AS item_count,
-                           SUM(COALESCE(original_estimate, 0))       AS estimated_hours
-                    FROM agg_gantt_items
-                    WHERE '2026-' || LPAD(month_num::TEXT, 2, '0') IN ({ym_list})
-                      AND customer_type = '{cust_filter}'
+                    SELECT
+                        COALESCE(main_developer, 'Unassigned') AS main_developer,
+                        CASE {month_case} END                  AS ym_str,
+                        CASE WHEN work_item_type IN
+                                  ('Bug','Bug_UI','Bug_Text','Bug_Watchlist')
+                             THEN 'bug' ELSE 'enhancement' END AS item_type,
+                        COUNT(*)                               AS item_count,
+                        SUM(COALESCE(original_estimate, 0))   AS estimated_hours
+                    FROM work_items_main
+                    WHERE work_item_type IN
+                          ('Enhancement','Bug','Bug_UI','Bug_Text','Bug_Watchlist')
+                      AND type = '{cust_filter}'
                       AND main_developer IS NOT NULL
+                      AND (
+                          {'OR '.join(f"iteration_path LIKE '%Iteration 2026 {ym[5:]}-%%'" for ym in yms)}
+                      )
                     GROUP BY main_developer, ym_str, item_type
+                    HAVING CASE {month_case} END IN ({ym_list})
                 """)).fetchall()
             else:
                 rows = _conn.execute(_text(
