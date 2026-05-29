@@ -529,7 +529,7 @@ def _cell_content(items: list, enh_h: float, issue_h: float, capacity: float,
 
 # ── Grid renderers ────────────────────────────────────────────────────────────
 
-def _render_m012_grid(cap_data, top_items, devs, yms, month_labels, view, standalone_data=None):
+def _render_m012_grid(cap_data, top_items, devs, yms, month_labels, view, standalone_data=None, leave_data=None):
     cols = "180px 1fr 1fr 1fr"
 
     banner = html.Div(
@@ -579,6 +579,8 @@ def _render_m012_grid(cap_data, top_items, devs, yms, month_labels, view, standa
                    for i in range(3)]
     dev_rows = []
 
+    ld = leave_data or {"leaves": {}, "holidays": {}}
+
     for dev in devs:
         cap = dev["capacity_h"]
         month_cells = []
@@ -598,18 +600,22 @@ def _render_m012_grid(cap_data, top_items, devs, yms, month_labels, view, standa
             else:
                 display = all_pills
 
-            oh_h = sd.get(dev["name"], {}).get(ym_str, {}).get("total_h", 0.0)
+            oh_h      = sd.get(dev["name"], {}).get(ym_str, {}).get("total_h", 0.0)
+            leave_h   = ld["leaves"].get((dev["name"], ym_str), 0.0)
+            holiday_h = ld["holidays"].get(ym_str, 0.0)
+            eff_cap   = max(0.0, cap - leave_h - holiday_h)
+            eff_rem   = max(0.0, m0_remaining_h - leave_h - holiday_h) if is_m0 else None
 
             team_totals[m_idx]["enh"] += enh_h
             team_totals[m_idx]["iss"] += iss_h
             team_totals[m_idx]["oh"]  += oh_h
-            team_totals[m_idx]["cap"] += cap
+            team_totals[m_idx]["cap"] += eff_cap
 
             month_cells.append(html.Div(
                 _cell_content(
-                    display, enh_h, iss_h, cap,
+                    display, enh_h, iss_h, eff_cap,
                     pressure_mode=is_m0,
-                    remaining_h=m0_remaining_h if is_m0 else None,
+                    remaining_h=eff_rem,
                     standalone_h=oh_h,
                 ),
                 id={"type": "dcap-cell", "dev": dev["name"], "month": ym_str},
@@ -1350,8 +1356,13 @@ def _render(view, tab, show_all):
     cap_data  = _load_cap_agg(all_yms)
     top_items = _load_top_items(yms)
 
-    # Load standalone overhead data
+    # Load standalone overhead + leave data
     standalone_data = _load_standalone_data(yms)
+    try:
+        from db.leaves import get_leave_capacity
+        leave_data = get_leave_capacity(yms)
+    except Exception:
+        leave_data = {"leaves": {}, "holidays": {}}
 
     # KPIs — read from pre-computed table
     m0_cap = sum(d["capacity_h"] for d in devs)
@@ -1389,7 +1400,7 @@ def _render(view, tab, show_all):
         _kpi(f"{fy_free:,.0f}h",      "Full Year Free",      f"{fy_free/fy_cap*100:.0f}% headroom" if fy_cap else "—", _GREEN),
     ]
 
-    grid     = _render_m012_grid(cap_data, top_items, devs, yms, lbls, view, standalone_data) if tab == "012" \
+    grid     = _render_m012_grid(cap_data, top_items, devs, yms, lbls, view, standalone_data, leave_data) if tab == "012" \
                else _render_rest_grid(cap_data, devs, view)
     gantt    = _render_gantt(bool(show_all))
     sub      = (f"{len(devs)} developers · 180h default monthly capacity · "

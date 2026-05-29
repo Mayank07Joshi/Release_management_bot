@@ -68,10 +68,11 @@ app = Dash(
 
 # ── Top nav structure ──────────────────────────────────────────────────────────
 _NAV = [
-    {"label": "Home",            "href": "/",                "icon": "🏠"},
-    {"label": "Summary",         "href": "/summary",         "icon": "📊"},
-    {"label": "Planning Tool",   "href": "/planning",        "icon": "📅"},
-    {"label": "Iteration Audit", "href": "/iteration-audit", "icon": "📋"},
+    {"label": "Home",            "href": "/",                  "icon": "🏠"},
+    {"label": "Summary",         "href": "/summary",           "icon": "📊"},
+    {"label": "Planning Tool",   "href": "/planning",          "icon": "📅"},
+    {"label": "Iteration Audit", "href": "/iteration-audit",   "icon": "📋"},
+    {"label": "Leave Manager",   "href": "/leave-management",  "icon": "📆"},
 ]
 
 topnav = html.Div([
@@ -257,6 +258,12 @@ if __name__ == "__main__":
         init_sprint_history_table()
     except Exception as _e:
         logging.getLogger(__name__).warning("Sprint history table init failed: %s", _e)
+
+    try:
+        from db.leaves import init_leave_tables
+        init_leave_tables()
+    except Exception as _e:
+        logging.getLogger(__name__).warning("Leave table init failed: %s", _e)
 
     try:
         from db.aggregations import init_aggregation_tables
