@@ -3204,42 +3204,26 @@ def _build_full_layout():
                         dcc.Dropdown(
                             id="gantt-view-select",
                             options=[
-                                {"label": "Rolling 12M",  "value": "0-12"},
-                                {"label": "12 – 24M",     "value": "12-24"},
-                                {"label": "24M+",         "value": "24+"},
+                                {"label": "Rolling 12M", "value": "0-12"},
+                                {"label": "12 – 24M",    "value": "12-24"},
+                                {"label": "24M+",        "value": "24+"},
                             ],
                             value="0-12",
                             clearable=False,
+                            className="dark-dropdown",
                             style={"minWidth": "140px", "fontSize": "12px"},
-                        ),
-                        dcc.Dropdown(
-                            id="gantt-year-filter",
-                            options=[
-                                {"label": "2025", "value": 2025},
-                                {"label": "2026", "value": 2026},
-                                {"label": "2027", "value": 2027},
-                            ],
-                            multi=True,
-                            placeholder="All years…",
-                            style={"minWidth": "130px", "fontSize": "12px"},
-                        ),
-                        dcc.Dropdown(
-                            id="gantt-dev-filter",
-                            multi=True,
-                            placeholder="All developers…",
-                            options=[],
-                            style={"minWidth": "190px", "fontSize": "12px"},
                         ),
                         dcc.Dropdown(
                             id="gantt-type-filter",
                             options=[
-                                {"label": "All types",    "value": "all"},
+                                {"label": "All work",     "value": "all"},
                                 {"label": "Enhancements", "value": "enh"},
                                 {"label": "Bugs",         "value": "bug"},
                             ],
                             value="all",
                             clearable=False,
-                            style={"minWidth": "130px", "fontSize": "12px"},
+                            className="dark-dropdown",
+                            style={"minWidth": "140px", "fontSize": "12px"},
                         ),
                         dcc.Dropdown(
                             id="gantt-prio-filter",
@@ -3251,18 +3235,8 @@ def _build_full_layout():
                             ],
                             multi=True,
                             placeholder="All priorities…",
+                            className="dark-dropdown",
                             style={"minWidth": "150px", "fontSize": "12px"},
-                        ),
-                        dcc.Dropdown(
-                            id="gantt-cust-filter",
-                            options=[
-                                {"label": "All types",  "value": "all"},
-                                {"label": "Customer",   "value": "Customer"},
-                                {"label": "Internal",   "value": "Internal"},
-                            ],
-                            value="all",
-                            clearable=False,
-                            style={"minWidth": "130px", "fontSize": "12px"},
                         ),
                     ], style={"display": "flex", "alignItems": "center", "gap": "8px", "flexWrap": "wrap"}),
                 ], style={"display": "flex", "justifyContent": "space-between",
@@ -5223,16 +5197,14 @@ clientside_callback(
 # ── 16c. Gantt chart render ────────────────────────────────────────────────────
 @callback(
     Output("gantt-chart", "children"),
-    Input("gantt-view-select",   "value"),
-    Input("plan-main-tab",       "data"),
-    Input("gantt-dev-filter",    "value"),
-    Input("gantt-type-filter",   "value"),
-    Input("gantt-prio-filter",   "value"),
-    Input("gantt-year-filter",   "value"),
-    Input("gantt-cust-filter",   "value"),
-    State("gantt-expanded",      "data"),
+    Input("gantt-view-select",  "value"),
+    Input("plan-main-tab",      "data"),
+    Input("gantt-type-filter",  "value"),
+    Input("gantt-prio-filter",  "value"),
+    Input("gantt-cust-filter",  "value"),
+    State("gantt-expanded",     "data"),
 )
-def _gantt_render(view, active_tab, dev_filter, type_filter, prio_filter, year_filter, cust_filter, expanded):
+def _gantt_render(view, active_tab, type_filter, prio_filter, cust_filter, expanded):
     if ctx.triggered_id == "plan-main-tab" and active_tab != "devcap":
         return no_update
     ws, we, _ = _gantt_window(view or "0-12")
@@ -5240,27 +5212,9 @@ def _gantt_render(view, active_tab, dev_filter, type_filter, prio_filter, year_f
         ws, we,
         set((expanded or {}).get("s", [])),
         set((expanded or {}).get("t", [])),
-        set(dev_filter or []) or None,
-        type_filter or "all",
-        prio_filter or None,
-        year_filter or None,
-        cust_filter or "all",
+        dev_filter=None,
+        type_filter=type_filter or "all",
+        prio_filter=prio_filter or None,
+        year_filter=None,
+        cust_filter=cust_filter or "all",
     )
-
-
-# ── 16d. Populate developer filter options ────────────────────────────────────
-@callback(
-    Output("gantt-dev-filter", "options"),
-    Input("plan-main-tab", "data"),
-)
-def _gantt_dev_options(active_tab):
-    if active_tab != "devcap":
-        return no_update
-    from data.loader import engine
-    from sqlalchemy import text as _text
-    with engine.connect() as _conn:
-        rows = _conn.execute(
-            _text("SELECT DISTINCT main_developer FROM agg_gantt_items WHERE main_developer IS NOT NULL ORDER BY main_developer")
-        ).fetchall()
-    devs = [r[0] for r in rows if r[0] and r[0] not in ("nan", "None", "Unassigned", "")]
-    return [{"label": d, "value": d} for d in devs]

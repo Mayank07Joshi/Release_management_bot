@@ -1043,6 +1043,7 @@ def layout():
 
         # ── Top: VIEW filter (sticky) ─────────────────────────────────────────
         html.Div([
+            # Work item type buttons
             html.Span("VIEW", style={
                 "fontSize": "11px", "color": "#6b7280", "marginRight": "8px",
                 "textTransform": "uppercase", "letterSpacing": "1px",
@@ -1053,6 +1054,36 @@ def layout():
                         className="dcap-view-btn"),
             html.Button("Issues",       id="dcap-btn-iss", n_clicks=0,
                         className="dcap-view-btn"),
+
+            # Divider
+            html.Div(style={
+                "width": "1px", "height": "16px",
+                "background": "rgba(255,255,255,0.08)",
+                "margin": "0 12px",
+            }),
+
+            # Customer / Internal radio buttons
+            html.Span("TYPE", style={
+                "fontSize": "11px", "color": "#6b7280", "marginRight": "8px",
+                "textTransform": "uppercase", "letterSpacing": "1px",
+            }),
+            dcc.RadioItems(
+                id="gantt-cust-filter",
+                options=[
+                    {"label": "All",      "value": "all"},
+                    {"label": "Customer", "value": "Customer"},
+                    {"label": "Internal", "value": "Internal"},
+                ],
+                value="all",
+                inline=True,
+                inputStyle={"marginRight": "5px", "cursor": "pointer", "accentColor": "#818cf8"},
+                labelStyle={
+                    "marginRight": "14px", "fontSize": "12px",
+                    "color": "#c8c8e0", "cursor": "pointer",
+                },
+            ),
+
+            # Legend (right-aligned)
             html.Div([
                 html.Span("■ ", style={"color": _GOLD, "fontSize": "10px"}),
                 html.Span("Enh  ", style={"fontSize": "12px", "color": "#8892a4"}),
