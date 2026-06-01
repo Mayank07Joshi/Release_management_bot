@@ -502,10 +502,10 @@ def _sync_production_bugs(engine) -> int:
 
     sql_upsert = text("""
         INSERT INTO p_bugs
-            (ado_id, title, bug_type, priority, severity, state,
+            (ado_id, bug_ref, title, bug_type, priority, severity, state,
              area, func, found_in_iteration)
         VALUES
-            (:ado_id, :title, :bug_type, :priority, :severity, :state,
+            (:ado_id, :bug_ref, :title, :bug_type, :priority, :severity, :state,
              :area, :func, :found_in_iteration)
         ON CONFLICT (ado_id) WHERE ado_id IS NOT NULL DO UPDATE SET
             title              = EXCLUDED.title,
@@ -540,6 +540,7 @@ def _sync_production_bugs(engine) -> int:
     records = [
         {
             "ado_id":             r.work_item_id,
+            "bug_ref":            f"BUG-{r.work_item_id}",
             "title":              r.title,
             "bug_type":           _BUG_TYPE_MAP.get(r.work_item_type, "functional"),
             "priority":           r.priority,
