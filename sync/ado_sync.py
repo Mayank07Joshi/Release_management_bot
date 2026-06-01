@@ -507,7 +507,7 @@ def _sync_production_bugs(engine) -> int:
         VALUES
             (:ado_id, :title, :bug_type, :priority, :severity, :state,
              :area, :func, :found_in_iteration)
-        ON CONFLICT (ado_id) DO UPDATE SET
+        ON CONFLICT (ado_id) WHERE ado_id IS NOT NULL DO UPDATE SET
             title              = EXCLUDED.title,
             state              = EXCLUDED.state,
             severity           = EXCLUDED.severity,
