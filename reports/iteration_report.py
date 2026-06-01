@@ -142,10 +142,14 @@ def _load(ym_str: str) -> dict:
     # ── P1/P2 bugs ────────────────────────────────────────────────────────────
     hi_prio_bugs = bugs[bugs["priority"] <= 2].copy()
 
-    # ── Estimation gaps ───────────────────────────────────────────────────────
-    unest = items[items["original_estimate"] == 0].copy()
+    # ── Estimation gaps — only items past planning (dev has them) ────────────
+    # Items still in New/Clarification/Request Estimate/On Hold haven't been
+    # handed to a developer yet, so no estimate is expected.
+    past_planning = items[~items["is_planning"]].copy()
+    unest = past_planning[past_planning["original_estimate"] == 0].copy()
 
     # ── Carry-forward (items not fully done) ─────────────────────────────────
+    past_planning_n = len(past_planning)
     carry = items[~items["is_fully_done"]].copy()
 
     # ── Reopened items ────────────────────────────────────────────────────────
@@ -179,8 +183,9 @@ def _load(ym_str: str) -> dict:
         # Special
         hi_prio_bugs  = hi_prio_bugs,
         unest         = unest,
-        carry         = carry,
-        reopened      = reopened,
+        carry           = carry,
+        reopened        = reopened,
+        past_planning_n = past_planning_n,
     )
 
 
@@ -283,7 +288,7 @@ def _findings(d: dict) -> list[dict]:
     enh_del_pct = _pct(d["enh_delivered"], d["enh_total"])
     bug_del_pct = _pct(d["bug_delivered"], d["bug_total"])
     scope_pct   = _pct(d["mid_sprint_n"],  d["total_n"])
-    est_cov_pct = _pct(d["total_n"] - len(d["unest"]), d["total_n"])
+    est_cov_pct = _pct(d["past_planning_n"] - len(d["unest"]), d["past_planning_n"])
     carry_pct   = _pct(len(d["carry"]),    d["total_n"])
     hi_open     = len(d["hi_prio_bugs"][~d["hi_prio_bugs"]["is_dev_delivered"]])
     reop_n      = len(d["reopened"])
@@ -361,9 +366,10 @@ def _findings(d: dict) -> list[dict]:
         findings.append(dict(
             level="MEDIUM", color="#D97706", bg="#FFFBEB",
             title="Low Estimation Coverage",
-            body=(f"Only {d['total_n'] - len(d['unest'])} of {d['total_n']} sprint items "
-                  f"carry an estimate ({est_cov_pct}%). Unestimated items make capacity "
-                  f"planning unreliable."),
+            body=(f"Only {d['past_planning_n'] - len(d['unest'])} of {d['past_planning_n']} "
+                  f"items past the planning stage carry an estimate ({est_cov_pct}%). "
+                  f"Items still in planning (New / Clarification / Request Estimate) are excluded. "
+                  f"Unestimated active items make capacity planning unreliable."),
             rec="Require estimates before any item moves to Active or Dev InProgress. Use the Unestimated Items view to track this each sprint."
         ))
 
@@ -401,7 +407,7 @@ def generate_iteration_report(ym_str: str) -> str:
     enh_del_pct = _pct(d["enh_delivered"], d["enh_total"])
     bug_del_pct = _pct(d["bug_delivered"], d["bug_total"])
     scope_pct   = _pct(d["mid_sprint_n"],  d["total_n"])
-    est_cov_pct = _pct(d["total_n"] - len(d["unest"]), d["total_n"])
+    est_cov_pct = _pct(d["past_planning_n"] - len(d["unest"]), d["past_planning_n"])
 
     # ── KPI cards ────────────────────────────────────────────────────────────
     _, _, _, del_rag = _rag(enh_del_pct, 70, 40)
@@ -421,7 +427,7 @@ def generate_iteration_report(ym_str: str) -> str:
       {_kpi("Scope Creep", f"{scope_pct}%",
             f"{d['mid_sprint_n']} of {d['total_n']} items added mid-sprint", sc_c)}
       {_kpi("Estimation Coverage", f"{est_cov_pct}%",
-            f"{d['total_n'] - len(d['unest'])} of {d['total_n']} items estimated", est_c)}
+            f"{d['past_planning_n'] - len(d['unest'])} of {d['past_planning_n']} active items estimated", est_c)}
     </div>"""
 
     # ── Reopened alert strip ─────────────────────────────────────────────────
