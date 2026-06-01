@@ -741,7 +741,7 @@ def generate_iteration_report(ym_str: str) -> str:
       background: #F9FAFB; color: #111827; font-size: 14px; line-height: 1.5;
       -webkit-print-color-adjust: exact; print-color-adjust: exact;
     }}
-    .page {{ max-width: 1100px; margin: 0 auto; padding: 0 32px 60px; }}
+    .page {{ padding: 0 48px 60px; }}
     details summary::-webkit-details-marker {{ display: none; }}
     a {{ color: #2563EB; }}
     @media print {{
@@ -753,7 +753,7 @@ def generate_iteration_report(ym_str: str) -> str:
 <body>
   <div style="background:linear-gradient(135deg,#1E3A5F 0%,#2563EB 100%);
               color:#fff;padding:48px 64px 40px;">
-    <div style="max-width:1100px;margin:0 auto;">
+    <div style="padding:0 16px;">
       <div style="font-size:11px;font-weight:700;letter-spacing:3px;
                   text-transform:uppercase;opacity:0.7;margin-bottom:12px;">
         EXPENSE ON DEMAND · INTERNAL MANAGEMENT REPORT
