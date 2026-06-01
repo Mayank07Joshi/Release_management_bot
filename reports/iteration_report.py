@@ -142,11 +142,12 @@ def _load(ym_str: str) -> dict:
     # ── P1/P2 bugs ────────────────────────────────────────────────────────────
     hi_prio_bugs = bugs[bugs["priority"] <= 2].copy()
 
-    # ── Estimation gaps — only items past planning (dev has them) ────────────
-    # Items still in New/Clarification/Request Estimate/On Hold haven't been
-    # handed to a developer yet, so no estimate is expected.
-    past_planning = items[~items["is_planning"]].copy()
-    unest = past_planning[past_planning["original_estimate"] == 0].copy()
+    # ── Estimation gaps ───────────────────────────────────────────────────────
+    # Compliance = items past planning that have no estimate (dev has them, should be estimated).
+    # Planning items shown separately — they're awaiting estimation by design.
+    past_planning  = items[~items["is_planning"]].copy()
+    unest          = past_planning[past_planning["original_estimate"] == 0].copy()
+    planning_unest = items[items["is_planning"] & (items["original_estimate"] == 0)].copy()
 
     # ── Carry-forward (items not fully done) ─────────────────────────────────
     past_planning_n = len(past_planning)
@@ -186,6 +187,7 @@ def _load(ym_str: str) -> dict:
         carry           = carry,
         reopened        = reopened,
         past_planning_n = past_planning_n,
+        planning_unest  = planning_unest,
     )
 
 
@@ -632,22 +634,48 @@ def generate_iteration_report(ym_str: str) -> str:
     )
 
     # ── Estimation gaps ──────────────────────────────────────────────────────
-    unest_rows = []
-    for _, row in d["unest"].sort_values("main_developer").head(25).iterrows():
-        unest_rows.append([
-            row["work_item_type"],
-            f'{_ado_link(row["work_item_id"])} <span style="font-size:12px;">{str(row["title"])[:68]}</span>',
-            row["main_developer"],
-            row["state"],
-        ])
-    est_content = (
-        f'<p style="font-size:13px;color:#374151;margin-bottom:12px;">'
-        f'{len(d["unest"])} item(s) have no estimate. '
-        f'{"Showing top 25." if len(d["unest"]) > 25 else ""}</p>'
-        + _table(["Type","Title","Developer","State"], unest_rows)
-        if unest_rows else
-        '<p style="color:#059669;font-size:13px;">All sprint items carry an estimate. ✓</p>'
-    )
+    def _est_rows(df, limit=25):
+        rows = []
+        for _, row in df.sort_values("main_developer").head(limit).iterrows():
+            rows.append([
+                row["work_item_type"],
+                f'{_ado_link(row["work_item_id"])} <span style="font-size:12px;">{str(row["title"])[:68]}</span>',
+                row["main_developer"],
+                row["state"],
+            ])
+        return rows
+
+    # Active items missing estimates (compliance metric)
+    unest_rows = _est_rows(d["unest"])
+    if unest_rows:
+        active_block = (
+            f'<p style="font-size:13px;color:#374151;margin-bottom:8px;">'
+            f'<strong style="color:#DC2626;">{len(d["unest"])} active item(s)</strong> '
+            f'with no estimate — dev has these but they are unestimated. '
+            f'{"Showing top 25." if len(d["unest"]) > 25 else ""}</p>'
+            + _table(["Type", "Title", "Developer", "State"], unest_rows)
+        )
+    else:
+        active_block = '<p style="color:#059669;font-size:13px;margin-bottom:16px;">All active items carry an estimate. ✓</p>'
+
+    # Planning items without estimates (informational, not penalised)
+    pu_rows = _est_rows(d["planning_unest"])
+    if pu_rows:
+        planning_block = (
+            f'<details style="margin-top:4px;">'
+            f'<summary style="cursor:pointer;font-size:12px;color:#6B7280;font-weight:600;'
+            f'padding:6px 0;user-select:none;">'
+            f'▸ {len(d["planning_unest"])} planning-stage item(s) also unestimated '
+            f'<span style="font-weight:400;">(not counted in compliance — dev hasn\'t received these yet)</span>'
+            f'</summary>'
+            f'<div style="margin-top:8px;">'
+            + _table(["Type", "Title", "Developer", "State"], pu_rows)
+            + '</div></details>'
+        )
+    else:
+        planning_block = ""
+
+    est_content = active_block + planning_block
 
     # ── Carry-forward ────────────────────────────────────────────────────────
     carry_rows = []
