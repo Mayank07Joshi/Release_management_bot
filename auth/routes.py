@@ -2,7 +2,7 @@
 Flask routes for login and logout.
 Registered on app.server (the underlying Flask app).
 """
-from flask import render_template_string, request, redirect, url_for, session
+from flask import render_template_string, request, redirect, url_for, session, Response
 from flask_login import login_user, logout_user, current_user
 from werkzeug.security import check_password_hash
 from auth.models import User
@@ -150,3 +150,22 @@ def register_auth_routes(server):
     def logout():
         logout_user()
         return redirect("/login")
+
+    @server.route("/download-report")
+    def download_report():
+        if not current_user.is_authenticated:
+            return redirect("/login")
+        ym_str = request.args.get("sprint", "")
+        if not ym_str or len(ym_str) != 7:
+            return "Missing or invalid sprint parameter (expected YYYY-MM)", 400
+        try:
+            from reports.iteration_report import generate_iteration_report
+            html = generate_iteration_report(ym_str)
+            filename = f"sprint_report_{ym_str}.html"
+            return Response(
+                html,
+                mimetype="text/html",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
+        except Exception as e:
+            return f"Report generation failed: {e}", 500

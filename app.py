@@ -73,6 +73,7 @@ _NAV = [
     {"label": "Planning Tool",   "href": "/planning",          "icon": "📅"},
     {"label": "Iteration Audit", "href": "/iteration-audit",   "icon": "📋"},
     {"label": "Leave Manager",   "href": "/leave-management",  "icon": "📆"},
+    {"label": "Reports",         "href": "/reports",           "icon": "📄"},
 ]
 
 topnav = html.Div([
