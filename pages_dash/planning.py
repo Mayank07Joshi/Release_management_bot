@@ -4557,6 +4557,7 @@ def _unest_matrix_toggle(cell_clicks, close_click, backdrop_click):
     Output("unest-panel-body",  "children"),
     Input("unest-panel-filter", "data"),
     State("plan-unest-store",   "data"),
+    prevent_initial_call=True,
 )
 def _unest_matrix_panel(cell_sel, items):
     if not cell_sel or not items:
@@ -5178,6 +5179,7 @@ def _reset_tracker_sid_on_close(is_open):
 @callback(
     Output("gantt-window-label", "children"),
     Input("gantt-view-select",   "value"),
+    prevent_initial_call=True,
 )
 def _gantt_label(view):
     _, _, label = _gantt_window(view or "0-12")
@@ -5202,9 +5204,10 @@ clientside_callback(
     Input("gantt-type-filter",  "value"),
     Input("gantt-prio-filter",  "value"),
     State("gantt-expanded",     "data"),
+    prevent_initial_call=True,
 )
 def _gantt_render(view, active_tab, type_filter, prio_filter, expanded):
-    if ctx.triggered_id == "plan-main-tab" and active_tab != "devcap":
+    if active_tab != "devcap":
         return no_update
     ws, we, _ = _gantt_window(view or "0-12")
     return _build_gantt_html(
