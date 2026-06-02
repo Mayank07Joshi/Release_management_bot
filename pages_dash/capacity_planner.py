@@ -8,9 +8,21 @@ import pandas as pd
 from datetime import date
 import calendar
 
-
 from config.dev_capacity import DEVELOPERS, DEV_MAP
 from config.settings import ADO_BASE_URL
+
+# ── UI render cache ───────────────────────────────────────────────────────────
+# Keyed on (view, tab, show_all, cust_key, bust_counter).
+# The bust counter comes from data.loader.get_ui_cache_bust() — increments
+# every time the aggregator runs or leave data changes.  Old keys are simply
+# never hit; _prune() clears them to avoid unbounded growth.
+_RENDER_CACHE: dict = {}
+
+
+def _prune(current_bust: int) -> None:
+    stale = [k for k in _RENDER_CACHE if k[-1] != current_bust]
+    for k in stale:
+        del _RENDER_CACHE[k]
 
 dash.register_page(__name__, path="/dev-capacity", name="Developer Capacity")
 
@@ -1383,8 +1395,16 @@ def _render_func_timeline(size_filter):
 )
 def _render(view, tab, show_all, cust_filter):
     cust_filter = cust_filter or "all"
-    # Normalise to title-case for _load_cap_agg ("All"/"Customer"/"Internal")
     cust_key = {"customer": "Customer", "internal": "Internal"}.get(cust_filter.lower(), "All")
+
+    # ── Cache check ───────────────────────────────────────────────────────────
+    from data.loader import get_ui_cache_bust
+    bust = get_ui_cache_bust()
+    cache_key = (view, tab, bool(show_all), cust_key, bust)
+    if cache_key in _RENDER_CACHE:
+        _prune(bust)
+        return _RENDER_CACHE[cache_key]
+    # ─────────────────────────────────────────────────────────────────────────
 
     m012 = _months012()
     yms  = [_ym(d) for d in m012]
@@ -1449,7 +1469,10 @@ def _render(view, tab, show_all, cust_filter):
                 "Click any cell for M0/M1/M2 detail · Purple bar = standalone overhead")
     overhead = _render_overhead_section(standalone_data, devs, yms[0])
 
-    return kpis, grid, gantt, sub, overhead
+    result = kpis, grid, gantt, sub, overhead
+    _RENDER_CACHE[cache_key] = result
+    _prune(bust)
+    return result
 
 
 @callback(

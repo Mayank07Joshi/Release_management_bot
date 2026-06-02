@@ -273,6 +273,7 @@ def _add_holiday(n, hol_date, name):
     user = current_user.display_name if current_user.is_authenticated else "system"
     added = add_holiday(d, name.strip(), user)
     if added:
+        from data.loader import bust_ui_cache; bust_ui_cache()
         return f"Holiday '{name.strip()}' added for {d.strftime('%d %b %Y')}.", \
                {"color": _GR}, n
     return "That date already has a holiday entry.", {"color": _AM}, no_update
@@ -317,6 +318,7 @@ def _add_leave(n, dev, leave_type, duration, mode, single_d, range_start, range_
 
     user = current_user.display_name if current_user.is_authenticated else "system"
     added = add_dev_leave(dev, dates, leave_type, hours, user)
+    from data.loader import bust_ui_cache; bust_ui_cache()
     day_word = "day" if added == 1 else "days"
     return (f"{added} leave {day_word} added for {dev} "
             f"({'half' if duration == 'half' else 'full'} day · {leave_type})."), \
@@ -335,6 +337,7 @@ def _render_hol_table(refresh, del_clicks):
     if isinstance(triggered, dict) and triggered.get("type") == "lm-del-hol":
         if any(c for c in (del_clicks or []) if c):
             delete_holiday(triggered["id"])
+            from data.loader import bust_ui_cache; bust_ui_cache()
 
     rows = get_holidays()
     if not rows:
@@ -388,6 +391,7 @@ def _render_leave_table(refresh, filter_dev, del_clicks):
     if isinstance(triggered, dict) and triggered.get("type") == "lm-del-leave":
         if any(c for c in (del_clicks or []) if c):
             delete_dev_leave(triggered["id"])
+            from data.loader import bust_ui_cache; bust_ui_cache()
 
     dev = None if (not filter_dev or filter_dev == "all") else filter_dev
     rows = get_dev_leaves(developer_name=dev)

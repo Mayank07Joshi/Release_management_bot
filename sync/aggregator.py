@@ -765,3 +765,10 @@ def run_aggregations() -> None:
     elapsed = round(time.time() - t0, 2)
     summary = ", ".join(f"{k}={v}" for k, v in results.items())
     log.info("✅ Aggregator complete in %ss — %s", elapsed, summary)
+
+    # Invalidate all cached UI renders — data has changed
+    try:
+        from data.loader import bust_ui_cache
+        bust_ui_cache()
+    except Exception:
+        pass

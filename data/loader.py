@@ -25,6 +25,20 @@ _DATA_CACHE = None
 _LAST_LOAD_TIME = 0
 CACHE_TTL = 900  # 15 minutes — matches ADO sync interval
 
+# UI render cache bust signal — incremented whenever underlying data changes.
+# Pages that cache rendered HTML compare against this; a change means rebuild.
+_UI_CACHE_BUST: int = 0
+
+
+def bust_ui_cache() -> None:
+    """Signal that data has changed — all cached UI renders are now stale."""
+    global _UI_CACHE_BUST
+    _UI_CACHE_BUST += 1
+
+
+def get_ui_cache_bust() -> int:
+    return _UI_CACHE_BUST
+
 # Separate cache for the expensive DISTINCT ON relations query
 _REL_MAP_CACHE: dict | None = None
 _REL_MAP_TIME: float = 0
