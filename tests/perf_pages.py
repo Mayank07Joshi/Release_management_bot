@@ -19,12 +19,18 @@ from __future__ import annotations
 import sys, os, time, json, statistics
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-BASE   = "http://localhost:8050"
-CREDS  = {"username": "mayank", "password": "mayank123"}
-N_REPS = 3   # HTTP samples per endpoint
-BAR    = "=" * 70
-SEP    = "-" * 70
+BASE      = "http://127.0.0.1:8050"   # avoid Windows IPv6→IPv4 fallback (~2s penalty)
+N_REPS    = 3
+BAR       = "=" * 70
+SEP       = "-" * 70
 NO_SERVER = "--no-server" in sys.argv
+
+# Password: pass --password=yourpassword  OR set env var PERF_PASSWORD
+_pw_arg = next((a.split("=",1)[1] for a in sys.argv if a.startswith("--password=")), None)
+CREDS = {
+    "username": "mayank",
+    "password": _pw_arg or os.environ.get("PERF_PASSWORD", ""),
+}
 
 # ── colour/tag helpers ─────────────────────────────────────────────────────────
 def _tag(ms, warn=1000, bad=3000):
@@ -179,6 +185,7 @@ def layer2_http(session):
 
 def _cb(session, output_id, output_prop, inputs, changed_id):
     """Fire a Dash callback and return (status_code, elapsed_ms, response_kb)."""
+    import requests as _req
     body = {
         "output":          f"{output_id}.{output_prop}",
         "outputs":         {"id": output_id, "property": output_prop},
@@ -186,15 +193,22 @@ def _cb(session, output_id, output_prop, inputs, changed_id):
         "changedPropIds":  [changed_id],
         "state":           [],
     }
-    t0 = time.perf_counter()
-    r  = session.post(
-        f"{BASE}/_dash-update-component",
-        json=body,
-        headers={"Content-Type": "application/json"},
-        timeout=60,
-    )
-    ms = (time.perf_counter()-t0)*1000
-    return r.status_code, ms, len(r.content)/1024
+    time.sleep(0.3)   # small gap — debug server is single-threaded
+    for attempt in range(3):
+        try:
+            t0 = time.perf_counter()
+            r  = session.post(
+                f"{BASE}/_dash-update-component",
+                json=body,
+                headers={"Content-Type": "application/json"},
+                timeout=60,
+            )
+            ms = (time.perf_counter()-t0)*1000
+            return r.status_code, ms, len(r.content)/1024
+        except (_req.exceptions.ConnectionError, _req.exceptions.Timeout):
+            if attempt == 2:
+                return 0, -1, 0
+            time.sleep(1)
 
 
 def layer3_callbacks(session):

@@ -3743,6 +3743,7 @@ def _ba_type_filter(n_clicks):
     Output("enh-section", "style"),
     Output("bug-section", "style"),
     Input("ba-type-f", "data"),
+    prevent_initial_call=True,
 )
 def _toggle_ba_section(ba_type):
     if ba_type == "Issues":
@@ -3857,6 +3858,7 @@ def _chip_style(active, size="md", color=None):
     Output({"type": "dev-chip", "dev": ALL}, "style"),
     Input("plan-dev-filter", "data"),
     State({"type": "dev-chip", "dev": ALL}, "id"),
+    prevent_initial_call=True,
 )
 def _update_dev_chips(active, chip_ids):
     all_style   = _chip_style(active == "All", color=B)
@@ -3869,6 +3871,7 @@ def _update_dev_chips(active, chip_ids):
     Output({"type": "ba-chip", "ba": ALL},  "style"),
     Input("plan-ba-filter", "data"),
     State({"type": "ba-chip", "ba": ALL},   "id"),
+    prevent_initial_call=True,
 )
 def _update_ba_chips(active, chip_ids):
     all_style   = _chip_style(active == "All BAs", size="lg", color=P)
@@ -3880,6 +3883,7 @@ def _update_ba_chips(active, chip_ids):
     Output({"type": "show-chip", "show": ALL}, "style"),
     Input("plan-show-filter", "data"),
     State({"type": "show-chip", "show": ALL}, "id"),
+    prevent_initial_call=True,
 )
 def _update_show_chips(active, chip_ids):
     styles = []
@@ -3907,6 +3911,7 @@ def _tier_filter(n_clicks):
     Output({"type": "tier-chip", "tier": ALL}, "style"),
     Input("plan-tier-filter", "data"),
     State({"type": "tier-chip", "tier": ALL}, "id"),
+    prevent_initial_call=True,
 )
 def _update_tier_chips(active, chip_ids):
     return [_chip_style(cid["tier"] == active, color=G) for cid in (chip_ids or [])]
@@ -3916,6 +3921,7 @@ def _update_tier_chips(active, chip_ids):
     Output({"type": "type-f", "v": ALL}, "style"),
     Input("plan-type-filter", "data"),
     State({"type": "type-f", "v": ALL}, "id"),
+    prevent_initial_call=True,
 )
 def _update_type_chips(active, chip_ids):
     styles = []
@@ -4013,6 +4019,7 @@ def _size_filter(n_clicks):
     Output({"type": "size-f", "v": ALL}, "style"),
     Input("plan-size-filter", "data"),
     State({"type": "size-f", "v": ALL}, "id"),
+    prevent_initial_call=True,
 )
 def _update_size_chips(active, chip_ids):
     styles = []
