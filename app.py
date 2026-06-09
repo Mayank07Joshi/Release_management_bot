@@ -267,6 +267,12 @@ if __name__ == "__main__":
         logging.getLogger(__name__).warning("Leave table init failed: %s", _e)
 
     try:
+        from db.report_requests import init_table as _init_rq
+        _init_rq()
+    except Exception as _e:
+        logging.getLogger(__name__).warning("Report requests table init failed: %s", _e)
+
+    try:
         from db.aggregations import init_aggregation_tables
         init_aggregation_tables()
     except Exception as _e:

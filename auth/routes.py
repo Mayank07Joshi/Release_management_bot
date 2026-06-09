@@ -169,3 +169,30 @@ def register_auth_routes(server):
             )
         except Exception as e:
             return f"Report generation failed: {e}", 500
+
+    @server.route("/download-generated")
+    def download_generated():
+        if not current_user.is_authenticated:
+            return redirect("/login")
+        try:
+            req_id = int(request.args.get("id", 0))
+        except ValueError:
+            return "Invalid id", 400
+        if not req_id:
+            return "Missing id", 400
+        from db.report_requests import get_request as _get_req
+        rec = _get_req(req_id)
+        if not rec or not rec.get("report_path"):
+            return "Report not found", 404
+        import os
+        filepath = os.path.join(os.path.dirname(os.path.dirname(__file__)), rec["report_path"])
+        if not os.path.exists(filepath):
+            return "Report file missing", 404
+        with open(filepath, "r", encoding="utf-8") as f:
+            html_content = f.read()
+        filename = os.path.basename(filepath)
+        return Response(
+            html_content,
+            mimetype="text/html",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
