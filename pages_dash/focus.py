@@ -1,7 +1,7 @@
 """VSTS Focus Area & Sprint Activity"""
 
 import dash
-from dash import dcc, html, Input, Output, callback, dash_table, ctx, ALL
+from dash import dcc, html, Input, Output, State, callback, dash_table, ctx, ALL, no_update
 from dash.exceptions import PreventUpdate
 import pandas as pd
 import plotly.graph_objects as go
@@ -177,6 +177,42 @@ def focus_tab_content():
         dcc.Store(id="adl-source",         data="All"),
         dcc.Store(id="adl-type",           data="All"),
         dcc.Store(id="adl-team",           data="All"),
+        dcc.Store(id="adl-selected-month", data=None),
+        dcc.Store(id="adl-month-running",  data={}),
+
+        # ── Month drill-down backdrop ──────────────────────────────────────────
+        html.Div(id="adl-backdrop", n_clicks=0, style={
+            "display": "none",
+            "position": "fixed", "top": "0", "left": "0",
+            "width": "100vw", "height": "100vh",
+            "background": "rgba(0,0,0,0.55)",
+            "zIndex": "1000",
+        }),
+
+        # ── Month drill-down side panel ────────────────────────────────────────
+        html.Div([
+            html.Button("×", id="adl-panel-close-btn", n_clicks=0, style={
+                "position": "absolute", "top": "16px", "right": "16px",
+                "background": "rgba(255,255,255,0.06)",
+                "border": "1px solid rgba(255,255,255,0.12)",
+                "color": "#94a3b8", "fontSize": "18px", "lineHeight": "1",
+                "width": "32px", "height": "32px", "borderRadius": "6px",
+                "cursor": "pointer", "display": "flex",
+                "alignItems": "center", "justifyContent": "center",
+                "zIndex": "2",
+            }),
+            html.Div(id="adl-panel-content"),
+        ], id="adl-panel-wrapper", style={
+            "position": "fixed", "top": "0", "right": "0",
+            "width": "420px", "height": "100vh",
+            "background": "#0d0d1e",
+            "borderLeft": "1px solid rgba(255,255,255,0.09)",
+            "overflowY": "auto", "overflowX": "hidden",
+            "zIndex": "1001",
+            "transform": "translateX(100%)",
+            "transition": "transform 0.26s cubic-bezier(0.4,0,0.2,1)",
+            "boxShadow": "-12px 0 40px rgba(0,0,0,0.6)",
+        }),
 
         # ── Breadcrumb ────────────────────────────────────────────────────────
         html.Div("VSTS DATA · FOCUS AREA & SPRINT ACTIVITY", style={
@@ -314,17 +350,18 @@ def _sync_state_filter(value):
 
 
 @callback(
-    Output("focus-content",       "children"),
-    Output("focus-subtitle",      "children"),
-    Output("focus-tab-meta",      "children"),
-    Output("focus-last-refreshed","children"),
-    Input("focus-type",           "data"),
-    Input("focus-tab",            "data"),
-    Input("focus-state-filter",   "data"),
-    Input("adl-horizon",          "data"),
-    Input("adl-source",           "data"),
-    Input("adl-type",             "data"),
-    Input("adl-team",             "data"),
+    Output("focus-content",        "children"),
+    Output("focus-subtitle",       "children"),
+    Output("focus-tab-meta",       "children"),
+    Output("focus-last-refreshed", "children"),
+    Output("adl-month-running",    "data"),
+    Input("focus-type",            "data"),
+    Input("focus-tab",             "data"),
+    Input("focus-state-filter",    "data"),
+    Input("adl-horizon",           "data"),
+    Input("adl-source",            "data"),
+    Input("adl-type",              "data"),
+    Input("adl-team",              "data"),
 )
 def _render(type_filter, tab, state_filter, adl_horizon, adl_source, adl_type, adl_team):
     # Lightweight query — only the 7 columns needed for summary stats and sprint count
@@ -382,7 +419,7 @@ def _render(type_filter, tab, state_filter, adl_horizon, adl_source, adl_type, a
 
     if tab == "sprint":
         try:
-            content = _render_sprint_adl(adl_horizon, adl_source, adl_type, adl_team)
+            content, running_dict = _render_sprint_adl(adl_horizon, adl_source, adl_type, adl_team)
         except Exception as _e:
             import traceback
             content = html.Div([
@@ -394,10 +431,12 @@ def _render(type_filter, tab, state_filter, adl_horizon, adl_source, adl_type, a
                     "background": CARD, "padding": "12px", "borderRadius": "8px",
                 }),
             ], style={"padding": "20px"})
+            running_dict = {}
+        return content, subtitle, tab_meta, refreshed, running_dict
     else:
         content = _render_summary(df, df_issues_scope, df_enh, type_filter)
 
-    return content, subtitle, tab_meta, refreshed
+    return content, subtitle, tab_meta, refreshed, no_update
 
 
 # ── Data Load Summary ─────────────────────────────────────────────────────────
@@ -743,10 +782,10 @@ def _render_sprint_adl(horizon: str, source: str, adl_type: str, team: str):
         return html.Div([
             html.Div("Failed to load data", style={"color": RED, "fontWeight": "700"}),
             html.Pre(traceback.format_exc(), style={"color": MT, "fontSize": "11px"}),
-        ])
+        ]), {}
 
     if df.empty:
-        return html.Div("No data available.", style={"color": MT, "padding": "40px"})
+        return html.Div("No data available.", style={"color": MT, "padding": "40px"}), {}
 
     # ── Normalise dates ────────────────────────────────────────────────────
     for col in ("created_date", "closed_date"):
@@ -955,9 +994,10 @@ def _render_sprint_adl(horizon: str, source: str, adl_type: str, team: str):
     ]
 
     subtitle = f"Rolling {horizon} from {horizon_start.strftime('%b-%y')}"
+    running_dict = {label: val for label, val in zip(xlabels, running)}
 
     # ── Assemble layout ───────────────────────────────────────────────────
-    return html.Div([
+    layout = html.Div([
         # Title row
         html.Div([
             html.Span("Issues/Enhancements — Addition & Deletion", style={
@@ -1068,6 +1108,7 @@ def _render_sprint_adl(horizon: str, source: str, adl_type: str, team: str):
             "borderRadius": "14px", "padding": "22px 28px",
         }),
     ])
+    return layout, running_dict
 
 
 def _render_sprint(df, df_issues_scope, df_enh, type_filter):
@@ -1308,3 +1349,284 @@ def _render_sprint(df, df_issues_scope, df_enh, type_filter):
         chart_card,
         table_card,
     ])
+
+
+# ── Month drill-down callbacks ─────────────────────────────────────────────────
+
+@callback(
+    Output("adl-selected-month", "data"),
+    Input("adl-chart",           "clickData"),
+    Input("adl-backdrop",        "n_clicks"),
+    Input("adl-panel-close-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def _adl_select_month(click_data, _back, _close):
+    if ctx.triggered_id in ("adl-backdrop", "adl-panel-close-btn"):
+        return None
+    if not click_data or not click_data.get("points"):
+        raise PreventUpdate
+    return click_data["points"][0]["x"]
+
+
+_PANEL_OPEN_STYLE = {
+    "position": "fixed", "top": "0", "right": "0",
+    "width": "420px", "height": "100vh",
+    "background": "#0d0d1e",
+    "borderLeft": "1px solid rgba(255,255,255,0.09)",
+    "overflowY": "auto", "overflowX": "hidden",
+    "zIndex": "1001",
+    "transform": "translateX(0)",
+    "transition": "transform 0.26s cubic-bezier(0.4,0,0.2,1)",
+    "boxShadow": "-12px 0 40px rgba(0,0,0,0.6)",
+}
+_PANEL_CLOSED_STYLE = {
+    "position": "fixed", "top": "0", "right": "0",
+    "width": "420px", "height": "100vh",
+    "background": "#0d0d1e",
+    "borderLeft": "1px solid rgba(255,255,255,0.09)",
+    "overflowY": "auto", "overflowX": "hidden",
+    "zIndex": "1001",
+    "transform": "translateX(100%)",
+    "transition": "transform 0.26s cubic-bezier(0.4,0,0.2,1)",
+    "boxShadow": "-12px 0 40px rgba(0,0,0,0.6)",
+}
+_BACKDROP_ON  = {"display": "block", "position": "fixed", "top": "0", "left": "0",
+                 "width": "100vw", "height": "100vh",
+                 "background": "rgba(0,0,0,0.55)", "zIndex": "1000"}
+_BACKDROP_OFF = {"display": "none", "position": "fixed", "top": "0", "left": "0",
+                 "width": "100vw", "height": "100vh",
+                 "background": "rgba(0,0,0,0.55)", "zIndex": "1000"}
+
+_ADO_BASE = "https://dev.azure.com/expenseondemand/Solo%20Expenses/_workitems/edit"
+
+
+def _mini_kpi(value, label, color):
+    return html.Div([
+        html.Div(str(value), style={
+            "fontSize": "28px", "fontWeight": "700", "color": color, "lineHeight": "1.1",
+        }),
+        html.Div(label, style={
+            "fontSize": "10px", "fontWeight": "700", "color": "rgba(255,255,255,0.45)",
+            "letterSpacing": "0.08em", "textTransform": "uppercase", "marginTop": "3px",
+        }),
+    ], style={
+        "background": "rgba(255,255,255,0.04)",
+        "border": "1px solid rgba(255,255,255,0.08)",
+        "borderRadius": "10px", "padding": "14px 18px",
+        "flex": "1", "minWidth": "0",
+    })
+
+
+def _item_row(item):
+    wid        = item.get("work_item_id", "")
+    title      = str(item.get("title") or "Untitled")[:70]
+    wtype      = item.get("work_item_type", "")
+    assigned   = str(item.get("assigned_to") or "")
+    first_name = assigned.split(" <")[0].split()[0] if assigned else "—"
+    src        = str(item.get("source_type") or "").strip()
+
+    src_badge = html.Span(src or "—", style={
+        "fontSize": "10px", "fontWeight": "600",
+        "color": "#60a5fa" if src == "Customer" else "#94a3b8",
+        "background": "rgba(96,165,250,0.12)" if src == "Customer" else "rgba(255,255,255,0.06)",
+        "border": "1px solid rgba(96,165,250,0.28)" if src == "Customer"
+                  else "1px solid rgba(255,255,255,0.10)",
+        "borderRadius": "10px", "padding": "1px 7px",
+    })
+
+    return html.Div([
+        html.Div([
+            html.A(f"#{wid}", href=f"{_ADO_BASE}/{wid}", target="_blank", style={
+                "fontSize": "11px", "fontWeight": "700", "color": "#818cf8",
+                "textDecoration": "none", "marginRight": "6px", "flexShrink": "0",
+            }),
+            html.Span(title, style={
+                "fontSize": "12px", "color": "#e2e8f0", "flexGrow": "1",
+                "overflow": "hidden", "textOverflow": "ellipsis", "whiteSpace": "nowrap",
+            }),
+        ], style={"display": "flex", "alignItems": "baseline",
+                  "overflow": "hidden", "marginBottom": "5px"}),
+        html.Div([
+            html.Span("P1", style={
+                "fontSize": "10px", "fontWeight": "700", "color": "#fbbf24",
+                "background": "rgba(251,191,36,0.12)",
+                "border": "1px solid rgba(251,191,36,0.30)",
+                "borderRadius": "10px", "padding": "1px 7px", "marginRight": "6px",
+            }),
+            src_badge,
+            html.Span(f"{first_name} · {wtype}", style={
+                "fontSize": "10px", "color": "rgba(255,255,255,0.38)",
+                "marginLeft": "6px",
+            }),
+        ], style={"display": "flex", "alignItems": "center"}),
+    ], style={
+        "padding": "10px 14px",
+        "borderRadius": "8px",
+        "background": "rgba(255,255,255,0.025)",
+        "border": "1px solid rgba(255,255,255,0.055)",
+        "marginBottom": "6px",
+    })
+
+
+@callback(
+    Output("adl-panel-content",  "children"),
+    Output("adl-panel-wrapper",  "style"),
+    Output("adl-backdrop",       "style"),
+    Input("adl-selected-month",  "data"),
+    State("adl-horizon",         "data"),
+    State("adl-source",          "data"),
+    State("adl-type",            "data"),
+    State("adl-team",            "data"),
+    State("adl-month-running",   "data"),
+)
+def _adl_panel_render(selected_month, adl_horizon, adl_source, adl_type, adl_team, running_data):
+    if not selected_month:
+        return [], _PANEL_CLOSED_STYLE, _BACKDROP_OFF
+
+    # Parse "Jun-26" → month period
+    try:
+        dt = datetime.strptime(selected_month, "%b-%y")
+        month_start = pd.Timestamp(dt).normalize()
+        month_end   = (month_start + pd.offsets.MonthEnd(1)).normalize() + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+    except Exception:
+        return [], _PANEL_CLOSED_STYLE, _BACKDROP_OFF
+
+    # Query items touching this month
+    try:
+        with engine.connect() as conn:
+            df = pd.read_sql(text("""
+                SELECT work_item_id, work_item_type, state, title,
+                       type AS source_type, assigned_to,
+                       created_date, closed_date, priority
+                FROM work_items_main
+                WHERE created_date IS NOT NULL
+            """), conn)
+    except Exception:
+        return [html.Div("Failed to load panel data", style={"color": RED, "padding": "24px"})], \
+               _PANEL_OPEN_STYLE, _BACKDROP_ON
+
+    if df.empty:
+        return [html.Div("No data.", style={"color": MT, "padding": "24px"})], \
+               _PANEL_OPEN_STYLE, _BACKDROP_ON
+
+    # Normalise
+    for col in ("created_date", "closed_date"):
+        s = pd.to_datetime(df[col], utc=True, errors="coerce")
+        df[col] = s.dt.tz_localize(None) if s.dt.tz is None else s.dt.tz_convert(None)
+    df["priority"]    = pd.to_numeric(df["priority"], errors="coerce").fillna(4).astype(int)
+    df["source_type"] = df["source_type"].fillna("").astype(str).str.strip()
+
+    from config.team_mapping import TEAM_MAPPING
+    def _map_team(name):
+        clean = str(name).split(" <")[0].strip()
+        return TEAM_MAPPING.get(clean, "Unassigned")
+    df["team"] = df["assigned_to"].apply(_map_team)
+
+    # Apply type filter (same logic as chart)
+    _all_types = ISSUE_TYPES | ENH_TYPES
+    if adl_type == "Issues":
+        df = df[df["work_item_type"].isin(ISSUE_TYPES)]
+    elif adl_type == "Enhancements":
+        df = df[df["work_item_type"].isin(ENH_TYPES)]
+    else:
+        df = df[df["work_item_type"].isin(_all_types)]
+
+    if adl_source != "All":
+        df = df[df["source_type"] == adl_source]
+    if adl_team != "All":
+        df = df[df["team"] == adl_team]
+
+    is_closed = df["state"].isin(_CLOSED_STATES)
+
+    added_mask = (
+        (df["created_date"] >= month_start) & (df["created_date"] <= month_end) &
+        (~is_closed | df["closed_date"].notna())
+    )
+    closed_mask = (
+        is_closed & df["closed_date"].notna() &
+        (df["closed_date"] >= month_start) & (df["closed_date"] <= month_end)
+    )
+
+    added_total  = int(added_mask.sum())
+    closed_total = int(closed_mask.sum())
+    net          = added_total - closed_total
+    open_after   = int(running_data.get(selected_month, 0)) if running_data else 0
+
+    net_str   = f"+{net}" if net > 0 else str(net)
+    net_color = RED if net > 0 else (G if net < 0 else MT)
+
+    # P1 items
+    df_added  = df[added_mask  & (df["priority"] == 1)].to_dict("records")
+    df_closed = df[closed_mask & (df["priority"] == 1)].to_dict("records")
+
+    # Subtitle
+    team_label = adl_team if adl_team != "All" else "All teams"
+    net_part   = f"{'+' if net >= 0 else ''}{net} net"
+
+    def _section(title, items, accent):
+        if not items:
+            return html.Div([
+                html.Div(title, style={
+                    "fontSize": "11px", "fontWeight": "700", "color": accent,
+                    "letterSpacing": "0.07em", "textTransform": "uppercase",
+                    "marginBottom": "8px",
+                }),
+                html.Div("No P1 items this month", style={
+                    "fontSize": "12px", "color": "rgba(255,255,255,0.3)",
+                    "padding": "10px 0",
+                }),
+            ], style={"marginBottom": "20px"})
+        return html.Div([
+            html.Div([
+                html.Span(title, style={
+                    "fontSize": "11px", "fontWeight": "700", "color": accent,
+                    "letterSpacing": "0.07em", "textTransform": "uppercase",
+                }),
+                html.Span(f" {len(items)}", style={
+                    "fontSize": "11px", "fontWeight": "600", "color": accent,
+                    "background": f"rgba(255,255,255,0.07)",
+                    "borderRadius": "10px", "padding": "1px 7px", "marginLeft": "6px",
+                }),
+            ], style={"marginBottom": "10px", "display": "flex", "alignItems": "center"}),
+            *[_item_row(it) for it in items],
+        ], style={"marginBottom": "20px"})
+
+    content = html.Div([
+        # Header
+        html.Div([
+            html.Div([
+                html.Div(selected_month, style={
+                    "fontSize": "22px", "fontWeight": "700", "color": "#e2e8f0",
+                    "marginBottom": "4px",
+                }),
+                html.Div(
+                    f"{team_label} · {added_total} added · {closed_total} fixed · {net_part}",
+                    style={"fontSize": "12px", "color": "rgba(255,255,255,0.45)"},
+                ),
+            ]),
+        ], style={
+            "padding": "24px 56px 20px 24px",
+            "borderBottom": "1px solid rgba(255,255,255,0.07)",
+            "marginBottom": "20px",
+        }),
+
+        # KPI mini-cards
+        html.Div([
+            html.Div([
+                _mini_kpi(f"+{added_total}", "Added",      "#a78bfa"),
+                _mini_kpi(f"-{closed_total}", "Fixed",     "#34d399"),
+            ], style={"display": "flex", "gap": "10px", "marginBottom": "10px"}),
+            html.Div([
+                _mini_kpi(net_str, "Net",      net_color),
+                _mini_kpi(open_after, "Open after", "#22d3ee"),
+            ], style={"display": "flex", "gap": "10px"}),
+        ], style={"padding": "0 24px", "marginBottom": "24px"}),
+
+        # Item lists
+        html.Div([
+            _section("Added this month (P1)", df_added,  "#a78bfa"),
+            _section("Fixed this month (P1)",  df_closed, "#34d399"),
+        ], style={"padding": "0 24px 24px 24px"}),
+    ])
+
+    return content, _PANEL_OPEN_STYLE, _BACKDROP_ON
