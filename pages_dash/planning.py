@@ -50,23 +50,21 @@ def _dim(c): return _COLOR_DIM.get(c, f"{c}22")
 def _brd(c): return _COLOR_BRD.get(c, f"{c}44")
 
 STATUS_COLOR = {
-    "NOT STARTED":   R,
-    "DRAFT":         A,
-    "STORY FROZEN":  "#c084fc",
-    "IN DEV":        B,
-    "IN QA":         "#fb923c",
-    "READY TO SHIP": G,
-    "SHIPPED":       "#10b981",
+    "NOT STARTED": R,
+    "IN PROGRESS": A,
+    "READY":       G,
 }
 
-# Ordered gate fields matching DB schema
-_GATE_FIELDS = ("dor", "story_written", "estimation", "in_dev", "in_qa", "ready_to_ship", "delivery")
-_GATE_FILTER_MAP = {
-    "dor":           {"gates": ["g1", "g2"], "phases": None},
-    "story_written": {"gates": ["g3"],       "phases": ["p4"]},
-    "estimation":    {"gates": ["g3"],       "phases": ["p5"]},
-    "delivery":      {"gates": ["g4", "g5", "g6"], "phases": None},
+# BA sign-off gate fields — ordered, matches DB columns
+_GATE_FIELDS = ("claude_screens", "text_written", "our_screens", "html_screens", "sn_signoff")
+_GATE_LABELS = {
+    "claude_screens": "Claude screens",
+    "text_written":   "Text written",
+    "our_screens":    "Our screens",
+    "html_screens":   "HTML screens",
+    "sn_signoff":     "SN sign-off",
 }
+_GATE_FILTER_MAP: dict = {}  # gates now toggle directly; no tracker focus mapping
 _WIN_BORDER  = "var(--gold)"  # golden separator between planning window and rest of 2026
 
 # Tab button styles (active / idle) — used by _switch_tab callback
@@ -100,13 +98,9 @@ _CLOSED_STATES = {
 MATRIX_MONTHS = ["M0", "M1", "M2", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 CELL_COLORS = {
-    "not_started":   {"bg": "#2e0e0e", "text": R,         "border": R},
-    "draft":         {"bg": "#2a1f00", "text": A,         "border": A},
-    "story_frozen":  {"bg": "#1e1040", "text": "#c084fc", "border": "#c084fc"},
-    "in_dev":        {"bg": "#0e2340", "text": B,         "border": B},
-    "in_qa":         {"bg": "#2a1500", "text": "#fb923c", "border": "#fb923c"},
-    "ready_to_ship": {"bg": "#0c2e1e", "text": G,         "border": G},
-    "shipped":       {"bg": "#052e1c", "text": "#10b981", "border": "#10b981"},
+    "not_started":  {"bg": "#2e0e0e", "text": R, "border": R},
+    "draft":        {"bg": "#2a1f00", "text": A, "border": A},
+    "story_frozen": {"bg": "#0c2e1e", "text": G, "border": G},  # all gates complete = Ready
 }
 
 _DEV_ROLE = {
@@ -235,20 +229,13 @@ def _load_bug_data() -> list[dict]:
 
 
 def _story_status_key(s: dict) -> str:
-    """Map story dict → CELL_COLORS key based on lifecycle gate progress."""
-    if s.get("delivery"):
-        return "shipped"
-    if s.get("ready_to_ship"):
-        return "ready_to_ship"
-    if s.get("in_qa"):
-        return "in_qa"
-    if s.get("in_dev"):
-        return "in_dev"
-    if s.get("dor") and s.get("story_written") and s.get("estimation"):
-        return "story_frozen"
-    if s.get("dor") or s.get("story_written") or s.get("estimation"):
-        return "draft"
-    return "not_started"
+    """Map gate dict → CELL_COLORS key for dev matrix cell colour."""
+    done = sum(1 for f in _GATE_FIELDS if s.get(f))
+    if done == len(_GATE_FIELDS):
+        return "story_frozen"  # all gates complete → green
+    if done > 0:
+        return "draft"          # partial progress → amber
+    return "not_started"        # no gates → grey
 
 
 def _load_planning_data():
@@ -283,15 +270,9 @@ def _load_planning_data():
         stories = []
         for s in cached_stories:
             s = dict(s)
-            if s["id"] in _db_gates:
-                _dg = _db_gates[s["id"]]
-                for _f in _GATE_FIELDS:
-                    if _f != "estimation":
-                        s[_f] = _dg.get(_f, False)
-            else:
-                for _f in _GATE_FIELDS:
-                    if _f != "estimation":
-                        s[_f] = False
+            _dg = _db_gates.get(s["id"], {})
+            for _f in _GATE_FIELDS:
+                s[_f] = _dg.get(_f, False)
             stories.append(s)
         init_gates = {
             str(s["id"]): {f: s.get(f, False) for f in _GATE_FIELDS}
@@ -356,15 +337,14 @@ def _load_planning_data():
             "ba":            ba[0],
             "ba_code":       ba[1],
             "ba_role":       ba[2],
-            "month":         str(r.month_key or ""),
-            "dor":           False,
-            "story_written": False,
-            "estimation":    est_full,
-            "in_dev":        False,
-            "in_qa":         False,
-            "ready_to_ship": False,
-            "delivery":      False,
-            "state":         str(r.state or ""),
+            "month":          str(r.month_key or ""),
+            "claude_screens": False,
+            "text_written":   False,
+            "our_screens":    False,
+            "html_screens":   False,
+            "sn_signoff":     False,
+            "estimation":     est_full,
+            "state":          str(r.state or ""),
             "function":      str(r.function or ""),
         })
 
@@ -376,11 +356,9 @@ def _load_planning_data():
         _db_gates = {}
 
     for s in stories:
-        if s["id"] in _db_gates:
-            _dg = _db_gates[s["id"]]
-            for _f in _GATE_FIELDS:
-                if _f != "estimation":
-                    s[_f] = _dg.get(_f, False)
+        _dg = _db_gates.get(s["id"], {})
+        for _f in _GATE_FIELDS:
+            s[_f] = _dg.get(_f, False)
 
     init_gates = {
         str(s["id"]): {f: s.get(f, False) for f in _GATE_FIELDS}
@@ -404,10 +382,10 @@ def _load_planning_data():
         if mkey not in months_present:
             continue
         ms    = [s for s in stories if s["month"] == mkey]
-        ready = sum(1 for s in ms if s["dor"] and s["story_written"])
+        ready = sum(1 for s in ms if all(s.get(f) for f in _GATE_FIELDS))
         total = len(ms)
         pct   = round(ready / total * 100) if total else 0
-        ns    = sum(1 for s in ms if not s["dor"])
+        ns    = sum(1 for s in ms if not any(s.get(f) for f in _GATE_FIELDS))
         bc    = G if pct >= 80 else A if pct >= 50 else R
         badge = f"{pct}%" if mkey in ("M0","M1","M2") else f"{ns}ns"
         months.append({"key": mkey, "label": _mlabels.get(mkey, mkey),
@@ -422,8 +400,7 @@ def _load_planning_data():
 
     # ── By-developer matrix ───────────────────────────────────────────────────
     _SP = {
-        "in_dev": 0, "in_qa": 1, "ready_to_ship": 2,
-        "story_frozen": 3, "draft": 4, "not_started": 5, "shipped": 6,
+        "story_frozen": 0, "draft": 1, "not_started": 2,
     }
     dev_matrix: dict = {}
     for s in stories:
@@ -443,7 +420,7 @@ def _load_planning_data():
             cnt, csk = dev_matrix[dname][mkey]
             worst = csk if _SP.get(csk, 9) >= _SP.get(sk, 9) else sk
             dev_matrix[dname][mkey] = (cnt + 1, worst)
-        if not s.get("dor"):
+        if not any(s.get(f) for f in _GATE_FIELDS):
             dev_matrix[dname]["ns"] += 1
 
     # ── By-story matrix (M0/M1/M2 only, unique titles) ───────────────────────
@@ -497,10 +474,11 @@ def _load_planning_data():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _status(g: dict) -> str:
-    if g.get("dor") and g.get("story_written"):
-        return "STORY FROZEN"
-    if g.get("dor") or g.get("story_written"):
-        return "DRAFT"
+    done = sum(1 for f in _GATE_FIELDS if g.get(f))
+    if done == len(_GATE_FIELDS):
+        return "READY"
+    if done > 0:
+        return "IN PROGRESS"
     return "NOT STARTED"
 
 
@@ -522,106 +500,104 @@ def _tag(text, color):
 
 
 def _gate_btn(sid, gate, checked):
-    labels = {
-        "dor":           "DoR Gate",
-        "story_written": "Story Written",
-    }
-    clr  = G if checked else "rgba(255,255,255,0.18)"
-    icon = "✓" if checked else "○"
+    label = _GATE_LABELS.get(gate, gate)
+    txt_c = "#ffffff" if checked else MT
     return html.Div(
         [
-            html.Span(icon, style={"color": clr, "marginRight": "6px",
-                                   "fontSize": "12px", "fontWeight": "700",
-                                   "flexShrink": "0"}),
-            html.Span(labels[gate], style={"fontSize": "11px", "fontWeight": "600",
-                                            "color": G if checked else MT}),
+            html.Span("✓" if checked else "○",
+                      style={"color": txt_c, "marginRight": "6px",
+                             "fontSize": "11px", "fontWeight": "700", "flexShrink": "0"}),
+            html.Span(label, style={"fontSize": "11px", "fontWeight": "600", "color": txt_c}),
         ],
         id={"type": "gate-open-btn", "sid": sid, "gate": gate},
         n_clicks=0,
         className=f"gate-pill {'gate-done' if checked else 'gate-pending'}",
         style={
-            "padding":      "5px 10px", "cursor": "pointer",
-            "display":      "flex", "alignItems": "center",
-            "borderRadius": "6px", "marginBottom": "4px",
-            "width": "100%", "transition": "all .2s",
+            "padding":      "7px 12px",
+            "cursor":       "pointer",
+            "display":      "flex",
+            "alignItems":   "center",
+            "borderRadius": "6px",
+            "marginBottom": "3px",
+            "width":        "100%",
+            "transition":   "all .2s",
+            "background":   G if checked else "rgba(255,255,255,0.05)",
+            "border":       f"1px solid {G}" if checked else f"1px solid {BD}",
         },
     )
 
 
-def _delivery_gate_btn(sid, g):
-    if g.get("delivery"):
-        label, clr, icon = "Shipped",        "#10b981", "✓"
-    elif g.get("ready_to_ship"):
-        label, clr, icon = "Ready to Ship",  G,         "→"
-    elif g.get("in_qa"):
-        label, clr, icon = "In QA",          "#fb923c", "◉"
-    elif g.get("in_dev"):
-        label, clr, icon = "In Dev",         B,         "◉"
-    else:
-        label, clr, icon = "Delivery",       MT,        "○"
-    return html.Div(
-        [
-            html.Span(icon, style={"color": clr, "marginRight": "6px",
-                                   "fontSize": "12px", "fontWeight": "700",
-                                   "flexShrink": "0"}),
-            html.Span(label, style={"fontSize": "11px", "fontWeight": "600",
-                                    "color": clr}),
-        ],
-        id={"type": "gate-open-btn", "sid": sid, "gate": "delivery"},
-        n_clicks=0,
-        className="gate-pill gate-done" if g.get("delivery") else "gate-pill gate-pending",
-        style={
-            "padding":      "5px 10px", "cursor": "pointer",
-            "display":      "flex", "alignItems": "center",
-            "borderRadius": "6px", "marginBottom": "4px",
-            "width": "100%", "transition": "all .2s",
-        },
-    )
+def _status_badge(status, g):
+    c    = STATUS_COLOR.get(status, MT)
+    done = sum(1 for f in _GATE_FIELDS if g.get(f))
+    total = len(_GATE_FIELDS)
 
+    stuck_at = None
+    if status == "IN PROGRESS":
+        for f in _GATE_FIELDS:
+            if not g.get(f):
+                stuck_at = _GATE_LABELS.get(f, f)
+                break
 
-def _status_badge(status):
-    c     = STATUS_COLOR.get(status, MT)
-    icons = {
-        "NOT STARTED":   "🔴",
-        "DRAFT":         "🟠",
-        "STORY FROZEN":  "🟣",
-        "IN DEV":        "🔵",
-        "IN QA":         "🟡",
-        "READY TO SHIP": "🟢",
-        "SHIPPED":       "✅",
-    }
-    return html.Div([
-        html.Span(icons.get(status, ""), style={"marginRight": "6px", "fontSize": "14px"}),
-        html.Span(status, style={"fontSize": "11px", "fontWeight": "700",
-                                  "letterSpacing": "0.5px", "color": c}),
-    ], style={
-        "background": _dim(c), "border": f"1px solid {_brd(c)}",
-        "borderRadius": "8px", "padding": "6px 12px",
-        "display": "flex", "alignItems": "center",
-        "minWidth": "130px", "justifyContent": "center",
+    rows = [
+        html.Div([
+            html.Span("●", style={"color": c, "marginRight": "5px", "fontSize": "9px"}),
+            html.Span(status, style={"fontSize": "11px", "fontWeight": "700",
+                                     "letterSpacing": "0.4px", "color": c}),
+            html.Span(f"{done}/{total} gates",
+                      style={"fontSize": "10px", "color": MT,
+                             "marginLeft": "7px", "fontWeight": "500"}),
+        ], style={"display": "flex", "alignItems": "center"}),
+    ]
+    if stuck_at:
+        rows.append(
+            html.Div(f"Stuck at: {stuck_at}",
+                     style={"fontSize": "9px", "color": A, "marginTop": "3px",
+                            "fontWeight": "600"})
+        )
+
+    return html.Div(rows, style={
+        "background":    _dim(c),
+        "border":        f"1px solid {_brd(c)}",
+        "borderRadius":  "8px",
+        "padding":       "7px 12px",
+        "display":       "flex",
+        "flexDirection": "column",
+        "minWidth":      "140px",
     })
 
 
-def _kpi_card(label, value_pct, sub, color=None):
+def _kpi_card(label, value_pct, sub, color=None, count=""):
     c = color or (G if value_pct >= 80 else A if value_pct >= 50 else R)
     return html.Div([
-        html.Div(label, style={"fontSize": "10px", "fontWeight": "700", "color": MT,
-                                "textTransform": "uppercase", "letterSpacing": "0.8px",
-                                "marginBottom": "10px"}),
-        html.Div(f"{value_pct}%", style={"fontSize": "36px", "fontWeight": "800",
-                                          "color": c, "lineHeight": "1"}),
-        html.Div(sub, style={"fontSize": "10px", "color": MT,
-                              "marginTop": "8px", "lineHeight": "1.4"}),
+        html.Div(label, style={
+            "fontSize": "10px", "fontWeight": "700", "color": MT,
+            "textTransform": "uppercase", "letterSpacing": "0.8px",
+            "marginBottom": "10px",
+        }),
         html.Div([
-            html.Div(style={"width": f"{value_pct}%", "height": "3px",
-                             "background": c, "borderRadius": "2px",
-                             "transition": "width .5s"}),
-        ], style={"width": "100%", "height": "3px",
-                   "background": "rgba(255,255,255,0.08)",
-                   "borderRadius": "2px", "marginTop": "12px"}),
+            html.Span(f"{value_pct}%", style={
+                "fontSize": "28px", "fontWeight": "800",
+                "color": c, "lineHeight": "1", "marginRight": "10px", "flexShrink": "0",
+            }),
+            html.Span(count, style={
+                "fontSize": "13px", "fontWeight": "600", "color": MT,
+                "marginRight": "12px", "flexShrink": "0",
+            }),
+            html.Div([
+                html.Div(style={
+                    "width": f"{value_pct}%", "height": "3px",
+                    "background": c, "borderRadius": "2px", "transition": "width .5s",
+                }),
+            ], style={
+                "flex": "1", "height": "3px",
+                "background": "rgba(255,255,255,0.08)", "borderRadius": "2px",
+            }),
+        ], style={"display": "flex", "alignItems": "center", "marginBottom": "10px"}),
+        html.Div(sub, style={"fontSize": "10px", "color": MT, "lineHeight": "1.5"}),
     ], style={
         "background": CD, "border": f"1px solid {c}33",
-        "borderRadius": "12px", "padding": "18px 20px",
+        "borderRadius": "12px", "padding": "16px 18px",
         "flex": "1", "minWidth": "200px",
     })
 
@@ -664,8 +640,7 @@ def _matrix_cell(dev_key, month_key, val):
     count, sk = val
     cc = CELL_COLORS.get(sk, {"bg": C2, "text": MT, "border": BD})
     label_map = {
-        "in_dev": "DEV", "in_qa": "QA", "ready_to_ship": "SHIP",
-        "story_frozen": "FROZEN", "draft": "DRAFT", "not_started": "NS", "shipped": "✓",
+        "story_frozen": "READY", "draft": "IN PROG", "not_started": "NS",
     }
     return html.Td(
         html.Div([
@@ -753,17 +728,17 @@ def _story_row(s: dict, gates: dict) -> html.Tr:
         tags.append(html.Span(f"{s['hrs']:.0f}h",
                                style={"fontSize": "10px", "color": MT, "marginLeft": "2px"}))
 
-    gates_col = html.Div([
-        _gate_btn(s["id"], "dor",          g.get("dor",           False)),
-        _gate_btn(s["id"], "story_written", g.get("story_written", False)),
-    ], style={"display": "flex", "flexDirection": "column", "gap": "2px"})
+    gates_col = html.Div(
+        [_gate_btn(s["id"], f, g.get(f, False)) for f in _GATE_FIELDS],
+        style={"display": "flex", "flexDirection": "column", "gap": "2px"},
+    )
 
     return html.Tr([
         html.Td([
             html.Div([
                 html.A(f"#{s['id']}",
                        href=f"{ADO_BASE_URL}{s['id']}", target="_blank",
-                       style={"color": P, "fontSize": "10px", "fontWeight": "700",
+                       style={"color": P, "fontSize": "12px", "fontWeight": "700",
                               "textDecoration": "none", "letterSpacing": "0.3px",
                               "marginRight": "6px", "flexShrink": "0"}),
                 html.Span(s.get("month", ""),
@@ -773,7 +748,7 @@ def _story_row(s: dict, gates: dict) -> html.Tr:
             ], style={"display": "flex", "alignItems": "center", "marginBottom": "4px"}),
             html.A(s["title"],
                    href=f"{ADO_BASE_URL}{s['id']}", target="_blank",
-                   style={"fontWeight": "600", "color": TX, "fontSize": "13px",
+                   style={"fontWeight": "600", "color": TX, "fontSize": "14px",
                           "marginBottom": "5px", "textDecoration": "none",
                           "display": "block", "lineHeight": "1.4"}),
             html.Div(tags, style={"display": "flex", "alignItems": "center", "flexWrap": "wrap"}),
@@ -782,20 +757,20 @@ def _story_row(s: dict, gates: dict) -> html.Tr:
                                "borderRadius": "6px", "color": MT, "fontSize": "10px",
                                "cursor": "pointer", "padding": "2px 8px", "marginTop": "6px",
                                "transition": "color .15s"}),
-        ], style={"padding": "14px 16px",
+        ], style={"padding": "18px 16px",
                    "borderLeft": f"3px solid {sc}",
                    "borderBottom": f"1px solid {BD}"}),
         html.Td([
             html.Div(s["dev"],      style={"color": TX, "fontSize": "13px", "fontWeight": "600"}),
             html.Div(s["dev_role"], style={"color": MT, "fontSize": "10px"}),
-        ], style={"padding": "14px 16px", "borderBottom": f"1px solid {BD}"}),
+        ], style={"padding": "18px 16px", "borderBottom": f"1px solid {BD}"}),
         html.Td([
             html.Div(html.Span(s["ba"], style={"color": P, "fontSize": "12px", "fontWeight": "600"})),
             html.Div(f"{s['ba_code']} · {s['ba_role']}",
                      style={"color": MT, "fontSize": "10px", "marginTop": "2px"}),
-        ], style={"padding": "14px 16px", "borderBottom": f"1px solid {BD}"}),
-        html.Td(gates_col, style={"padding": "10px 16px", "borderBottom": f"1px solid {BD}"}),
-        html.Td(_status_badge(status), style={"padding": "14px 16px", "borderBottom": f"1px solid {BD}"}),
+        ], style={"padding": "18px 16px", "borderBottom": f"1px solid {BD}"}),
+        html.Td(gates_col, style={"padding": "12px 16px", "borderBottom": f"1px solid {BD}"}),
+        html.Td(_status_badge(status, g), style={"padding": "18px 16px", "borderBottom": f"1px solid {BD}"}),
         html.Td(
             html.Button("📋", id={"type": "tracker-btn", "sid": s["id"]}, n_clicks=0,
                         title="Open lifecycle tracker",
@@ -1232,7 +1207,7 @@ _legend = html.Div([
     *[html.Span([
         html.Span("■ ", style={"color": c}),
         html.Span(lbl, style={"color": MT, "fontSize": "11px", "marginRight": "14px"}),
-    ]) for lbl, c in [("In Dev", B), ("Ready", G), ("Draft", A), ("Not Started", R)]],
+    ]) for lbl, c in [("Ready", G), ("In Progress", A), ("Not Started", R)]],
     html.Span("— Click any cell for stories",
               style={"color": MT, "fontSize": "11px", "fontStyle": "italic"}),
 ], style={"display": "flex", "alignItems": "center", "marginBottom": "12px"})
@@ -2764,15 +2739,15 @@ def _build_full_layout():
         and (s["pri"] in ("P1","P2") or s["size"] in ("Big","Medium"))
     ]
 
-    m1_ready = sum(1 for s in m1_s if s.get("dor") and s.get("story_written"))
+    m1_ready = sum(1 for s in m1_s if all(s.get(f) for f in _GATE_FIELDS))
     m1_total = len(m1_s) or 1
     m1_pct   = round(m1_ready / m1_total * 100)
 
-    m2_draft = sum(1 for s in m2_s if s.get("dor"))
+    m2_draft = sum(1 for s in m2_s if any(s.get(f) for f in _GATE_FIELDS))
     m2_total = len(m2_s) or 1
     m2_pct   = round(m2_draft / m2_total * 100)
 
-    lh_writ  = sum(1 for s in lh_s if s.get("dor"))
+    lh_writ  = sum(1 for s in lh_s if any(s.get(f) for f in _GATE_FIELDS))
     lh_total = len(lh_s) or 1
     lh_pct   = round(lh_writ / lh_total * 100)
 
@@ -2782,26 +2757,29 @@ def _build_full_layout():
     kpi_strip = html.Div([
         _kpi_card(
             f"KPI-01 · {m1_label} Story Readiness Rate", m1_pct,
-            f"{m1_ready} of {len(m1_s)} stories Ready · target 100%\n"
+            f"{m1_ready} of {len(m1_s)} stories Ready · target 100%  "
             f"All must be signed off before {m1_label} starts",
+            count=f"{m1_ready} / {len(m1_s)}",
         ),
         _kpi_card(
             f"KPI-02 · {m2_label} Draft Coverage", m2_pct,
-            f"{m2_draft} of {len(m2_s)} {m2_label} items have story started\n"
+            f"{m2_draft} of {len(m2_s)} {m2_label} items have story started  "
             "KPI-02 must always exceed KPI-03 in intermediate states.",
             color=R if m2_pct < 33 else None,
+            count=f"{m2_draft} / {len(m2_s)}",
         ),
         _kpi_card(
             "KPI-03 · Long-Horizon Pipeline Health", lh_pct,
-            f"{lh_writ} of {len(lh_s)} P1/P2/Big/Medium items (Jul–Dec) written\n"
+            f"{lh_writ} of {len(lh_s)} P1/P2/Big/Medium items (Jul–Dec) written  "
             "Pipeline lead owns sign-off of long-horizon stories.",
             color=R if lh_pct < 33 else None,
+            count=f"{lh_writ} / {len(lh_s)}",
         ),
     ], style={"display": "flex", "gap": "12px", "marginBottom": "16px", "flexWrap": "wrap"})
 
     # ── Alert strip ────────────────────────────────────────────────────────────
     m1_not_ready    = len(m1_s) - m1_ready
-    m2_not_started  = sum(1 for s in m2_s if not s.get("dor"))
+    m2_not_started  = sum(1 for s in m2_s if not any(s.get(f) for f in _GATE_FIELDS))
     lh_not_started  = len(lh_s) - lh_writ
     alerts = []
     if m1_not_ready:
@@ -2843,12 +2821,12 @@ def _build_full_layout():
             else:
                 bg = "rgba(255,255,255,0.02)"
             tabs.append(html.Div([
-                html.Div(m["label"], style={"fontSize": "12px", "fontWeight": "700",
+                html.Div(m["label"], style={"fontSize": "14px", "fontWeight": "700",
                                              "color": TX if is_a else MT}),
-                html.Div(m["badge"], style={"fontSize": "9px", "color": m["bc"],
-                                             "fontWeight": "600", "marginTop": "2px"}),
+                html.Div(m["badge"], style={"fontSize": "11px", "color": m["bc"],
+                                             "fontWeight": "600", "marginTop": "4px"}),
             ], id={"type": "month-tab", "month": m["key"]}, style={
-                "padding":    "6px 4px", "borderRadius": "8px", "cursor": "pointer",
+                "padding":    "12px 8px", "borderRadius": "8px", "cursor": "pointer",
                 "background": bg,
                 "border":     f"1px solid {P}" if is_a else f"1px solid {BD}",
                 "textAlign":  "center", "flex": "1", "transition": "all .15s",
@@ -2887,8 +2865,8 @@ def _build_full_layout():
                                    style=_cs_act(A) if is_act else _cs_idl()))
 
     tier_chips = []
-    for lbl, tid in [("All", "all"), ("Pre-DoR", "pre-dor"), ("DoR ✓", "dor"),
-                     ("Story Written ✓", "story_written")]:
+    for lbl, tid in [("All", "all"), ("Not Started", "not_started"),
+                     ("In Progress", "in_progress"), ("Complete", "complete")]:
         tier_chips.append(html.Div(lbl, id={"type": "tier-chip", "tier": tid},
                                    style=_cs_act(G) if tid == "all" else _cs_idl()))
 
@@ -2933,6 +2911,8 @@ def _build_full_layout():
         dcc.Store(id="plan-story-matrix",  data=story_matrix),
         dcc.Store(id="plan-dev-stories",   data=dev_stories_flat),
         dcc.Store(id="plan-tier-filter",   data="all"),
+        dcc.Store(id="stuck-filter",       data="all"),
+        dcc.Store(id="dash-collapsed",     data=False),
         dcc.Store(id="gate-store",         data=init_gates),
         dcc.Store(id="log-store",          data=[]),
         dcc.Store(id="plan-stories-store", data=stories),    # real ADO data
@@ -3017,8 +2997,8 @@ def _build_full_layout():
             ) for i, (lbl, tid) in enumerate([
                 ("Story Readiness",    "readiness"),
                 ("Unestimated Items",  "unest"),
-                ("VSTS Focus Area",    "focus"),
                 ("Developer Capacity", "devcap"),
+                ("Delivery Timeline",  "gantt"),
                 ("BA Team Brief",      "bateam"),
             ])],
         ], style={"display": "flex", "alignItems": "center", "gap": "4px",
@@ -3027,7 +3007,24 @@ def _build_full_layout():
 
         # ── Story Readiness section ────────────────────────────────────────────
         html.Div([
-            kpi_strip,
+            # ── Dashboard toggle row ───────────────────────────────────────────
+            html.Div([
+                html.Button(
+                    ["▼ Hide dashboard"],
+                    id="dash-toggle-btn", n_clicks=0,
+                    style={
+                        "background": "transparent", "border": f"1px solid {BD}",
+                        "borderRadius": "8px", "color": MT, "fontSize": "12px",
+                        "fontWeight": "600", "padding": "5px 14px",
+                        "cursor": "pointer", "transition": "all .15s",
+                        "display": "flex", "alignItems": "center", "gap": "6px",
+                    },
+                ),
+                html.Span(id="dash-summary-text", style={"display": "none"}),
+            ], style={"display": "flex", "alignItems": "center",
+                      "gap": "12px", "marginBottom": "12px"}),
+            # ── Collapsible KPI panel ──────────────────────────────────────────
+            html.Div(kpi_strip, id="kpi-panel"),
 
             # Sub-tab navigation (BA Sign-Off · By Developer · By Story)
             html.Div([
@@ -3081,6 +3078,8 @@ def _build_full_layout():
                     type="circle", color="#818cf8", style={"minHeight": "60px"},
                     children=html.Div(id="readiness-header"),
                 ),
+                # WHERE STORIES ARE STUCK filter bar
+                html.Div(id="stuck-filter-bar", style={"marginBottom": "10px"}),
                 # Enhancements section (shown by default)
                 html.Div([
                     dcc.Loading(
@@ -3181,14 +3180,13 @@ def _build_full_layout():
         html.Div(id="main-sec-unest", style={"display": "none"},
                  children=[_build_unest_tab(unest_items)]),
 
-        # ── VSTS Focus Area section ────────────────────────────────────────────
-        html.Div(id="main-sec-focus", style={"display": "none"},
-                 children=[_focus_section]),
-
         # ── Developer Capacity section ─────────────────────────────────────────
         html.Div(id="main-sec-devcap", style={"display": "none"},
+                 children=[_devcap_section]),
+
+        # ── Delivery Timeline (Gantt) section ─────────────────────────────────
+        html.Div(id="main-sec-gantt", style={"display": "none"},
                  children=[
-            # ── Delivery Timeline (Gantt) ──────────────────────────────────
             html.Div([
                 html.Div([
                     html.Div([
@@ -3254,7 +3252,6 @@ def _build_full_layout():
                 "borderRadius": "12px", "padding": "14px 0 0",
                 "marginBottom": "20px", "overflow": "hidden",
             }),
-            _devcap_section,
         ]),
 
         # ── BA Team Brief section ─────────────────────────────────────────────
@@ -3400,8 +3397,8 @@ _MAIN_IDL = {
 @callback(
     Output("main-sec-readiness",                         "style"),
     Output("main-sec-unest",                             "style"),
-    Output("main-sec-focus",                             "style"),
     Output("main-sec-devcap",                            "style"),
+    Output("main-sec-gantt",                             "style"),
     Output("main-sec-bateam",                            "style"),
     Output("plan-main-tab",                              "data"),
     Output({"type": "plan-main-tab-btn", "tab": ALL},   "style"),
@@ -3423,8 +3420,8 @@ def _switch_main_tab(n_clicks, btn_ids):
     return (
         show if tab == "readiness" else hide,
         show if tab == "unest"     else hide,
-        show if tab == "focus"     else hide,
         show if tab == "devcap"    else hide,
+        show if tab == "gantt"     else hide,
         show if tab == "bateam"    else hide,
         tab,
         btn_styles,
@@ -3471,17 +3468,69 @@ def _select_month(n_clicks, current, months_data):
     return new_month, html.Div(tabs, style={"display": "flex", "gap": "6px", "width": "100%"})
 
 
-# ── 3. (Gate direct-toggle removed — gates auto-derive from lifecycle tracker) ─
-
-
-# ── 4. Re-render story table + readiness header ───────────────────────────────
+# ── 3. Gate direct-toggle — click pill to check/uncheck ──────────────────────
 @callback(
-    Output("story-tbody",       "children"),
-    Output("readiness-header",  "children"),
-    Output("story-page-info",   "children"),
-    Output("story-page-prev",   "disabled"),
-    Output("story-page-next",   "disabled"),
-    Output("story-pagination",  "style"),
+    Output("gate-store", "data", allow_duplicate=True),
+    Input({"type": "gate-open-btn", "sid": ALL, "gate": ALL}, "n_clicks"),
+    State("gate-store",          "data"),
+    State("plan-stories-store",  "data"),
+    prevent_initial_call=True,
+)
+def _toggle_gate(gate_clicks, gates, stories_data):
+    if not any(gate_clicks or []):
+        return no_update
+    triggered = ctx.triggered_id
+    if not isinstance(triggered, dict) or triggered.get("type") != "gate-open-btn":
+        return no_update
+
+    sid      = triggered["sid"]
+    gate     = triggered["gate"]
+    sid_str  = str(sid)
+
+    current  = dict(gates or {})
+    g        = dict(current.get(sid_str, {f: False for f in _GATE_FIELDS}))
+    new_val  = not g.get(gate, False)
+
+    g[gate] = new_val
+    # Cascade clear downstream gates when unchecking
+    if not new_val:
+        gate_order = list(_GATE_FIELDS)
+        idx = gate_order.index(gate) if gate in gate_order else -1
+        for ds in gate_order[idx + 1:]:
+            g[ds] = False
+
+    current[sid_str] = g
+
+    try:
+        from flask_login import current_user as _cu
+        performed_by = _cu.display_name if _cu and _cu.is_authenticated else "system"
+    except Exception:
+        performed_by = "system"
+    try:
+        from db.planning import upsert_gate as _upsert
+        story_obj = next((s for s in (stories_data or []) if s["id"] == sid), {})
+        _upsert(int(sid), gate, new_val, performed_by,
+                title=story_obj.get("title", ""),
+                ba=story_obj.get("ba", ""),
+                dev_name=story_obj.get("dev", ""),
+                month_key=story_obj.get("month", ""),
+                priority=story_obj.get("pri", ""))
+    except Exception:
+        pass
+
+    return current
+
+
+# ── 4. Re-render story table + readiness header + stuck filter bar ────────────
+@callback(
+    Output("story-tbody",        "children"),
+    Output("readiness-header",   "children"),
+    Output("story-page-info",    "children"),
+    Output("story-page-prev",    "disabled"),
+    Output("story-page-next",    "disabled"),
+    Output("story-pagination",   "style"),
+    Output("stuck-filter-bar",   "children"),
+    Output("dash-summary-text",  "children"),
     Input("gate-store",          "data"),
     Input("plan-active-month",   "data"),
     Input("plan-ba-filter",      "data"),
@@ -3490,9 +3539,10 @@ def _select_month(n_clicks, current, months_data):
     Input("plan-type-filter",    "data"),
     Input("plan-tier-filter",    "data"),
     Input("story-page",          "data"),
+    Input("stuck-filter",        "data"),
     State("plan-stories-store",  "data"),
 )
-def _render_stories(gates, month, ba_f, dev_f, show_f, type_f, tier_f, page, stories_data):
+def _render_stories(gates, month, ba_f, dev_f, show_f, type_f, tier_f, page, stuck_f, stories_data):
     all_month = [s for s in (stories_data or []) if s["month"] == month]
     stories   = list(all_month)
 
@@ -3500,7 +3550,7 @@ def _render_stories(gates, month, ba_f, dev_f, show_f, type_f, tier_f, page, sto
         stories = [s for s in stories if s["ba"].startswith(ba_f)]
     if dev_f and dev_f != "All":
         stories = [s for s in stories if s["dev"].split()[0] == dev_f]
-    _actionable = {"NOT STARTED", "DRAFT"}
+    _actionable = {"NOT STARTED", "IN PROGRESS"}
     if show_f == "Needs Action":
         stories = [s for s in stories
                    if _status(gates.get(str(s["id"]), {f: s.get(f, False) for f in _GATE_FIELDS})) in _actionable]
@@ -3512,20 +3562,37 @@ def _render_stories(gates, month, ba_f, dev_f, show_f, type_f, tier_f, page, sto
     elif type_f == "Issues":
         stories = [s for s in stories if s["type"] == "ISSUE"]
 
+    def _gst(s):
+        return gates.get(str(s["id"]), {f: s.get(f, False) for f in _GATE_FIELDS})
+
     if tier_f and tier_f != "all":
-        def _gst(s):
-            return gates.get(str(s["id"]), {f: s.get(f, False) for f in _GATE_FIELDS})
-        if tier_f == "pre-dor":
-            stories = [s for s in stories if not _gst(s)["dor"]]
-        elif tier_f == "dor":
-            stories = [s for s in stories if _gst(s)["dor"] and not _gst(s)["story_written"]]
-        elif tier_f == "story_written":
-            stories = [s for s in stories if _gst(s)["story_written"]]
+        if tier_f == "not_started":
+            stories = [s for s in stories if _status(_gst(s)) == "NOT STARTED"]
+        elif tier_f == "in_progress":
+            stories = [s for s in stories if _status(_gst(s)) == "IN PROGRESS"]
+        elif tier_f == "complete":
+            stories = [s for s in stories if _status(_gst(s)) == "READY"]
+
+    # Stuck-at filter
+    def _stuck_gate(s):
+        g = _gst(s)
+        for f in _GATE_FIELDS:
+            if not g.get(f):
+                return f
+        return None  # all gates done
+
+    if stuck_f and stuck_f != "all":
+        if stuck_f == "not_started":
+            stories = [s for s in stories if _status(_gst(s)) == "NOT STARTED"]
+        elif stuck_f == "complete":
+            stories = [s for s in stories if _status(_gst(s)) == "READY"]
+        else:
+            stories = [s for s in stories if _stuck_gate(s) == stuck_f]
 
     _pri_ord = {"P1": 0, "P2": 1, "P3": 2, "P4": 3}
     def _sort_key(s):
         st = _status(gates.get(str(s["id"]), {f: s.get(f, False) for f in _GATE_FIELDS}))
-        return (0 if st in {"NOT STARTED", "DRAFT"} else 1, _pri_ord.get(s["pri"], 9), s["id"])
+        return (0 if st != "READY" else 1, _pri_ord.get(s["pri"], 9), s["id"])
     stories.sort(key=_sort_key)
 
     # Paginate
@@ -3558,11 +3625,10 @@ def _render_stories(gates, month, ba_f, dev_f, show_f, type_f, tier_f, page, sto
         next_disabled = (page >= total_pages)
 
     # Readiness header (always uses the full month, not filtered)
-    _not_actionable = {"STORY FROZEN", "IN DEV", "IN QA", "READY TO SHIP", "SHIPPED"}
     ready = sum(
         1 for s in all_month
         if _status(gates.get(str(s["id"]),
-                   {f: s.get(f, False) for f in _GATE_FIELDS})) in _not_actionable
+                   {f: s.get(f, False) for f in _GATE_FIELDS})) == "READY"
     )
     total = len(all_month)
     pct   = round(ready / total * 100) if total else 0
@@ -3579,7 +3645,7 @@ def _render_stories(gates, month, ba_f, dev_f, show_f, type_f, tier_f, page, sto
         r = sum(
             1 for s in ss
             if _status(gates.get(str(s["id"]),
-                       {f: s.get(f, False) for f in _GATE_FIELDS})) in _not_actionable
+                       {f: s.get(f, False) for f in _GATE_FIELDS})) == "READY"
         )
         ba_cards.append(
             _ba_card(ba_name, ba_code, ba_role,
@@ -3588,7 +3654,6 @@ def _render_stories(gates, month, ba_f, dev_f, show_f, type_f, tier_f, page, sto
 
     header = html.Div([
         html.Div([
-            # Left — month + label
             html.Div([
                 html.Span(month, style={"color": P, "fontSize": "13px", "fontWeight": "700",
                                         "marginRight": "4px"}),
@@ -3596,7 +3661,6 @@ def _render_stories(gates, month, ba_f, dev_f, show_f, type_f, tier_f, page, sto
                                                   "fontWeight": "600", "textTransform": "uppercase",
                                                   "letterSpacing": "1px"}),
             ], style={"flexShrink": "0"}),
-            # Center — progress bar
             html.Div([
                 html.Div(style={
                     "width": f"{pct}%", "height": "100%",
@@ -3610,7 +3674,6 @@ def _render_stories(gates, month, ba_f, dev_f, show_f, type_f, tier_f, page, sto
                 "background": "rgba(255,255,255,0.06)",
                 "borderRadius": "4px", "margin": "0 20px",
             }),
-            # Right — percentage + count
             html.Div([
                 html.Span(f"{pct}%", style={"color": c, "fontSize": "22px",
                                              "fontWeight": "800", "marginRight": "10px"}),
@@ -3627,7 +3690,105 @@ def _render_stories(gates, month, ba_f, dev_f, show_f, type_f, tier_f, page, sto
                  style={"display": "flex", "gap": "10px", "flexWrap": "wrap",
                          "marginBottom": "16px"}),
     ])
-    return rows, header, page_info, prev_disabled, next_disabled, pag_style
+
+    # ── WHERE STORIES ARE STUCK filter bar ────────────────────────────────────
+    def _count_stuck(gate_key):
+        return sum(1 for s in all_month if _stuck_gate(s) == gate_key)
+
+    n_total    = len(all_month)
+    n_ns       = sum(1 for s in all_month if _status(_gst(s)) == "NOT STARTED")
+    n_complete = sum(1 for s in all_month if _status(_gst(s)) == "READY")
+
+    _sfbtn_act = {"padding": "5px 12px", "borderRadius": "20px", "fontSize": "12px",
+                  "fontWeight": "600", "cursor": "pointer",
+                  "background": _dim(A), "color": A, "border": f"1px solid {A}"}
+    _sfbtn_idl = {"padding": "5px 12px", "borderRadius": "20px", "fontSize": "12px",
+                  "fontWeight": "500", "cursor": "pointer",
+                  "background": "var(--bg-hover)", "color": MT, "border": f"1px solid {BD}"}
+
+    def _sfbtn(label, count, key):
+        is_act = (stuck_f or "all") == key
+        return html.Div(
+            f"{label} ({count})",
+            id={"type": "stuck-chip", "v": key},
+            n_clicks=0,
+            style=_sfbtn_act if is_act else _sfbtn_idl,
+        )
+
+    stuck_bar = html.Div([
+        html.Span("WHERE STORIES ARE STUCK", style={
+            "fontSize": "9px", "fontWeight": "800", "letterSpacing": "2px",
+            "textTransform": "uppercase", "color": A, "marginRight": "14px",
+            "flexShrink": "0", "alignSelf": "center",
+        }),
+        _sfbtn("All",         n_total,    "all"),
+        _sfbtn("Not started", n_ns,       "not_started"),
+        *[_sfbtn(f"Stuck: {_GATE_LABELS[f]}", _count_stuck(f), f) for f in _GATE_FIELDS],
+        _sfbtn("Complete",    n_complete, "complete"),
+    ], style={
+        "display": "flex", "alignItems": "center", "flexWrap": "wrap", "gap": "6px",
+        "background": CD, "border": f"1px solid {BD}", "borderRadius": "10px",
+        "padding": "10px 16px",
+    })
+
+    summary_text = html.Span(
+        f"{month}  ·  {pct}% ({ready}/{total} ready)  ·  {total_filtered} of {total} stories shown",
+        style={"color": MT, "fontSize": "12px", "fontWeight": "500"},
+    )
+
+    return rows, header, page_info, prev_disabled, next_disabled, pag_style, stuck_bar, summary_text
+
+
+@callback(
+    Output("stuck-filter", "data"),
+    Input({"type": "stuck-chip", "v": ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def _stuck_filter_update(n_clicks):
+    triggered = ctx.triggered_id
+    if isinstance(triggered, dict):
+        return triggered.get("v", "all")
+    return "all"
+
+
+# ── Dashboard show/hide toggle ─────────────────────────────────────────────────
+@callback(
+    Output("dash-collapsed", "data"),
+    Input("dash-toggle-btn", "n_clicks"),
+    State("dash-collapsed",  "data"),
+    prevent_initial_call=True,
+)
+def _toggle_dashboard(n, collapsed):
+    return not (collapsed or False)
+
+
+@callback(
+    Output("dash-toggle-btn",       "children"),
+    Output("kpi-panel",             "style"),
+    Output("month-tabs-container",  "style"),
+    Output("dash-summary-text",     "style"),
+    Input("dash-collapsed",         "data"),
+)
+def _apply_dashboard_collapse(collapsed):
+    _sticky_base = {
+        "position": "sticky", "top": "108px", "zIndex": "20",
+        "background": C3,
+        "paddingTop": "10px", "paddingBottom": "10px",
+        "marginBottom": "4px",
+    }
+    if collapsed:
+        return (
+            ["▶ Show dashboard"],
+            {"display": "none"},
+            {**_sticky_base, "display": "none"},
+            {"display": "inline", "color": MT, "fontSize": "12px", "fontWeight": "500"},
+        )
+    return (
+        ["▼ Hide dashboard"],
+        {"display": "block"},
+        _sticky_base,
+        {"display": "none"},
+    )
 
 
 @callback(
@@ -3638,6 +3799,7 @@ def _render_stories(gates, month, ba_f, dev_f, show_f, type_f, tier_f, page, sto
     Input("plan-show-filter",  "data"),
     Input("plan-type-filter",  "data"),
     Input("plan-tier-filter",  "data"),
+    Input("stuck-filter",      "data"),
     prevent_initial_call=True,
 )
 def _reset_story_page(*_):
@@ -4073,8 +4235,7 @@ def _filter_story_matrix(type_f, size_f, gates, story_matrix):
 
 # ── Dev matrix live-update on gate change ─────────────────────────────────────
 _SP = {
-    "in_dev": 0, "in_qa": 1, "ready_to_ship": 2,
-    "story_frozen": 3, "draft": 4, "not_started": 5, "shipped": 6,
+    "story_frozen": 0, "draft": 1, "not_started": 2,
 }
 
 @callback(
@@ -4102,7 +4263,7 @@ def _live_dev_matrix(gates, dev_stories):
             cnt, csk = dev_matrix[dname][month]
             worst = csk if _SP.get(csk, 9) >= _SP.get(sk, 9) else sk
             dev_matrix[dname][month] = (cnt + 1, worst)
-        if not g.get("dor", False):
+        if not any(g.get(f, False) for f in _GATE_FIELDS):
             dev_matrix[dname]["ns"] += 1
     today_month = date.today().month
     return [_build_dev_matrix(dev_matrix, today_month)]
@@ -4110,13 +4271,11 @@ def _live_dev_matrix(gates, dev_stories):
 
 # ── 9. Sign-off log modal ─────────────────────────────────────────────────────
 _GATE_LABEL = {
-    "dor":           "DoR Gate",
-    "story_written": "Story Written",
-    "estimation":    "Estimation",
-    "in_dev":        "In Dev",
-    "in_qa":         "In QA",
-    "ready_to_ship": "Ready to Ship",
-    "delivery":      "Delivery",
+    "claude_screens": "Claude Screens",
+    "text_written":   "Text Written",
+    "our_screens":    "Our Screens",
+    "html_screens":   "HTML Screens",
+    "sn_signoff":     "SN Sign-Off",
 }
 
 
@@ -4260,22 +4419,15 @@ def _matrix_panel(cell_clicks, close_click, stories_data):
     ])
 
     # ── Group by readiness status ─────────────────────────────────────────────
-    groups = {
-        "not_started": [], "draft": [], "story_frozen": [],
-        "in_dev": [], "in_qa": [], "ready_to_ship": [], "shipped": [],
-    }
+    groups = {"not_started": [], "draft": [], "story_frozen": []}
     for s in dev_stories:
         sk = _story_status_key(s)
         groups.setdefault(sk, []).append(s)
 
     _STATUS_META = {
-        "not_started":  ("Not Started",   R,         "■"),
-        "draft":        ("Draft",         A,         "■"),
-        "story_frozen": ("Story Frozen",  "#c084fc", "■"),
-        "in_dev":       ("In Dev",        B,         "■"),
-        "in_qa":        ("In QA",         "#fb923c", "■"),
-        "ready_to_ship":("Ready to Ship", G,         "■"),
-        "shipped":      ("Shipped",       "#10b981", "■"),
+        "not_started":  ("Not Started", R,         "■"),
+        "draft":        ("In Progress", A,         "■"),
+        "story_frozen": ("Ready",       G,         "■"),
     }
 
     # ── KPI count boxes ───────────────────────────────────────────────────────
@@ -4299,11 +4451,7 @@ def _matrix_panel(cell_clicks, close_click, stories_data):
             "borderBottom": f"3px solid {color}", "margin": "0 4px",
         })
 
-    kpi_order = (
-        ["in_dev", "in_qa", "ready_to_ship", "story_frozen", "draft", "not_started"]
-        if month == "M0"
-        else ["story_frozen", "not_started", "draft", "in_dev", "in_qa", "ready_to_ship"]
-    )
+    kpi_order = ["story_frozen", "draft", "not_started"]
     kpi_boxes = [
         _kpi_box(len(groups[k]), _STATUS_META[k][0], _STATUS_META[k][1])
         for k in kpi_order if groups[k]
@@ -4359,10 +4507,8 @@ def _matrix_panel(cell_clicks, close_click, stories_data):
                 }),
             ], style={"display": "flex", "alignItems": "center", "marginBottom": "10px"}),
             html.Div([
-                _gate(s.get("dor",           False), "DoR Gate"),
-                _gate(s.get("story_written", False), "Story Written"),
-                _gate(s.get("estimation",    False), "Estimation"),
-                _gate(s.get("in_dev",        False), "In Dev"),
+                _gate(s.get(f, False), _GATE_LABELS.get(f, f))
+                for f in _GATE_FIELDS
             ], style={"display": "flex", "flexWrap": "wrap"}),
         ], style={
             "background": C3, "borderRadius": "10px",
@@ -4394,11 +4540,7 @@ def _matrix_panel(cell_clicks, close_click, stories_data):
     ], style={"padding": "0 20px 16px", "borderBottom": f"1px solid {BD}"})
 
     # ── Story sections ordered by urgency ─────────────────────────────────────
-    section_order = (
-        ["in_dev", "in_qa", "ready_to_ship", "story_frozen", "draft", "not_started", "shipped"]
-        if month == "M0"
-        else ["not_started", "draft", "story_frozen", "in_dev", "in_qa", "ready_to_ship", "shipped"]
-    )
+    section_order = ["not_started", "draft", "story_frozen"]
     if not dev_stories:
         cards_block = html.Div(
             "No stories planned for this developer in this month.",
@@ -4805,48 +4947,8 @@ def _ticket_log_render(sid, stories_data):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _derive_planning_gates(state: dict) -> dict:
-    """
-    Derive all 7 planning gate fields from lifecycle tracker step state.
-
-    Gate groupings:
-      dor           = g1 (DoR) + g2 (Design Freeze) both fully complete
-      story_written = p4 (Playback / Understanding Validation) fully complete
-      estimation    = p5 (Estimation Phase) fully complete
-      in_dev        = any step in g4 (Dev Complete Gate) checked
-      in_qa         = any step in g5 (QA Gate) checked
-      ready_to_ship = g5 fully complete
-      delivery      = g6 (Ship Gate) fully complete
-    """
-    def _gate_complete(gate_key: str) -> bool:
-        gate = next((g for g in LIFECYCLE if g["key"] == gate_key), None)
-        if not gate:
-            return False
-        return all(state.get(s["key"], False)
-                   for p in gate["phases"] for s in p["steps"])
-
-    def _phase_complete(phase_key: str) -> bool:
-        for g in LIFECYCLE:
-            for p in g["phases"]:
-                if p["key"] == phase_key:
-                    return all(state.get(s["key"], False) for s in p["steps"])
-        return False
-
-    def _gate_has_progress(gate_key: str) -> bool:
-        gate = next((g for g in LIFECYCLE if g["key"] == gate_key), None)
-        if not gate:
-            return False
-        return any(state.get(s["key"], False)
-                   for p in gate["phases"] for s in p["steps"])
-
-    return {
-        "dor":           _gate_complete("g1") and _gate_complete("g2"),
-        "story_written": _phase_complete("p4"),
-        "estimation":    _phase_complete("p5"),
-        "in_dev":        _gate_has_progress("g4"),
-        "in_qa":         _gate_has_progress("g5"),
-        "ready_to_ship": _gate_complete("g5"),
-        "delivery":      _gate_complete("g6"),
-    }
+    """BA sign-off gates are manual-only; no auto-derive from lifecycle steps."""
+    return {f: False for f in _GATE_FIELDS}
 
 def _tracker_gate_progress(gate: dict, state: dict) -> tuple[int, int]:
     """(done_steps, total_steps) for a gate."""
@@ -5016,28 +5118,19 @@ def _build_tracker_body(state: dict, gate_filter: dict | None = None) -> list:
 
 
 # ── 12. Lifecycle tracker — select ────────────────────────────────────────────
-# Handles both the 📋 icon button (tracker-btn) and gate pill clicks (gate-open-btn)
+# Only 📋 icon button opens tracker; gate pills now toggle directly (callback 3)
 @callback(
     Output("tracker-sid",        "data"),
     Output("tracker-gate-focus", "data"),
-    Input({"type": "tracker-btn",      "sid": ALL},            "n_clicks"),
-    Input({"type": "gate-open-btn",    "sid": ALL, "gate": ALL}, "n_clicks"),
+    Input({"type": "tracker-btn", "sid": ALL}, "n_clicks"),
     prevent_initial_call=True,
 )
-def _tracker_select(tracker_clicks, gate_clicks):
-    # Guard: skip if no button has actually been clicked yet (all n_clicks == 0)
-    all_clicks = list(tracker_clicks or []) + list(gate_clicks or [])
-    if not any(all_clicks):
+def _tracker_select(tracker_clicks):
+    if not any(tracker_clicks or []):
         return no_update, no_update
     triggered = ctx.triggered_id
-    if not isinstance(triggered, dict):
-        return no_update, no_update
-    t = triggered.get("type")
-    if t == "tracker-btn":
+    if isinstance(triggered, dict) and triggered.get("type") == "tracker-btn":
         return triggered["sid"], None
-    if t == "gate-open-btn":
-        gate_filter = _GATE_FILTER_MAP.get(triggered["gate"])
-        return triggered["sid"], gate_filter
     return no_update, no_update
 
 
@@ -5119,33 +5212,8 @@ def _tracker_main(sid, step_clicks, cur_data, stories_data, gate_store):
             _log.getLogger(__name__).error("toggle_tracker_step failed sid=%s step=%s: %s",
                                            data.get("sid"), sk, _e)
 
-        # ── Auto-sync planning gates from completed lifecycle steps ───────────
-        derived   = _derive_planning_gates(state)
-        sid_str   = str(data["sid"])
-        old_gates = dict(gate_store or {})
-        old_g     = old_gates.get(sid_str, {f: False for f in _GATE_FIELDS})
+        # BA sign-off gates are now manual-only; tracker no longer auto-syncs them.
         new_gate_store = no_update
-
-        if derived != {k: old_g.get(k, False) for k in _GATE_FIELDS}:
-            old_gates[sid_str] = derived
-            new_gate_store = old_gates
-            # Persist changed gates to DB
-            try:
-                from db.planning import upsert_gate as _upsert
-                story_obj = next((s for s in (stories_data or []) if s["id"] == data["sid"]), {})
-                for gname, gval in derived.items():
-                    if gval != old_g.get(gname, False):
-                        _upsert(
-                            int(data["sid"]), gname, gval, performed_by,
-                            title=story_obj.get("title", ""),
-                            ba=story_obj.get("ba", ""),
-                            dev_name=story_obj.get("dev", ""),
-                            month_key=story_obj.get("month", ""),
-                            priority=story_obj.get("pri", ""),
-                        )
-            except Exception:
-                pass
-
         new_data = {"sid": data["sid"], "state": state}
         story    = next((s for s in (stories_data or []) if s["id"] == data["sid"]), None)
         title    = story["title"] if story else f"Item #{data['sid']}"

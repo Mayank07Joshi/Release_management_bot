@@ -69,4 +69,4 @@ def layout():
             ),
         ], className="page-header"),
         *sections,
-    ])
+    ], style={"padding": "28px 32px"})

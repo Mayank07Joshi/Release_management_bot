@@ -1,7 +1,8 @@
 """VSTS Focus Area & Sprint Activity"""
 
 import dash
-from dash import dcc, html, Input, Output, callback, dash_table, ctx
+from dash import dcc, html, Input, Output, callback, dash_table, ctx, ALL
+from dash.exceptions import PreventUpdate
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import date, datetime, timedelta
@@ -172,6 +173,10 @@ def focus_tab_content():
         dcc.Store(id="focus-type",         data="All"),
         dcc.Store(id="focus-tab",          data="summary"),
         dcc.Store(id="focus-state-filter", data=_DEFAULT_STATES),
+        dcc.Store(id="adl-horizon",        data="365d"),
+        dcc.Store(id="adl-source",         data="All"),
+        dcc.Store(id="adl-type",           data="All"),
+        dcc.Store(id="adl-team",           data="All"),
 
         # ── Breadcrumb ────────────────────────────────────────────────────────
         html.Div("VSTS DATA · FOCUS AREA & SPRINT ACTIVITY", style={
@@ -226,7 +231,7 @@ def focus_tab_content():
             html.Div([
                 html.Div("Data Load Summary", id="focus-tab-summary-btn", n_clicks=0,
                          className="focus-tab-btn focus-tab-active"),
-                html.Div("Sprint Activity · 30 Days", id="focus-tab-sprint-btn", n_clicks=0,
+                html.Div("Addition & Deletion", id="focus-tab-sprint-btn", n_clicks=0,
                          className="focus-tab-btn"),
             ], style={"display": "flex"}),
             html.Div(id="focus-tab-meta", style={"fontSize": "12px", "color": MT}),
@@ -243,7 +248,7 @@ def focus_tab_content():
             style={"minHeight": "200px"},
             children=html.Div(id="focus-content"),
         ),
-    ])
+    ], style={"padding": "28px 32px"})
 
 
 # ── Callbacks ─────────────────────────────────────────────────────────────────
@@ -264,6 +269,42 @@ def _select_tab(n1, n2):
     return "summary", active, default
 
 
+@callback(Output("adl-horizon", "data"),
+          Input({"type": "adl-horizon-chip", "val": ALL}, "n_clicks"),
+          prevent_initial_call=True)
+def _adl_horizon(n_clicks):
+    if not any(n_clicks):
+        raise PreventUpdate
+    return ctx.triggered_id["val"]
+
+
+@callback(Output("adl-source", "data"),
+          Input({"type": "adl-source-chip", "val": ALL}, "n_clicks"),
+          prevent_initial_call=True)
+def _adl_source(n_clicks):
+    if not any(n_clicks):
+        raise PreventUpdate
+    return ctx.triggered_id["val"]
+
+
+@callback(Output("adl-type", "data"),
+          Input({"type": "adl-type-chip", "val": ALL}, "n_clicks"),
+          prevent_initial_call=True)
+def _adl_type_cb(n_clicks):
+    if not any(n_clicks):
+        raise PreventUpdate
+    return ctx.triggered_id["val"]
+
+
+@callback(Output("adl-team", "data"),
+          Input({"type": "adl-team-chip", "val": ALL}, "n_clicks"),
+          prevent_initial_call=True)
+def _adl_team(n_clicks):
+    if not any(n_clicks):
+        raise PreventUpdate
+    return ctx.triggered_id["val"]
+
+
 @callback(
     Output("focus-state-filter", "data"),
     Input("focus-state-dropdown", "value"),
@@ -280,8 +321,12 @@ def _sync_state_filter(value):
     Input("focus-type",           "data"),
     Input("focus-tab",            "data"),
     Input("focus-state-filter",   "data"),
+    Input("adl-horizon",          "data"),
+    Input("adl-source",           "data"),
+    Input("adl-type",             "data"),
+    Input("adl-team",             "data"),
 )
-def _render(type_filter, tab, state_filter):
+def _render(type_filter, tab, state_filter, adl_horizon, adl_source, adl_type, adl_team):
     # Lightweight query — only the 7 columns needed for summary stats and sprint count
     try:
         with engine.connect() as _conn:
@@ -337,7 +382,7 @@ def _render(type_filter, tab, state_filter):
 
     if tab == "sprint":
         try:
-            content = _render_sprint(df_raw, df_issues_scope, df_enh, type_filter)
+            content = _render_sprint_adl(adl_horizon, adl_source, adl_type, adl_team)
         except Exception as _e:
             import traceback
             content = html.Div([
@@ -644,7 +689,386 @@ def _render_summary(df, df_issues_scope, df_enh, type_filter):
     ])
 
 
-# ── Sprint Activity ───────────────────────────────────────────────────────────
+# ── Addition & Deletion ───────────────────────────────────────────────────────
+
+_CLOSED_STATES = frozenset([
+    "Resolved", "Closed", "Not an issue", "Not Required",
+    "No Customer Response", "Userstory Update",
+])
+
+_TEAM_LABEL = {
+    "Development": "Web Dev",
+    "Mobile":      "Mobile Dev",
+    "Design/Video":"Design",
+    "QA":          "QA",
+    "User Story":  "Story Writers",
+    "Management":  "Management",
+}
+
+
+def _adl_chip(label, chip_type, val, active):
+    bg  = "rgba(129,140,248,0.15)" if active else "rgba(255,255,255,0.04)"
+    brd = "rgba(129,140,248,0.55)" if active else "rgba(255,255,255,0.12)"
+    clr = "#c4b5fd" if active else MT
+    fw  = "700" if active else "500"
+    return html.Div(label, id={"type": chip_type, "val": val}, n_clicks=0, style={
+        "padding": "5px 14px", "borderRadius": "20px", "cursor": "pointer",
+        "fontSize": "12px", "fontWeight": fw,
+        "background": bg, "color": clr, "border": f"1px solid {brd}",
+        "whiteSpace": "nowrap",
+    })
+
+
+def _render_sprint_adl(horizon: str, source: str, adl_type: str, team: str):
+    from config.team_mapping import TEAM_MAPPING, TEAMS_LIST
+
+    today         = date.today()
+    n_days        = {"30d": 30, "90d": 90, "180d": 180, "365d": 365}.get(horizon, 365)
+    horizon_start = today - timedelta(days=n_days)
+    h_ts          = pd.Timestamp(horizon_start)
+    today_ts      = pd.Timestamp(today)
+
+    # ── Query ─────────────────────────────────────────────────────────────
+    try:
+        with engine.connect() as conn:
+            df = pd.read_sql(text("""
+                SELECT work_item_id, work_item_type, state,
+                       type AS source_type, assigned_to,
+                       created_date, closed_date
+                FROM work_items_main
+                WHERE created_date IS NOT NULL
+            """), conn)
+    except Exception:
+        import traceback
+        return html.Div([
+            html.Div("Failed to load data", style={"color": RED, "fontWeight": "700"}),
+            html.Pre(traceback.format_exc(), style={"color": MT, "fontSize": "11px"}),
+        ])
+
+    if df.empty:
+        return html.Div("No data available.", style={"color": MT, "padding": "40px"})
+
+    # ── Normalise dates ────────────────────────────────────────────────────
+    for col in ("created_date", "closed_date"):
+        s = pd.to_datetime(df[col], utc=True, errors="coerce")
+        df[col] = s.dt.tz_localize(None) if s.dt.tz is None else s.dt.tz_convert(None)
+
+    # ── Derive team ────────────────────────────────────────────────────────
+    def _map_team(name):
+        clean = str(name).split(" <")[0].strip()
+        return TEAM_MAPPING.get(clean, "Unassigned")
+
+    df["team"]        = df["assigned_to"].apply(_map_team)
+    df["source_type"] = df["source_type"].fillna("").astype(str).str.strip()
+
+    # ── Apply type filter (All = Issues + Enhancements only) ──────────────
+    _all_types = ISSUE_TYPES | ENH_TYPES
+    if adl_type == "Issues":
+        df = df[df["work_item_type"].isin(ISSUE_TYPES)]
+    elif adl_type == "Enhancements":
+        df = df[df["work_item_type"].isin(ENH_TYPES)]
+    else:
+        df = df[df["work_item_type"].isin(_all_types)]
+
+    # ── Apply source filter ───────────────────────────────────────────────
+    if source != "All":
+        df = df[df["source_type"] == source]
+
+    # Per-team counts for chip labels (before team filter)
+    team_counts: dict[str, int] = {"All": len(df)}
+    for t in TEAMS_LIST:
+        team_counts[t] = int((df["team"] == t).sum())
+
+    # ── Apply team filter ─────────────────────────────────────────────────
+    if team != "All":
+        df = df[df["team"] == team]
+
+    # ── Compute KPIs ──────────────────────────────────────────────────────
+    is_closed    = df["state"].isin(_CLOSED_STATES)
+    open_now     = int((~is_closed).sum())
+
+    # Items in opening backlog = created before horizon AND either:
+    #   (a) currently open, OR
+    #   (b) closed with a real closed_date inside the horizon window
+    # Excludes items in closed state with NULL closed_date — those can't be
+    # placed in any month and would inflate the running total forever.
+    opening_mask = (
+        (df["created_date"] < h_ts) &
+        (
+            (~is_closed) |
+            (is_closed & df["closed_date"].notna() & (df["closed_date"] >= h_ts))
+        )
+    )
+    opening_backlog = int(opening_mask.sum())
+
+    # "Added" = items created in horizon that we can properly account for:
+    # either still open, or closed with a real closed_date we can place on the chart.
+    # Items created in horizon but in a closed state with NULL closed_date are ADO
+    # data-quality gaps — we can't place their removal on any month, so including
+    # them in added would permanently inflate net and the running total.
+    added_mask = (
+        (df["created_date"] >= h_ts) & (df["created_date"] <= today_ts) &
+        (~is_closed | df["closed_date"].notna())
+    )
+    closed_mask = (
+        is_closed & df["closed_date"].notna() &
+        (df["closed_date"] >= h_ts) & (df["closed_date"] <= today_ts)
+    )
+    added_total  = int(added_mask.sum())
+    closed_total = int(closed_mask.sum())
+    net          = added_total - closed_total
+    net_str      = f"+{net}" if net > 0 else str(net)
+    net_color    = RED if net > 0 else (G if net < 0 else MT)
+    net_sub      = "Backlog growing" if net > 0 else ("Backlog shrinking" if net < 0 else "Stable")
+
+    # ── Monthly buckets ───────────────────────────────────────────────────
+    months = pd.period_range(
+        start=pd.Timestamp(horizon_start).to_period("M"),
+        end=today_ts.to_period("M"),
+        freq="M",
+    )
+    added_by_m  = df.loc[added_mask,  "created_date"].dt.to_period("M").value_counts()
+    closed_by_m = df.loc[closed_mask, "closed_date" ].dt.to_period("M").value_counts()
+
+    added_vals  = [int(added_by_m.get(m, 0))  for m in months]
+    closed_vals = [int(closed_by_m.get(m, 0)) for m in months]
+    net_vals    = [a - c for a, c in zip(added_vals, closed_vals)]
+
+    running: list[int] = []
+    cur = opening_backlog
+    for n in net_vals:
+        cur += n
+        running.append(cur)
+
+    xlabels = [m.strftime("%b-%y") for m in months]
+
+    # ── Plotly figure ─────────────────────────────────────────────────────
+    fig = go.Figure()
+
+    # Additions — purple, positive (go up)
+    fig.add_trace(go.Bar(
+        x=xlabels, y=added_vals,
+        name="Additions (up)",
+        marker=dict(color="#a78bfa", line=dict(width=0)),
+        width=0.38,
+        offset=-0.41,
+    ))
+    # Deletions — green, negative (go down), same x, offset to the right
+    fig.add_trace(go.Bar(
+        x=xlabels, y=[-v for v in closed_vals],
+        name="Deletions (down)",
+        marker=dict(color="#34d399", line=dict(width=0)),
+        width=0.38,
+        offset=0.03,
+    ))
+    # Net — orange diamonds
+    fig.add_trace(go.Scatter(
+        x=xlabels, y=net_vals,
+        mode="lines+markers",
+        name="Net",
+        line=dict(color="#f59e0b", width=2),
+        marker=dict(symbol="diamond", size=10, color="#f59e0b",
+                    line=dict(width=0)),
+    ))
+    # Running open total — cyan on right axis
+    fig.add_trace(go.Scatter(
+        x=xlabels, y=running,
+        mode="lines+markers",
+        name="Open items (running total, right axis)",
+        line=dict(color="#22d3ee", width=2.5),
+        marker=dict(symbol="circle", size=6, color="#22d3ee",
+                    line=dict(width=0)),
+        yaxis="y2",
+    ))
+
+    y_max = max(max(added_vals or [0]), max(closed_vals or [0]), 1)
+    fig.update_layout(
+        template="midnight",
+        height=360,
+        barmode="overlay",
+        margin=dict(l=10, r=55, t=16, b=70),
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(
+            tickfont=dict(size=11, color="#94a3b8"),
+            title=None, fixedrange=True,
+            showgrid=False,
+            zeroline=False,
+        ),
+        yaxis=dict(
+            title=None, fixedrange=True,
+            range=[-(y_max * 1.45), y_max * 1.45],
+            zeroline=True,
+            zerolinecolor="rgba(255,255,255,0.25)",
+            zerolinewidth=1.5,
+            gridcolor="rgba(255,255,255,0.04)",
+            tickfont=dict(size=10, color="#64748b"),
+        ),
+        yaxis2=dict(
+            overlaying="y", side="right", showgrid=False,
+            fixedrange=True, title=None,
+            tickfont=dict(size=10, color="#22d3ee"),
+            zeroline=False,
+        ),
+        legend=dict(
+            orientation="h", y=-0.22, x=0,
+            font=dict(size=11, color="#94a3b8"),
+            bgcolor="rgba(0,0,0,0)",
+        ),
+    )
+
+    # ── Chip helpers ──────────────────────────────────────────────────────
+    # Team chips
+    team_chip_rows = [("All", "All")] + [(t, t) for t in TEAMS_LIST]
+    team_chips = []
+    for key, t_key in team_chip_rows:
+        display = _TEAM_LABEL.get(key, key)
+        cnt = team_counts.get(t_key, 0)
+        team_chips.append(_adl_chip(
+            f"{display}  {cnt}", "adl-team-chip", t_key, team == t_key,
+        ))
+
+    # Horizon chips
+    h_chips = [_adl_chip(h, "adl-horizon-chip", h, horizon == h)
+               for h in ("30d", "90d", "180d", "365d")]
+
+    # Source chips
+    src_counts = {
+        "All":      len(df),
+        "Customer": int((df["source_type"] == "Customer").sum()),
+        "Internal": int((df["source_type"] == "Internal").sum()),
+    }
+    s_chips = [
+        _adl_chip(f"{s}  {src_counts[s]}", "adl-source-chip", s, source == s)
+        for s in ("All", "Customer", "Internal")
+    ]
+
+    # Type chips
+    type_counts = {
+        "All":          len(df),
+        "Issues":       int(df["work_item_type"].isin(ISSUE_TYPES).sum()),
+        "Enhancements": int(df["work_item_type"].isin(ENH_TYPES).sum()),
+    }
+    t_chips = [
+        _adl_chip(f"{lbl}  {type_counts[lbl]}", "adl-type-chip", lbl, adl_type == lbl)
+        for lbl in ("All", "Issues", "Enhancements")
+    ]
+
+    subtitle = f"Rolling {horizon} from {horizon_start.strftime('%b-%y')}"
+
+    # ── Assemble layout ───────────────────────────────────────────────────
+    return html.Div([
+        # Title row
+        html.Div([
+            html.Span("Issues/Enhancements — Addition & Deletion", style={
+                "fontSize": "18px", "fontWeight": "700", "color": TXT, "marginRight": "12px",
+            }),
+            html.Span(subtitle, style={"fontSize": "12px", "color": MT}),
+        ], style={"marginBottom": "14px", "display": "flex", "alignItems": "baseline", "flexWrap": "wrap"}),
+
+        # Team chips row
+        html.Div(team_chips, style={
+            "display": "flex", "gap": "8px", "flexWrap": "wrap", "marginBottom": "12px",
+        }),
+
+        # Filter bar
+        html.Div([
+            html.Div([
+                html.Span("HORIZON", style={
+                    "fontSize": "9px", "fontWeight": "700", "color": MT,
+                    "letterSpacing": "0.07em", "whiteSpace": "nowrap",
+                }),
+                *h_chips,
+                html.Div(style={"width": "1px", "background": "rgba(255,255,255,0.12)",
+                                "margin": "0 10px", "alignSelf": "stretch"}),
+                html.Span("SOURCE", style={
+                    "fontSize": "9px", "fontWeight": "700", "color": MT,
+                    "letterSpacing": "0.07em", "whiteSpace": "nowrap",
+                }),
+                *s_chips,
+                html.Div(style={"width": "1px", "background": "rgba(255,255,255,0.12)",
+                                "margin": "0 10px", "alignSelf": "stretch"}),
+                html.Span("TYPE", style={
+                    "fontSize": "9px", "fontWeight": "700", "color": MT,
+                    "letterSpacing": "0.07em", "whiteSpace": "nowrap",
+                }),
+                *t_chips,
+            ], style={
+                "display": "flex", "alignItems": "center", "gap": "6px",
+                "flexWrap": "wrap", "flex": "1",
+            }),
+            html.Div([
+                html.Span(f"{added_total} added", style={"color": "#a78bfa", "fontWeight": "600"}),
+                html.Span(" · ", style={"color": MT}),
+                html.Span(f"{closed_total} fixed", style={"color": "#34d399", "fontWeight": "600"}),
+                html.Span(" · ", style={"color": MT}),
+                html.Span(f"open {open_now}", style={"color": "#22d3ee", "fontWeight": "600"}),
+            ], style={
+                "display": "flex", "gap": "4px", "fontSize": "12px",
+                "whiteSpace": "nowrap", "flexShrink": "0",
+            }),
+        ], style={
+            "display": "flex", "justifyContent": "space-between", "alignItems": "center",
+            "marginBottom": "16px", "flexWrap": "wrap", "gap": "8px",
+        }),
+
+        # KPI cards
+        html.Div([
+            _kpi_card(open_now,      "Open Now",    f"was {opening_backlog} at start", "#22d3ee"),
+            _kpi_card(added_total,   "Added",       f"over {horizon}",                "#a78bfa"),
+            _kpi_card(closed_total,  "Closed",      f"over {horizon}",                "#34d399"),
+            _kpi_card(net_str,       "Net Change",  net_sub,                          net_color),
+        ], style={"display": "flex", "gap": "16px", "marginBottom": "20px", "flexWrap": "wrap"}),
+
+        # Chart card
+        html.Div([
+            html.Div([
+                html.Div([
+                    html.Div("Additions, deletions & open backlog", style={
+                        "fontSize": "15px", "fontWeight": "700", "color": TXT,
+                        "letterSpacing": "-0.01em",
+                    }),
+                    html.Div("Click any month for the items added and fixed", style={
+                        "fontSize": "12px", "color": MT, "marginTop": "3px",
+                    }),
+                ]),
+                html.Div([
+                    html.Span("Open now: ", style={"fontSize": "13px", "color": MT}),
+                    html.Span(str(open_now), style={
+                        "fontSize": "14px", "fontWeight": "700", "color": "#22d3ee",
+                    }),
+                ]),
+            ], style={
+                "display": "flex", "justifyContent": "space-between",
+                "alignItems": "flex-start", "marginBottom": "4px",
+            }),
+
+            dcc.Graph(
+                figure=fig,
+                config={"displayModeBar": False},
+                id="adl-chart",
+                style={"margin": "0 -8px"},
+            ),
+
+            html.Div(
+                "Additions / deletions are item counts per month.  "
+                "Net = additions − deletions.  "
+                "Open items = opening backlog + cumulative net.  "
+                "Scoped to the active team / source / type / horizon filters.",
+                style={
+                    "fontSize": "11px", "color": MT,
+                    "marginTop": "4px", "lineHeight": "1.6",
+                    "borderTop": "1px solid rgba(255,255,255,0.06)",
+                    "paddingTop": "10px",
+                },
+            ),
+        ], style={
+            "background": "rgba(15,15,30,0.6)",
+            "border": f"1px solid {BD}",
+            "borderRadius": "14px", "padding": "22px 28px",
+        }),
+    ])
+
 
 def _render_sprint(df, df_issues_scope, df_enh, type_filter):
     today        = date.today()

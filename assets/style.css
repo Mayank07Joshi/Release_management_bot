@@ -378,7 +378,7 @@ body {
 /* ── Main Content ────────────────────────────────────────────────────────────── */
 .main-content {
     margin-top: var(--topnav-h);
-    padding: 28px 36px;
+    padding: 0;
     min-height: calc(100vh - var(--topnav-h));
     background: var(--bg-base);
     overflow-x: clip;
@@ -1078,31 +1078,34 @@ input:focus, select:focus, textarea:focus,
     display: flex;
     align-items: center;
     gap: 5px;
-    padding: 5px 10px;
+    padding: 7px 12px;
     border-radius: 6px;
     cursor: pointer;
     transition: all 0.15s;
     font-size: 11px;
     font-weight: 600;
-    margin-bottom: 4px;
+    margin-bottom: 3px;
     width: 100%;
     border: 1px solid transparent;
+    user-select: none;
 }
 .gate-pill:hover {
-    filter: brightness(1.2);
+    filter: brightness(1.15);
 }
 .gate-pill.gate-done {
-    background: rgba(52, 211, 153, 0.10);
-    border-color: rgba(52, 211, 153, 0.40);
-    border-left: 3px solid #34d399;
-    color: #34d399;
-    box-shadow: 0 0 12px rgba(52, 211, 153, 0.15);
+    background: #34d399;
+    border-color: #34d399;
+    color: #ffffff;
+    box-shadow: 0 2px 8px rgba(52, 211, 153, 0.35);
 }
 .gate-pill.gate-pending {
-    background: transparent;
+    background: rgba(255, 255, 255, 0.04);
     border-color: var(--border-mid);
-    border-left: 3px solid var(--border-mid);
     color: var(--text-secondary);
+}
+.gate-pill.gate-pending:hover {
+    background: rgba(52, 211, 153, 0.08);
+    border-color: rgba(52, 211, 153, 0.3);
 }
 
 /* ── Tracker modal gate cards ─────────────────────────────────────────────── */

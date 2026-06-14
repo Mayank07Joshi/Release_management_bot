@@ -68,12 +68,11 @@ app = Dash(
 
 # ── Top nav structure ──────────────────────────────────────────────────────────
 _NAV = [
-    {"label": "Home",            "href": "/",                  "icon": "🏠"},
-    {"label": "Summary",         "href": "/summary",           "icon": "📊"},
-    {"label": "Planning Tool",   "href": "/planning",          "icon": "📅"},
-    {"label": "Iteration Audit", "href": "/iteration-audit",   "icon": "📋"},
-    {"label": "Leave Manager",   "href": "/leave-management",  "icon": "📆"},
-    {"label": "Reports",         "href": "/reports",           "icon": "📄"},
+    {"label": "Home",          "href": "/",                  "icon": "🏠"},
+    {"label": "Summary",       "href": "/summary",           "icon": "📊"},
+    {"label": "Planning Tool", "href": "/planning",          "icon": "📅"},
+    {"label": "Leave Manager", "href": "/leave-management",  "icon": "📆"},
+    {"label": "Reports",       "href": "/reports",           "icon": "📄"},
 ]
 
 topnav = html.Div([

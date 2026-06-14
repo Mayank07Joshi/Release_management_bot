@@ -33,31 +33,41 @@ from data.loader import engine
 
 _CREATE_GATES = """
 CREATE TABLE IF NOT EXISTS p_planning_gates (
-    work_item_id  INTEGER PRIMARY KEY,
-    written       BOOLEAN NOT NULL DEFAULT FALSE,
-    ac_locked     BOOLEAN NOT NULL DEFAULT FALSE,
-    estimated     BOOLEAN NOT NULL DEFAULT FALSE,
-    dor           BOOLEAN NOT NULL DEFAULT FALSE,
-    story_written BOOLEAN NOT NULL DEFAULT FALSE,
-    estimation    BOOLEAN NOT NULL DEFAULT FALSE,
-    in_dev        BOOLEAN NOT NULL DEFAULT FALSE,
-    in_qa         BOOLEAN NOT NULL DEFAULT FALSE,
-    ready_to_ship BOOLEAN NOT NULL DEFAULT FALSE,
-    delivery      BOOLEAN NOT NULL DEFAULT FALSE,
-    updated_by    TEXT,
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    work_item_id   INTEGER PRIMARY KEY,
+    written        BOOLEAN NOT NULL DEFAULT FALSE,
+    ac_locked      BOOLEAN NOT NULL DEFAULT FALSE,
+    estimated      BOOLEAN NOT NULL DEFAULT FALSE,
+    dor            BOOLEAN NOT NULL DEFAULT FALSE,
+    story_written  BOOLEAN NOT NULL DEFAULT FALSE,
+    estimation     BOOLEAN NOT NULL DEFAULT FALSE,
+    in_dev         BOOLEAN NOT NULL DEFAULT FALSE,
+    in_qa          BOOLEAN NOT NULL DEFAULT FALSE,
+    ready_to_ship  BOOLEAN NOT NULL DEFAULT FALSE,
+    delivery       BOOLEAN NOT NULL DEFAULT FALSE,
+    claude_screens BOOLEAN NOT NULL DEFAULT FALSE,
+    text_written   BOOLEAN NOT NULL DEFAULT FALSE,
+    our_screens    BOOLEAN NOT NULL DEFAULT FALSE,
+    html_screens   BOOLEAN NOT NULL DEFAULT FALSE,
+    sn_signoff     BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_by     TEXT,
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 )
 """
 
 # Migration: add new columns if the table was created before this schema version
 _MIGRATE_GATES = [
-    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS dor           BOOLEAN NOT NULL DEFAULT FALSE",
-    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS story_written BOOLEAN NOT NULL DEFAULT FALSE",
-    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS estimation    BOOLEAN NOT NULL DEFAULT FALSE",
-    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS in_dev        BOOLEAN NOT NULL DEFAULT FALSE",
-    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS in_qa         BOOLEAN NOT NULL DEFAULT FALSE",
-    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS ready_to_ship BOOLEAN NOT NULL DEFAULT FALSE",
-    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS delivery      BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS dor            BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS story_written  BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS estimation     BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS in_dev         BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS in_qa          BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS ready_to_ship  BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS delivery       BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS claude_screens BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS text_written   BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS our_screens    BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS html_screens   BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS sn_signoff     BOOLEAN NOT NULL DEFAULT FALSE",
 ]
 
 _CREATE_LOG = """
@@ -201,7 +211,7 @@ def toggle_tracker_step(
 
 def load_all_gates() -> dict[int, dict]:
     """
-    Return every row in p_planning_gates as a 7-field dict per work item.
+    Return every row in p_planning_gates as a 5-field BA sign-off dict per work item.
     Returns empty dict on any error.
     """
     try:
@@ -209,20 +219,18 @@ def load_all_gates() -> dict[int, dict]:
             rows = conn.execute(
                 text("""
                     SELECT work_item_id,
-                           dor, story_written, estimation,
-                           in_dev, in_qa, ready_to_ship, delivery
+                           claude_screens, text_written, our_screens,
+                           html_screens, sn_signoff
                     FROM p_planning_gates
                 """)
             ).fetchall()
         return {
             r.work_item_id: {
-                "dor":           bool(r.dor),
-                "story_written": bool(r.story_written),
-                "estimation":    bool(r.estimation),
-                "in_dev":        bool(r.in_dev),
-                "in_qa":         bool(r.in_qa),
-                "ready_to_ship": bool(r.ready_to_ship),
-                "delivery":      bool(r.delivery),
+                "claude_screens": bool(r.claude_screens),
+                "text_written":   bool(r.text_written),
+                "our_screens":    bool(r.our_screens),
+                "html_screens":   bool(r.html_screens),
+                "sn_signoff":     bool(r.sn_signoff),
             }
             for r in rows
         }
@@ -272,26 +280,22 @@ def get_log(
 
 # ── Write ─────────────────────────────────────────────────────────────────────
 
-# Logical gate name → column name in p_planning_gates
+# Logical gate name → column name in p_planning_gates (BA sign-off gates only)
 _GATE_COL = {
-    "dor":           "dor",
-    "story_written": "story_written",
-    "estimation":    "estimation",
-    "in_dev":        "in_dev",
-    "in_qa":         "in_qa",
-    "ready_to_ship": "ready_to_ship",
-    "delivery":      "delivery",
+    "claude_screens": "claude_screens",
+    "text_written":   "text_written",
+    "our_screens":    "our_screens",
+    "html_screens":   "html_screens",
+    "sn_signoff":     "sn_signoff",
 }
 
-# Cascade clear: clearing a gate also clears everything downstream
+# Cascade clear: unchecking a gate clears all downstream gates
 _CASCADE_CLEAR = {
-    "dor":           ("story_written", "estimation", "in_dev", "in_qa", "ready_to_ship", "delivery"),
-    "story_written": ("estimation", "in_dev", "in_qa", "ready_to_ship", "delivery"),
-    "estimation":    ("in_dev", "in_qa", "ready_to_ship", "delivery"),
-    "in_dev":        ("in_qa", "ready_to_ship", "delivery"),
-    "in_qa":         ("ready_to_ship", "delivery"),
-    "ready_to_ship": ("delivery",),
-    "delivery":      (),
+    "claude_screens": ("text_written", "our_screens", "html_screens", "sn_signoff"),
+    "text_written":   ("our_screens", "html_screens", "sn_signoff"),
+    "our_screens":    ("html_screens", "sn_signoff"),
+    "html_screens":   ("sn_signoff",),
+    "sn_signoff":     (),
 }
 
 
@@ -379,19 +383,15 @@ def upsert_gate(
 
 def _status_label(gate: str, value: bool) -> str:
     labels = {
-        ("dor",           True):  "DoR Gate ✓",
-        ("dor",           False): "DoR Gate ✗",
-        ("story_written", True):  "Story Written ✓",
-        ("story_written", False): "Story Written ✗",
-        ("estimation",    True):  "Estimation ✓",
-        ("estimation",    False): "Estimation ✗",
-        ("in_dev",        True):  "In Dev →",
-        ("in_dev",        False): "In Dev Cleared",
-        ("in_qa",         True):  "In QA →",
-        ("in_qa",         False): "In QA Cleared",
-        ("ready_to_ship", True):  "Ready to Ship ✓",
-        ("ready_to_ship", False): "Ready to Ship ✗",
-        ("delivery",      True):  "Shipped ✓",
-        ("delivery",      False): "Shipped ✗",
+        ("claude_screens", True):  "Claude Screens ✓",
+        ("claude_screens", False): "Claude Screens ✗",
+        ("text_written",   True):  "Text Written ✓",
+        ("text_written",   False): "Text Written ✗",
+        ("our_screens",    True):  "Our Screens ✓",
+        ("our_screens",    False): "Our Screens ✗",
+        ("html_screens",   True):  "HTML Screens ✓",
+        ("html_screens",   False): "HTML Screens ✗",
+        ("sn_signoff",     True):  "SN Sign-Off ✓",
+        ("sn_signoff",     False): "SN Sign-Off ✗",
     }
     return labels.get((gate, value), f"{gate}={'on' if value else 'off'}")
