@@ -70,7 +70,7 @@ app = Dash(
 # (section_label, section_dot_color, [(label, href, icon_char, is_built)])
 _NAV_TREE = [
     (None, None, [
-        ("Overview", "/overview", "▦", False),
+        ("Overview", "/overview", "▦", True),
     ]),
     ("TRENDS", "#34d399", [
         ("Addition & Deletion", "/addition-deletion", "◉", True),

@@ -33,3 +33,6 @@ Thumbs.db
 
 # Claude Code internal
 .claude/
+
+# Local test files — not ready to push
+tests/upload_test_cases.py
