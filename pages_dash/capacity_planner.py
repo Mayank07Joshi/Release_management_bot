@@ -1151,7 +1151,7 @@ def layout():
             ], style={"marginLeft": "auto", "display": "flex", "alignItems": "center"}),
         ], style={
             "display": "flex", "alignItems": "center",
-            "position": "sticky", "top": "58px", "zIndex": "20",
+            "position": "sticky", "top": "0", "zIndex": "20",
             "background": "#0f0f1a",
             "paddingTop": "8px", "paddingBottom": "8px",
             "marginBottom": "6px",

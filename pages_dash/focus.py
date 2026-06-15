@@ -167,11 +167,11 @@ _STATE_OPTIONS = [{"label": s, "value": s} for s in _ALL_STATES]
 _DEFAULT_STATES = ["Active", "Clarification", "Estimated", "New", "Reopened", "Request Estimate"]
 
 
-def focus_tab_content():
+def focus_tab_content(default_tab="summary"):
     """Returns the VSTS Focus Area content for embedding in the Summary page."""
     return html.Div([
         dcc.Store(id="focus-type",         data="All"),
-        dcc.Store(id="focus-tab",          data="summary"),
+        dcc.Store(id="focus-tab",          data=default_tab),
         dcc.Store(id="focus-state-filter", data=_DEFAULT_STATES),
         dcc.Store(id="adl-horizon",        data="365d"),
         dcc.Store(id="adl-source",         data="All"),
@@ -256,7 +256,7 @@ def focus_tab_content():
                 }),
             ], style={"display": "flex", "alignItems": "center"}),
         ], style={
-            "position": "sticky", "top": "58px", "zIndex": "20",
+            "position": "sticky", "top": "0", "zIndex": "20",
             "background": BG,
             "paddingTop": "8px", "paddingBottom": "10px",
             "marginBottom": "10px",

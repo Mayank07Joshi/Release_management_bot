@@ -3057,7 +3057,7 @@ def _build_full_layout():
                 }),
             ], style={
                 "display": "flex", "alignItems": "center", "gap": "4px",
-                "position": "sticky", "top": "58px", "zIndex": "22",
+                "position": "sticky", "top": "0", "zIndex": "22",
                 "background": C3,
                 "paddingTop": "8px", "paddingBottom": "8px",
                 "marginBottom": "0",

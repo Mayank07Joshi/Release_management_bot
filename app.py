@@ -66,45 +66,137 @@ app = Dash(
     title="Release Analytics",
 )
 
-# ── Top nav structure ──────────────────────────────────────────────────────────
-_NAV = [
-    {"label": "Home",          "href": "/",                  "icon": "🏠"},
-    {"label": "Summary",       "href": "/summary",           "icon": "📊"},
-    {"label": "Planning Tool", "href": "/planning",          "icon": "📅"},
-    {"label": "Leave Manager", "href": "/leave-management",  "icon": "📆"},
-    {"label": "Reports",       "href": "/reports",           "icon": "📄"},
+# ── Sidebar nav tree ───────────────────────────────────────────────────────────
+# (section_label, section_dot_color, [(label, href, icon_char, is_built)])
+_NAV_TREE = [
+    (None, None, [
+        ("Overview", "/overview", "▦", False),
+    ]),
+    ("TRENDS", "#34d399", [
+        ("Addition & Deletion", "/addition-deletion", "◉", True),
+    ]),
+    ("ENHANCEMENTS", "#818cf8", [
+        ("Unestimated Items",  "/unestimated",       "⊙", False),
+        ("Story Readiness",    "/planning",           "✓", True),
+        ("Designer Planning",  "/designer-planning",  "∖", False),
+        ("Release Status",     "/release-status",     "▶", False),
+    ]),
+    ("BUGS & ISSUES", "#f87171", [
+        ("Issue Planning", "/issue-planning", "≡", False),
+    ]),
+    ("CAPACITY", "#60a5fa", [
+        ("Developer Capacity", "/dev-capacity", "≡", True),
+        ("Admin Hours",        "/admin-hours",  "⊙", False),
+    ]),
+    ("REFERENCE", "#8892a4", [
+        ("VSTS Focus Area", "/summary",  "◇", True),
+        ("BA Team Brief",   "/ba-brief", "□", False),
+    ]),
 ]
 
-topnav = html.Div([
-    # ── Left: logo + brand ────────────────────────────────────────────────────
-    html.A([
-        html.Div("RA", className="topnav-logo"),
-        html.Div([
-            html.Span("Release Analytics", className="topnav-brand-title"),
-            html.Span("ADO Dashboard",     className="topnav-brand-sub"),
-        ], className="topnav-brand-text"),
-    ], href="/", className="topnav-brand"),
 
-    # ── Center: page tabs ─────────────────────────────────────────────────────
-    html.Nav([
-        dbc.NavLink(
-            [html.Span(item["icon"], className="topnav-tab-icon"), item["label"]],
-            href=item["href"], active="exact", className="topnav-tab",
-        )
-        for item in _NAV
-    ], className="topnav-tabs"),
+def _build_sidebar_nav(pathname):
+    items = []
+    for (section_label, dot_color, nav_items) in _NAV_TREE:
+        if section_label:
+            items.append(html.Div([
+                html.Span(style={
+                    "width": "6px", "height": "6px", "borderRadius": "50%",
+                    "background": dot_color, "display": "inline-block",
+                    "marginRight": "7px", "flexShrink": "0",
+                }),
+                html.Span(section_label, style={
+                    "fontSize": "9px", "fontWeight": "700",
+                    "color": "var(--text-muted)",
+                    "letterSpacing": "0.12em",
+                }),
+            ], style={
+                "display": "flex", "alignItems": "center",
+                "padding": "14px 16px 5px 16px",
+            }))
 
-    # ── Right: freshness + theme toggle + user avatar + logout ───────────────
+        for (label, href, icon, built) in nav_items:
+            is_active = (pathname or "/") == href
+            trailing = []
+            if not built:
+                trailing = [html.Span(style={
+                    "width": "6px", "height": "6px", "borderRadius": "50%",
+                    "background": "#fb923c", "flexShrink": "0", "marginLeft": "auto",
+                })]
+            items.append(html.A([
+                html.Span(icon, style={
+                    "fontSize": "11px", "width": "16px", "flexShrink": "0",
+                    "color": "var(--purple)" if is_active else "var(--text-muted)",
+                    "textAlign": "center", "lineHeight": "1",
+                }),
+                html.Span(label, style={
+                    "flex": "1", "overflow": "hidden",
+                    "textOverflow": "ellipsis", "whiteSpace": "nowrap",
+                }),
+                *trailing,
+            ], href=href,
+               className="sidebar-nav-item sidebar-nav-active"
+                          if is_active else "sidebar-nav-item",
+            ))
+    return items
+
+
+sidebar = html.Div([
+    # ── Branding ───────────────────────────────────────────────────────────────
     html.Div([
-        html.Div(id="data-freshness-display", title="Time since last data sync",
-                 style={"fontSize": "11px", "color": "var(--text-secondary, #64748b)",
-                        "whiteSpace": "nowrap"}),
-        html.Button("☀", id="theme-toggle-btn", className="theme-toggle-btn",
-                    title="Toggle light/dark theme", n_clicks=0),
-        html.Div(id="topnav-avatar-display"),
-    ], className="topnav-right"),
+        html.Div([
+            html.Span("EOD", style={"color": "var(--purple)", "fontWeight": "800"}),
+            html.Span(" · ", style={"color": "var(--text-muted)"}),
+            html.Span("PLANNING", style={"color": "var(--text-primary)", "fontWeight": "700"}),
+        ], style={"fontSize": "11px", "letterSpacing": "0.05em", "marginBottom": "3px"}),
+        html.Div("Product workspace", style={
+            "fontSize": "10px", "color": "var(--text-muted)", "fontWeight": "500",
+        }),
+    ], style={
+        "padding": "18px 16px 14px 16px",
+        "borderBottom": "1px solid rgba(255,255,255,0.05)",
+        "flexShrink": "0",
+    }),
 
-], className="topnav", id="topnav")
+    # ── Nav (updated by callback on every URL change) ──────────────────────────
+    html.Div(id="sidebar-nav", style={
+        "flex": "1", "overflowY": "auto", "overflowX": "hidden",
+        "padding": "6px 0 12px 0",
+    }),
+
+    # ── Bottom: freshness + theme + user ───────────────────────────────────────
+    html.Div([
+        html.Div(id="data-freshness-display", style={
+            "fontSize": "10px", "color": "var(--text-muted)",
+            "marginBottom": "10px", "whiteSpace": "nowrap",
+        }),
+        html.Div([
+            html.Div(id="topnav-avatar-display", style={"flex": "1", "minWidth": "0"}),
+            html.Button("☀", id="theme-toggle-btn", className="theme-toggle-btn",
+                        title="Toggle light/dark theme", n_clicks=0, style={
+                            "background": "transparent",
+                            "border": "1px solid rgba(255,255,255,0.08)",
+                            "color": "var(--text-muted)", "cursor": "pointer",
+                            "fontSize": "13px", "padding": "4px 7px",
+                            "borderRadius": "6px",
+                        }),
+        ], style={"display": "flex", "alignItems": "center",
+                  "justifyContent": "space-between", "gap": "8px"}),
+    ], style={
+        "padding": "12px 16px",
+        "borderTop": "1px solid rgba(255,255,255,0.05)",
+        "flexShrink": "0",
+    }),
+], id="sidebar", style={
+    "width": "220px", "minWidth": "220px",
+    "background": "#07070f",
+    "height": "100vh",
+    "position": "fixed", "left": "0", "top": "0",
+    "display": "flex", "flexDirection": "column",
+    "borderRight": "1px solid rgba(255,255,255,0.06)",
+    "zIndex": "100",
+    "overflowY": "hidden",
+})
 
 # ── Auth setup ────────────────────────────────────────────────────────────────
 app.server.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-in-prod-!@#$%")
@@ -114,7 +206,7 @@ register_auth_routes(app.server)
 app.layout = html.Div([
     dcc.Location(id="url-location"),
     dcc.Store(id="theme-store", storage_type="local", data="dark"),
-    topnav,
+    sidebar,
     html.Div(
         dash.page_container,
         className="main-content",
@@ -129,6 +221,14 @@ app.layout = html.Div([
         "maxWidth": "380px",
     }),
 ], className="app-wrapper")
+
+
+@app.callback(
+    Output("sidebar-nav", "children"),
+    Input("url-location", "pathname"),
+)
+def _update_sidebar_nav(pathname):
+    return _build_sidebar_nav(pathname)
 
 
 @app.callback(
