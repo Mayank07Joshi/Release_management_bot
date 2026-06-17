@@ -842,16 +842,20 @@ def layout(**_):
                 _build_table(stories, plan_months, today),
             ], style={"flex": "1", "overflow": "auto", "padding": "20px 24px", "minWidth": "0"}),
 
-            # Side panel
-            html.Div([
-                dcc.Store(id="dp-panel-store"),
-                html.Div(id="dp-panel-content"),
-            ], id="dp-panel-wrapper", style={
-                "width": "340px", "flexShrink": "0",
-                "background": _BG_CARD, "borderLeft": f"1px solid {_BD}",
-                "overflowY": "auto", "display": "none",
-            }),
         ], style={"display": "flex", "flex": "1", "overflow": "hidden", "minHeight": "0"}),
+
+        # Side panel — fixed overlay, spans full viewport height
+        html.Div([
+            dcc.Store(id="dp-panel-store"),
+            dcc.Store(id="dp-panel-visible", data=False),
+            html.Div(id="dp-panel-content"),
+        ], id="dp-panel-wrapper", style={
+            "position": "fixed", "top": "0", "right": "0",
+            "height": "100vh", "width": "420px",
+            "background": _BG_CARD, "borderLeft": f"1px solid {_BD}",
+            "overflowY": "auto", "zIndex": "41", "display": "none",
+            "boxShadow": "rgba(0,0,0,0.467) -8px 0px 24px",
+        }),
 
     ], style={
         "display": "flex", "flexDirection": "column",
@@ -862,8 +866,23 @@ def layout(**_):
 # ── Callbacks ─────────────────────────────────────────────────────────────────
 
 @callback(
+    Output("dp-panel-wrapper",  "style"),
+    Input("dp-panel-visible",   "data"),
+)
+def _panel_visibility(visible):
+    base = {
+        "position": "fixed", "top": "0", "right": "0",
+        "height": "100vh", "width": "420px",
+        "background": _BG_CARD, "borderLeft": f"1px solid {_BD}",
+        "overflowY": "auto", "zIndex": "41",
+        "boxShadow": "rgba(0,0,0,0.467) -8px 0px 24px",
+    }
+    return {**base, "display": "block" if visible else "none"}
+
+
+@callback(
     Output("dp-panel-store",   "data"),
-    Output("dp-panel-wrapper", "style"),
+    Output("dp-panel-visible", "data"),
     Input({"type": "dp-row", "key": ALL}, "n_clicks"),
     prevent_initial_call=True,
 )
@@ -874,12 +893,7 @@ def _open_panel(clicks):
     if not tid:
         raise PreventUpdate
     story_id = int(tid["key"])
-    show = {
-        "width": "340px", "flexShrink": "0",
-        "background": _BG_CARD, "borderLeft": f"1px solid {_BD}",
-        "overflowY": "auto", "display": "block",
-    }
-    return story_id, show
+    return story_id, True
 
 
 @callback(
@@ -1071,16 +1085,14 @@ def _render_panel(story_id):
 
 
 @callback(
-    Output("dp-panel-wrapper", "style", allow_duplicate=True),
+    Output("dp-panel-visible", "data", allow_duplicate=True),
     Input("dp-panel-close", "n_clicks"),
     prevent_initial_call=True,
 )
-def _close_panel(_):
-    return {
-        "width": "340px", "flexShrink": "0",
-        "background": _BG_CARD, "borderLeft": f"1px solid {_BD}",
-        "overflowY": "auto", "display": "none",
-    }
+def _close_panel(n):
+    if not n:
+        raise PreventUpdate
+    return False
 
 
 @callback(
@@ -1213,17 +1225,12 @@ def _save_owner(clicks, story_id):
 
 @callback(
     Output("dp-panel-store",   "data",  allow_duplicate=True),
-    Output("dp-panel-wrapper", "style", allow_duplicate=True),
+    Output("dp-panel-visible", "data",  allow_duplicate=True),
     Input("dp-balance-btn", "n_clicks"),
     prevent_initial_call=True,
 )
 def _open_balance_panel(_):
-    show = {
-        "width": "420px", "flexShrink": "0",
-        "background": _BG_CARD, "borderLeft": f"1px solid {_BD}",
-        "overflowY": "auto", "display": "block",
-    }
-    return "__balance__", show
+    return "__balance__", True
 
 
 @callback(
