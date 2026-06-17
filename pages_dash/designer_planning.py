@@ -879,7 +879,7 @@ def layout(**_):
             html.Div(id="dp-panel-content"),
         ], id="dp-panel-wrapper", style={
             "position": "fixed", "top": "0", "right": "0",
-            "height": "100vh", "width": "480px",
+            "height": "100vh", "width": "760px",
             "background": _BG_CARD, "borderLeft": f"1px solid {_BD}",
             "overflowY": "auto", "zIndex": "41", "display": "none",
             "boxShadow": "rgba(0,0,0,0.467) -8px 0px 24px",
@@ -900,7 +900,7 @@ def layout(**_):
 def _panel_visibility(visible):
     base = {
         "position": "fixed", "top": "0", "right": "0",
-        "height": "100vh", "width": "480px",
+        "height": "100vh", "width": "760px",
         "background": _BG_CARD, "borderLeft": f"1px solid {_BD}",
         "overflowY": "auto", "zIndex": "41",
         "boxShadow": "rgba(0,0,0,0.467) -8px 0px 24px",
