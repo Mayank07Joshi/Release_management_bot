@@ -1,51 +1,838 @@
-"""Enhancements — Release Status"""
+"""Release Status — per-story pipeline stage tracker."""
+from __future__ import annotations
+import re
+from datetime import date
+
 import dash
-from dash import html
+from dash import html, dcc, callback, Input, Output, State, ctx, ALL
+from dash.exceptions import PreventUpdate
+from sqlalchemy import text
+
+from config.dev_capacity import DEV_NAMES
+from data.loader import engine
+from sync.ado_write import write_fields
 
 dash.register_page(__name__, path="/release-status", name="Release Status")
 
-_CARD = "var(--bg-elevated)"
-_BD   = "var(--border)"
-_MT   = "var(--text-secondary)"
-_TXT  = "var(--text-primary)"
+# ── Stage definitions ─────────────────────────────────────────────────────────
+_STAGES = [
+    ("dev_status",     "Development Status"),
+    ("testing_demo",   "Testing on Demo"),
+    ("qa_sign_off",    "QA Sign Off"),
+    ("sunil_sign_off", "Sunil's Sign Off"),
+    ("final_demo_1",   "Final Demo 1 (Demo env)"),
+    ("deploy_dev",     "Deployment on Dev"),
+    ("dev_env",        "Dev Env."),
+    ("deploy_qa",      "Deployment on QA"),
+    ("final_demo_2",   "Final Demo 2 (QA env)"),
+    ("qa_env",         "QA Env."),
+    ("live",           "Live"),
+    ("overall_status", "Overall Status"),
+]
+_STAGE_KEYS = [k for k, _ in _STAGES]
 
-def layout(**_):
+_QA_NAMES     = ["Geetika Khanna", "Chhavi Bhardwaj", "Sunil", "Vineeta"]
+_STORY_OWNERS = ["Geetika", "Chhavi", "Sunil", "Vineeta"]
+_SIZES        = ["Big", "Medium", "Small", "Very Small"]
+
+_ST_COLOR = {
+    "done":        "rgb(70,194,142)",
+    "wip":         "rgb(224,162,60)",
+    "not_started": "rgb(239,110,99)",
+    "":            "rgb(38,44,58)",
+}
+_ST_LABEL = {"done": "Done", "wip": "WIP", "not_started": "Not started", "": "—"}
+
+_MONO    = "'JetBrains Mono','SF Mono',monospace"
+_BG_PAGE = "rgb(10,13,21)"
+_BG_CARD = "rgb(18,22,31)"
+_BG_HEAD = "rgb(23,28,40)"
+_BD      = "rgb(38,44,58)"
+_BD_CELL = "rgb(30,36,51)"
+_MT      = "rgb(139,146,164)"
+_DIM     = "rgb(91,98,118)"
+_FG      = "rgb(234,236,242)"
+_INDIGO  = "rgb(110,118,241)"
+_GREEN   = "rgb(70,194,142)"
+_AMBER   = "rgb(224,162,60)"
+_RED     = "rgb(239,110,99)"
+_CYAN    = "rgb(63,182,201)"
+
+_SIZE_COLORS = {
+    "Big":        "rgb(224,162,60)",
+    "Medium":     "rgb(181,194,74)",
+    "Small":      "rgb(70,194,142)",
+    "Very Small": "rgb(63,182,201)",
+}
+
+_TH_B = {
+    "padding": "9px 10px", "fontSize": "10px", "fontWeight": "700",
+    "color": _DIM, "textTransform": "uppercase", "letterSpacing": "0.4px",
+    "whiteSpace": "nowrap", "verticalAlign": "middle", "background": _BG_HEAD,
+}
+_TD_B = {
+    "padding": "9px 10px",
+    "borderBottom": f"1px solid {_BD_CELL}",
+    "borderRight":  f"1px solid {_BD_CELL}",
+    "fontSize": "12px", "verticalAlign": "middle",
+}
+
+
+# ── DB bootstrap ──────────────────────────────────────────────────────────────
+def _ensure_tables():
+    with engine.begin() as conn:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS p_release_rows (
+                work_item_id  INTEGER PRIMARY KEY,
+                qa_person     TEXT DEFAULT '',
+                comment       TEXT DEFAULT '',
+                updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS p_release_stages (
+                work_item_id  INTEGER NOT NULL,
+                stage_key     TEXT    NOT NULL,
+                status        TEXT    NOT NULL DEFAULT 'not_started',
+                stage_date    DATE,
+                PRIMARY KEY (work_item_id, stage_key)
+            )
+        """))
+
+try:
+    _ensure_tables()
+except Exception:
+    pass
+
+
+# ── Data loaders ──────────────────────────────────────────────────────────────
+def _get_releases():
+    with engine.connect() as conn:
+        rows = conn.execute(text("""
+            SELECT DISTINCT release_date FROM work_items_main
+            WHERE release_date IS NOT NULL AND release_date != ''
+              AND work_item_type IN ('Enhancement','User Story')
+              AND state NOT IN ('Closed','Not an issue','Not Required',
+                                'No Customer Response','Resolved','Userstory Update')
+            ORDER BY release_date
+        """)).fetchall()
+    return [r[0] for r in rows if r[0]]
+
+
+def _load_stories(release: str) -> list:
+    with engine.connect() as conn:
+        rows = conn.execute(text("""
+            SELECT work_item_id, title, state,
+                   COALESCE(story_owner,    '') AS story_owner,
+                   COALESCE(main_developer, '') AS main_developer,
+                   COALESCE(story_size,     '') AS story_size,
+                   COALESCE(story_status,   '') AS story_status,
+                   COALESCE(release_date,   '') AS release_date
+            FROM work_items_main
+            WHERE release_date = :rel
+              AND work_item_type IN ('Enhancement','User Story')
+              AND state NOT IN ('Closed','Not an issue','Not Required',
+                                'No Customer Response','Resolved','Userstory Update')
+            ORDER BY work_item_id
+        """), {"rel": release}).fetchall()
+    return [dict(r._mapping) for r in rows]
+
+
+def _load_stage_data(ids: list) -> dict:
+    if not ids:
+        return {}
+    with engine.connect() as conn:
+        rows = conn.execute(text("""
+            SELECT work_item_id, stage_key, status, stage_date
+            FROM p_release_stages WHERE work_item_id = ANY(:ids)
+        """), {"ids": ids}).fetchall()
+    result: dict = {}
+    for r in rows:
+        result.setdefault(r.work_item_id, {})[r.stage_key] = {
+            "status": r.status or "",
+            "date":   str(r.stage_date)[:10] if r.stage_date else "",
+        }
+    return result
+
+
+def _load_row_data(ids: list) -> dict:
+    if not ids:
+        return {}
+    with engine.connect() as conn:
+        rows = conn.execute(text("""
+            SELECT work_item_id, qa_person, comment
+            FROM p_release_rows WHERE work_item_id = ANY(:ids)
+        """), {"ids": ids}).fetchall()
+    return {r.work_item_id: {"qa": r.qa_person or "", "comment": r.comment or ""}
+            for r in rows}
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def _rgb(c):
+    m = re.search(r'rgb\((\d+),\s*(\d+),\s*(\d+)\)', c)
+    return f"{m.group(1)},{m.group(2)},{m.group(3)}" if m else "139,146,164"
+
+
+def _size_badge(size_val):
+    if not size_val:
+        return html.Span("—", style={"color": _DIM})
+    c = _SIZE_COLORS.get(size_val, _MT)
+    r = _rgb(c)
+    return html.Span(size_val, style={
+        "fontSize": "11px", "fontWeight": "700",
+        "padding": "2px 8px", "borderRadius": "5px",
+        "background": f"rgba({r},0.18)", "border": f"1px solid rgba({r},0.333)",
+        "color": c, "whiteSpace": "nowrap",
+    })
+
+
+def _stage_cell(status, stage_date):
+    if not status:
+        return html.Td("", style={**_TD_B, "minWidth": "110px"})
+    color = _ST_COLOR.get(status, _ST_COLOR[""])
+    r     = _rgb(color)
+    return html.Td([
+        html.Div(str(stage_date)[:10] if stage_date else "",
+                 style={"fontFamily": _MONO, "fontSize": "10.5px",
+                        "color": _FG, "fontWeight": "600"}),
+        html.Div(_ST_LABEL.get(status, ""),
+                 style={"fontSize": "10px", "color": color,
+                        "fontWeight": "700", "marginTop": "2px"}),
+    ], style={**_TD_B, "minWidth": "110px",
+              "background": f"rgba({r},0.14)",
+              "boxShadow": f"rgba({r},0.333) 0px 0px 0px 1px inset"})
+
+
+def _tog(label, btn_id, active, color=_INDIGO):
+    r = _rgb(color)
+    return html.Button(label, id=btn_id, n_clicks=0, style={
+        "padding": "6px 12px", "borderRadius": "7px", "cursor": "pointer",
+        "fontSize": "12px", "fontWeight": "600",
+        "background": f"rgba({r},0.133)" if active else "transparent",
+        "border": f"1px solid rgba({r},0.5)" if active else f"1px solid {_BD}",
+        "color": color if active else _MT,
+    })
+
+
+def _sec(label):
+    return html.Div(label, style={
+        "fontSize": "9.5px", "fontWeight": "700", "color": _DIM,
+        "textTransform": "uppercase", "letterSpacing": "0.6px",
+        "marginBottom": "8px", "marginTop": "14px",
+    })
+
+
+# ── Release pills ─────────────────────────────────────────────────────────────
+def _build_pills(releases, selected):
+    if not releases:
+        return [html.Span("No releases found.", style={"fontSize": "12px", "color": _DIM})]
+    r = _rgb(_INDIGO)
+    return [
+        html.Div(rel, id={"type": "rs-release-pill", "rel": rel}, n_clicks=0, style={
+            "padding": "6px 14px", "borderRadius": "8px", "cursor": "pointer",
+            "fontSize": "12px", "fontWeight": "600", "whiteSpace": "nowrap",
+            "background": f"rgba({r},0.18)" if rel == selected else "transparent",
+            "border": f"1px solid rgba({r},0.5)" if rel == selected else f"1px solid {_BD}",
+            "color": _INDIGO if rel == selected else _MT,
+        })
+        for rel in releases
+    ]
+
+
+# ── Table ─────────────────────────────────────────────────────────────────────
+def _build_table(stories, stage_data, row_data):
+    fixed_cols = [
+        ("ID",      {"minWidth": "58px", "position": "sticky", "left": "0px",
+                     "zIndex": "3", "background": _BG_HEAD}),
+        ("Title",   {"minWidth": "260px", "maxWidth": "320px",
+                     "position": "sticky", "left": "58px",
+                     "zIndex": "3", "background": _BG_HEAD}),
+        ("Owner",   {"minWidth": "72px"}),
+        ("Dev",     {"minWidth": "72px"}),
+        ("QA",      {"minWidth": "90px"}),
+        ("Size",    {"minWidth": "84px", "textAlign": "center"}),
+        ("Status",  {"minWidth": "96px", "textAlign": "center"}),
+        ("Release", {"minWidth": "110px",
+                     "background": f"rgba({_rgb(_AMBER)},0.12)", "color": _AMBER}),
+    ]
+    head_cells = [html.Th(c, style={**_TH_B, **ex}) for c, ex in fixed_cols]
+    for _, lbl in _STAGES:
+        head_cells.append(html.Th(lbl, style={**_TH_B, "minWidth": "110px"}))
+    head_cells.append(html.Th("Comment", style={**_TH_B, "minWidth": "140px"}))
+
+    body_rows = []
+    for s in stories:
+        wid      = s["work_item_id"]
+        s_stages = stage_data.get(wid, {})
+        s_row    = row_data.get(wid, {})
+        comment  = s_row.get("comment", "")
+        qa_val   = s_row.get("qa", "")
+        sz       = s["story_size"].strip().title() if s["story_size"] else ""
+        sc       = _GREEN if s["story_status"] == "Complete" else _MT
+
+        body_rows.append(html.Tr([
+            html.Td(
+                html.A(str(wid),
+                       href=(f"https://expenseondemand.visualstudio.com/"
+                             f"Solo%20Expenses/_workitems/edit/{wid}"),
+                       target="_blank",
+                       style={"color": _INDIGO, "fontFamily": _MONO,
+                              "fontSize": "11.5px", "fontWeight": "700",
+                              "textDecoration": "none"}),
+                style={**_TD_B, "position": "sticky", "left": "0px",
+                       "zIndex": "2", "background": _BG_CARD},
+            ),
+            html.Td(
+                html.Span(s["title"], style={
+                    "display": "block", "maxWidth": "320px", "overflow": "hidden",
+                    "textOverflow": "ellipsis", "whiteSpace": "nowrap", "color": _FG,
+                }),
+                style={**_TD_B, "position": "sticky", "left": "58px",
+                       "zIndex": "2", "background": _BG_CARD},
+            ),
+            html.Td(s["story_owner"] or "—",
+                    style={**_TD_B, "color": _MT, "fontSize": "11px"}),
+            html.Td(
+                s["main_developer"].split()[0] if s["main_developer"] else "—",
+                style={**_TD_B, "color": _MT, "fontSize": "11px"}),
+            html.Td(
+                qa_val.split()[0] if qa_val else "—",
+                style={**_TD_B, "color": _MT, "fontSize": "11px"}),
+            html.Td(_size_badge(sz), style={**_TD_B, "textAlign": "center"}),
+            html.Td(
+                html.Span(s["story_status"] or "—",
+                          style={"fontSize": "11px", "fontWeight": "700", "color": sc}),
+                style={**_TD_B, "textAlign": "center"}),
+            html.Td(s["release_date"] or "—",
+                    style={**_TD_B, "color": _AMBER, "fontFamily": _MONO,
+                           "fontSize": "11px", "fontWeight": "700"}),
+            *[_stage_cell(s_stages.get(k, {}).get("status", ""),
+                          s_stages.get(k, {}).get("date",   ""))
+              for k, _ in _STAGES],
+            html.Td(
+                html.Span(comment[:40] + ("…" if len(comment) > 40 else ""),
+                          style={"fontSize": "11px", "color": _DIM}) if comment
+                else html.Span("—", style={"fontSize": "11px", "color": _DIM}),
+                style={**_TD_B, "minWidth": "140px"},
+            ),
+        ],
+            id={"type": "rs-row", "key": str(wid)},
+            n_clicks=0,
+            style={"cursor": "pointer", "background": "transparent"},
+        ))
+
+    return html.Div(
+        html.Table(
+            [html.Thead(html.Tr(head_cells),
+                        style={"position": "sticky", "top": "0", "zIndex": "2"}),
+             html.Tbody(body_rows)],
+            style={"borderCollapse": "collapse", "width": "100%", "minWidth": "2200px"},
+        ),
+        style={
+            "border": f"1px solid {_BD}", "borderRadius": "12px",
+            "overflow": "auto", "maxHeight": "calc(100vh - 310px)",
+        },
+    )
+
+
+# ── Side panel ────────────────────────────────────────────────────────────────
+def _build_panel(wid: int):
+    with engine.connect() as conn:
+        row = conn.execute(text("""
+            SELECT work_item_id, title,
+                   COALESCE(story_owner,   '') AS story_owner,
+                   COALESCE(main_developer,'') AS main_developer,
+                   COALESCE(story_size,    '') AS story_size,
+                   COALESCE(story_status,  '') AS story_status,
+                   COALESCE(release_date,  '') AS release_date
+            FROM work_items_main WHERE work_item_id = :id
+        """), {"id": wid}).fetchone()
+        stage_rows = conn.execute(text("""
+            SELECT stage_key, status, stage_date FROM p_release_stages
+            WHERE work_item_id = :id
+        """), {"id": wid}).fetchall()
+        rrow = conn.execute(text("""
+            SELECT qa_person, comment FROM p_release_rows WHERE work_item_id = :id
+        """), {"id": wid}).fetchone()
+
+    if not row:
+        return html.Div("Story not found.", style={"padding": "20px", "color": _MT})
+
+    stages_db = {
+        r.stage_key: {"status": r.status or "",
+                      "date":   str(r.stage_date)[:10] if r.stage_date else ""}
+        for r in stage_rows
+    }
+    qa_val  = (rrow.qa_person if rrow else "") or ""
+    comment = (rrow.comment   if rrow else "") or ""
+    cur_sz  = (row.story_size or "").strip().title()
+    cur_dev = row.main_developer or ""
+    cur_own = row.story_owner    or ""
+    cur_sts = row.story_status   or ""
+
+    def _stage_row(key, label):
+        sd     = stages_db.get(key, {})
+        cur_st = sd.get("status", "")
+        cur_dt = sd.get("date",   "")
+
+        def _sbtn(val, symbol, color):
+            active = cur_st == val
+            r = _rgb(color)
+            return html.Button(symbol,
+                               id={"type": "rs-stage-btn", "stage": key, "val": val},
+                               n_clicks=0, style={
+                "width": "26px", "height": "26px", "borderRadius": "50%",
+                "border": f"2px solid rgba({r},0.7)" if active else f"1px solid {_BD}",
+                "background": f"rgba({r},0.2)" if active else "transparent",
+                "color": color if active else _DIM,
+                "cursor": "pointer", "fontSize": "13px", "lineHeight": "1",
+                "display": "flex", "alignItems": "center", "justifyContent": "center",
+            })
+
+        return html.Div([
+            html.Span(label, style={
+                "fontSize": "12px", "fontWeight": "600", "color": _MT, "flex": "1",
+            }),
+            html.Div([
+                _sbtn("done",        "✓", _GREEN),
+                _sbtn("wip",         "◑", _AMBER),
+                _sbtn("not_started", "✕", _RED),
+            ], style={"display": "flex", "gap": "5px"}),
+            dcc.Input(type="date", value=cur_dt, debounce=True,
+                      id={"type": "rs-stage-date", "stage": key},
+                      style={
+                          "background": _BG_HEAD, "border": f"1px solid {_BD}",
+                          "color": _FG, "borderRadius": "6px", "padding": "4px 8px",
+                          "fontSize": "11px", "fontFamily": _MONO,
+                          "width": "126px", "colorScheme": "dark",
+                      }),
+        ], style={
+            "display": "flex", "alignItems": "center", "gap": "10px",
+            "padding": "7px 0", "borderBottom": f"1px solid {_BD_CELL}",
+        })
+
     return html.Div([
-        html.Div("EOD · PLANNING", style={
-            "fontSize": "10px", "fontWeight": "700", "color": "var(--purple)",
-            "letterSpacing": "0.12em", "marginBottom": "10px",
-        }),
-        html.Div([
-            html.Div("Release Status", style={
-                "fontSize": "30px", "fontWeight": "700", "color": _TXT,
-                "display": "inline", "marginRight": "12px",
-            }),
-            html.Span("PLACEHOLDER", style={
-                "fontSize": "11px", "fontWeight": "700", "color": "var(--amber)",
-                "background": "rgba(251,146,60,0.13)",
-                "border": "1px solid rgba(251,146,60,0.35)",
-                "borderRadius": "6px", "padding": "3px 10px",
-                "verticalAlign": "middle",
-            }),
-        ], style={"marginBottom": "6px"}),
-        html.Div("Release readiness across each environment and sign-off stage.", style={
-            "fontSize": "13px", "color": _MT, "marginBottom": "32px",
-        }),
+        # Header
         html.Div([
             html.Div([
-                html.Div(style={
-                    "width": "8px", "height": "8px", "borderRadius": "50%",
-                    "background": "var(--purple)", "marginRight": "8px",
+                html.Div(f"EDIT RELEASE ROW · #{wid}", style={
+                    "fontSize": "9.5px", "fontWeight": "700", "color": _INDIGO,
+                    "textTransform": "uppercase", "letterSpacing": "0.6px",
                 }),
-                html.Span("Not designed yet — placeholder in the structure so the workflow is complete.", style={
-                    "fontSize": "13px", "color": _MT,
+                html.Div(row.title or "", style={
+                    "fontSize": "13px", "fontWeight": "600", "color": _FG,
+                    "marginTop": "5px", "lineHeight": "1.4",
                 }),
-                html.Span(" To be built.", style={
-                    "fontSize": "13px", "color": "var(--amber)", "fontWeight": "600",
+            ], style={"flex": "1"}),
+            html.Button("✕", id="rs-panel-close", n_clicks=0, style={
+                "background": "none", "border": "none", "color": _DIM,
+                "fontSize": "16px", "cursor": "pointer", "padding": "0 0 0 10px",
+            }),
+        ], style={"display": "flex", "alignItems": "flex-start",
+                  "padding": "16px 16px 12px", "borderBottom": f"1px solid {_BD}"}),
+
+        html.Div([
+            _sec("Story Owner"),
+            html.Div([_tog(o, {"type": "rs-owner-btn", "key": o},
+                           active=(o == cur_own)) for o in _STORY_OWNERS],
+                     style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
+
+            _sec("Developer"),
+            html.Div([_tog(d.split()[0], {"type": "rs-dev-btn", "key": d},
+                           active=(d == cur_dev)) for d in DEV_NAMES],
+                     style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
+
+            _sec("QA"),
+            html.Div([_tog(q.split()[0], {"type": "rs-qa-btn", "key": q},
+                           active=(q == qa_val), color=_CYAN) for q in _QA_NAMES],
+                     style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
+
+            _sec("Story Size"),
+            html.Div([_tog(sz, {"type": "rs-size-btn", "key": sz},
+                           active=(sz == cur_sz)) for sz in _SIZES],
+                     style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
+
+            _sec("Story Status"),
+            html.Div([
+                _tog("Complete",     {"type": "rs-sstatus-btn", "key": "Complete"},
+                     active=(cur_sts == "Complete"), color=_GREEN),
+                _tog("Not complete", {"type": "rs-sstatus-btn", "key": "Not complete"},
+                     active=(cur_sts not in ("", "Complete")), color=_MT),
+            ], style={"display": "flex", "gap": "6px"}),
+
+            _sec("Stages · set status & date"),
+            html.Div([
+                html.Span("✓ Done",        style={"fontSize": "10px", "color": _GREEN,
+                                                   "marginRight": "10px"}),
+                html.Span("◑ WIP",         style={"fontSize": "10px", "color": _AMBER,
+                                                   "marginRight": "10px"}),
+                html.Span("✕ Not started", style={"fontSize": "10px", "color": _RED}),
+            ], style={"marginBottom": "8px"}),
+            html.Div([_stage_row(k, lbl) for k, lbl in _STAGES]),
+
+            _sec("Comment"),
+            dcc.Textarea(id="rs-comment-input", value=comment,
+                         placeholder="Add a note…", style={
+                "width": "100%", "minHeight": "68px",
+                "background": _BG_HEAD, "border": f"1px solid {_BD}",
+                "color": _FG, "borderRadius": "8px", "padding": "10px",
+                "fontSize": "12px", "resize": "vertical", "boxSizing": "border-box",
+            }),
+            html.Button("Save comment", id="rs-comment-save", n_clicks=0, style={
+                "marginTop": "8px", "padding": "6px 14px", "borderRadius": "7px",
+                "background": "transparent", "border": f"1px solid {_BD}",
+                "color": _MT, "cursor": "pointer", "fontSize": "12px",
+            }),
+        ], style={"padding": "0 16px 32px"}),
+    ])
+
+
+# ── Layout ────────────────────────────────────────────────────────────────────
+def layout(**_):
+    releases = _get_releases()
+    default  = releases[0] if releases else None
+
+    return html.Div([
+        dcc.Store(id="rs-release-store", data=default),
+        dcc.Store(id="rs-panel-store"),
+        dcc.Store(id="rs-panel-visible", data=False),
+
+        # Header
+        html.Div([
+            html.Div([
+                html.Span("EOD · PLANNING", style={
+                    "fontSize": "10px", "fontWeight": "700", "color": _INDIGO,
+                    "textTransform": "uppercase", "letterSpacing": "1px",
                 }),
-            ], style={"display": "flex", "alignItems": "center"}),
+                html.H1("Release Status", style={
+                    "fontSize": "21px", "fontWeight": "700", "color": _FG,
+                    "margin": "4px 0 0 0",
+                }),
+                html.Div(
+                    "Release readiness across each environment and sign-off stage. "
+                    "Click a row to set stage status and date.",
+                    style={"fontSize": "12px", "color": _MT, "marginTop": "5px"},
+                ),
+            ]),
+            html.Div(f"Planning as of {date.today().strftime('%b %Y')}",
+                     style={
+                         "fontSize": "11px", "color": _DIM, "fontFamily": _MONO,
+                         "background": _BG_HEAD, "border": f"1px solid {_BD}",
+                         "borderRadius": "8px", "padding": "7px 12px",
+                     }),
         ], style={
-            "background": _CARD, "border": f"1px solid {_BD}",
-            "borderRadius": "12px", "padding": "20px 24px",
+            "padding": "18px 24px", "borderBottom": f"1px solid {_BD}",
+            "display": "flex", "justifyContent": "space-between",
+            "alignItems": "flex-start", "background": _BG_CARD,
         }),
-    ], style={"padding": "36px 40px"})
+
+        # Release picker
+        html.Div([
+            html.Span("Release", style={
+                "fontSize": "10px", "fontWeight": "700", "color": _DIM,
+                "textTransform": "uppercase", "letterSpacing": "0.5px",
+                "marginRight": "12px", "flexShrink": "0",
+            }),
+            html.Div(_build_pills(releases, default),
+                     id="rs-release-picker",
+                     style={"display": "flex", "flexWrap": "wrap", "gap": "8px"}),
+        ], style={
+            "display": "flex", "alignItems": "center",
+            "padding": "12px 24px", "borderBottom": f"1px solid {_BD}",
+            "background": _BG_CARD,
+        }),
+
+        # Legend
+        html.Div([
+            *[html.Span([
+                html.Span(style={
+                    "width": "8px", "height": "8px", "borderRadius": "2px",
+                    "background": col, "display": "inline-block",
+                    "marginRight": "5px", "opacity": "0.85",
+                }),
+                html.Span(lbl, style={"fontSize": "11px", "color": _MT,
+                                      "marginRight": "14px"}),
+            ]) for lbl, col in [("Done", _GREEN), ("WIP", _AMBER), ("Not started", _RED)]],
+            html.Span("· each stage cell also carries a delivery date",
+                      style={"fontSize": "10.5px", "color": _DIM}),
+        ], style={"display": "flex", "alignItems": "center",
+                  "padding": "10px 24px", "flexWrap": "wrap"}),
+
+        # Table
+        html.Div(id="rs-table-wrapper",
+                 style={"padding": "0 24px 24px", "overflow": "auto"}),
+
+        # Panel overlay
+        html.Div([
+            html.Div(id="rs-panel-content"),
+        ], id="rs-panel-wrapper", style={
+            "position": "fixed", "top": "0", "right": "0",
+            "height": "100vh", "width": "760px",
+            "background": _BG_CARD, "borderLeft": f"1px solid {_BD}",
+            "overflowY": "auto", "zIndex": "41", "display": "none",
+            "boxShadow": "rgba(0,0,0,0.467) -8px 0px 24px",
+        }),
+
+    ], style={
+        "display": "flex", "flexDirection": "column",
+        "minHeight": "100vh", "background": _BG_PAGE,
+    })
+
+
+# ── Callbacks ─────────────────────────────────────────────────────────────────
+@callback(
+    Output("rs-panel-wrapper", "style"),
+    Input("rs-panel-visible",  "data"),
+)
+def _panel_visibility(visible):
+    base = {
+        "position": "fixed", "top": "0", "right": "0",
+        "height": "100vh", "width": "760px",
+        "background": _BG_CARD, "borderLeft": f"1px solid {_BD}",
+        "overflowY": "auto", "zIndex": "41",
+        "boxShadow": "rgba(0,0,0,0.467) -8px 0px 24px",
+    }
+    return {**base, "display": "block" if visible else "none"}
+
+
+@callback(
+    Output("rs-release-store",  "data"),
+    Output("rs-release-picker", "children"),
+    Input({"type": "rs-release-pill", "rel": ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def _select_release(clicks):
+    if not any(clicks):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid:
+        raise PreventUpdate
+    selected = tid["rel"]
+    return selected, _build_pills(_get_releases(), selected)
+
+
+@callback(
+    Output("rs-table-wrapper", "children"),
+    Input("rs-release-store",  "data"),
+    Input("rs-panel-visible",  "data"),
+)
+def _render_table(release, panel_visible):
+    if panel_visible:
+        raise PreventUpdate
+    if not release:
+        return html.Div("Select a release above to view stories.",
+                        style={"padding": "40px", "color": _MT, "textAlign": "center"})
+    stories    = _load_stories(release)
+    ids        = [s["work_item_id"] for s in stories]
+    stage_data = _load_stage_data(ids)
+    row_data   = _load_row_data(ids)
+    if not stories:
+        return html.Div(f"No active stories found for: {release}",
+                        style={"padding": "40px", "color": _MT, "textAlign": "center"})
+    return _build_table(stories, stage_data, row_data)
+
+
+@callback(
+    Output("rs-panel-store",   "data"),
+    Output("rs-panel-visible", "data"),
+    Input({"type": "rs-row", "key": ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def _open_panel(clicks):
+    if not any(clicks):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid:
+        raise PreventUpdate
+    return int(tid["key"]), True
+
+
+@callback(
+    Output("rs-panel-visible", "data", allow_duplicate=True),
+    Input("rs-panel-close", "n_clicks"),
+    prevent_initial_call=True,
+)
+def _close_panel(n):
+    if not n:
+        raise PreventUpdate
+    return False
+
+
+@callback(
+    Output("rs-panel-content", "children"),
+    Input("rs-panel-store",    "data"),
+    prevent_initial_call=True,
+)
+def _render_panel(story_id):
+    if story_id is None:
+        raise PreventUpdate
+    return _build_panel(story_id)
+
+
+@callback(
+    Output("rs-panel-store", "data", allow_duplicate=True),
+    Input({"type": "rs-owner-btn", "key": ALL}, "n_clicks"),
+    State("rs-panel-store", "data"),
+    prevent_initial_call=True,
+)
+def _save_owner(clicks, story_id):
+    if not story_id or not any(clicks):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid:
+        raise PreventUpdate
+    write_fields(story_id, {"story_owner": tid["key"]})
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE work_items_main SET story_owner=:o WHERE work_item_id=:id"),
+                     {"o": tid["key"], "id": story_id})
+    return story_id
+
+
+@callback(
+    Output("rs-panel-store", "data", allow_duplicate=True),
+    Input({"type": "rs-dev-btn", "key": ALL}, "n_clicks"),
+    State("rs-panel-store", "data"),
+    prevent_initial_call=True,
+)
+def _save_developer(clicks, story_id):
+    if not story_id or not any(clicks):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid:
+        raise PreventUpdate
+    write_fields(story_id, {"main_developer": tid["key"]})
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE work_items_main SET main_developer=:d WHERE work_item_id=:id"),
+                     {"d": tid["key"], "id": story_id})
+    return story_id
+
+
+@callback(
+    Output("rs-panel-store", "data", allow_duplicate=True),
+    Input({"type": "rs-qa-btn", "key": ALL}, "n_clicks"),
+    State("rs-panel-store", "data"),
+    prevent_initial_call=True,
+)
+def _save_qa(clicks, story_id):
+    if not story_id or not any(clicks):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid:
+        raise PreventUpdate
+    with engine.begin() as conn:
+        conn.execute(text("""
+            INSERT INTO p_release_rows (work_item_id, qa_person, updated_at)
+            VALUES (:id, :qa, NOW())
+            ON CONFLICT (work_item_id) DO UPDATE
+            SET qa_person = EXCLUDED.qa_person, updated_at = NOW()
+        """), {"id": story_id, "qa": tid["key"]})
+    return story_id
+
+
+@callback(
+    Output("rs-panel-store", "data", allow_duplicate=True),
+    Input({"type": "rs-size-btn", "key": ALL}, "n_clicks"),
+    State("rs-panel-store", "data"),
+    prevent_initial_call=True,
+)
+def _save_size(clicks, story_id):
+    if not story_id or not any(clicks):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid:
+        raise PreventUpdate
+    write_fields(story_id, {"story_size": tid["key"]})
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE work_items_main SET story_size=:s WHERE work_item_id=:id"),
+                     {"s": tid["key"], "id": story_id})
+    return story_id
+
+
+@callback(
+    Output("rs-panel-store", "data", allow_duplicate=True),
+    Input({"type": "rs-sstatus-btn", "key": ALL}, "n_clicks"),
+    State("rs-panel-store", "data"),
+    prevent_initial_call=True,
+)
+def _save_story_status(clicks, story_id):
+    if not story_id or not any(clicks):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid:
+        raise PreventUpdate
+    write_fields(story_id, {"story_status": tid["key"]})
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE work_items_main SET story_status=:s WHERE work_item_id=:id"),
+                     {"s": tid["key"], "id": story_id})
+    return story_id
+
+
+@callback(
+    Output("rs-panel-store", "data", allow_duplicate=True),
+    Input({"type": "rs-stage-btn", "stage": ALL, "val": ALL}, "n_clicks"),
+    State("rs-panel-store", "data"),
+    prevent_initial_call=True,
+)
+def _save_stage_status(clicks, story_id):
+    if not story_id or not any(clicks):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid:
+        raise PreventUpdate
+    with engine.begin() as conn:
+        conn.execute(text("""
+            INSERT INTO p_release_stages (work_item_id, stage_key, status)
+            VALUES (:id, :key, :status)
+            ON CONFLICT (work_item_id, stage_key) DO UPDATE
+            SET status = EXCLUDED.status
+        """), {"id": story_id, "key": tid["stage"], "status": tid["val"]})
+    return story_id
+
+
+@callback(
+    Output("rs-panel-store", "data", allow_duplicate=True),
+    Input({"type": "rs-stage-date", "stage": ALL}, "value"),
+    State("rs-panel-store", "data"),
+    prevent_initial_call=True,
+)
+def _save_stage_date(dates, story_id):
+    if not story_id:
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid:
+        raise PreventUpdate
+    stage_key = tid["stage"]
+    try:
+        date_val = dates[_STAGE_KEYS.index(stage_key)]
+    except (ValueError, IndexError):
+        raise PreventUpdate
+    if not date_val:
+        raise PreventUpdate
+    with engine.begin() as conn:
+        conn.execute(text("""
+            INSERT INTO p_release_stages (work_item_id, stage_key, stage_date, status)
+            VALUES (:id, :key, :date, 'not_started')
+            ON CONFLICT (work_item_id, stage_key) DO UPDATE
+            SET stage_date = EXCLUDED.stage_date
+        """), {"id": story_id, "key": stage_key, "date": date_val})
+    return story_id
+
+
+@callback(
+    Output("rs-panel-store", "data", allow_duplicate=True),
+    Input("rs-comment-save",    "n_clicks"),
+    State("rs-comment-input",   "value"),
+    State("rs-panel-store",     "data"),
+    prevent_initial_call=True,
+)
+def _save_comment(n, comment, story_id):
+    if not n or not story_id:
+        raise PreventUpdate
+    with engine.begin() as conn:
+        conn.execute(text("""
+            INSERT INTO p_release_rows (work_item_id, comment, updated_at)
+            VALUES (:id, :c, NOW())
+            ON CONFLICT (work_item_id) DO UPDATE
+            SET comment = EXCLUDED.comment, updated_at = NOW()
+        """), {"id": story_id, "c": comment or ""})
+    return story_id
