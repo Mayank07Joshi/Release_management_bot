@@ -398,14 +398,15 @@ def _build_panel(wid: int):
                 _sbtn("wip",         "◑", _AMBER),
                 _sbtn("not_started", "✕", _RED),
             ], style={"display": "flex", "gap": "5px"}),
-            html.Input(type="date", value=cur_dt,
-                       id={"type": "rs-stage-date", "stage": key},
-                       style={
-                           "background": _BG_HEAD, "border": f"1px solid {_BD}",
-                           "color": _FG, "borderRadius": "6px", "padding": "4px 8px",
-                           "fontSize": "11px", "fontFamily": _MONO,
-                           "width": "126px", "colorScheme": "dark",
-                       }),
+            dcc.Input(type="text", value=cur_dt, debounce=True,
+                      placeholder="YYYY-MM-DD",
+                      id={"type": "rs-stage-date", "stage": key},
+                      style={
+                          "background": _BG_HEAD, "border": f"1px solid {_BD}",
+                          "color": _FG, "borderRadius": "6px", "padding": "4px 8px",
+                          "fontSize": "11px", "fontFamily": _MONO,
+                          "width": "110px",
+                      }),
         ], style={
             "display": "flex", "alignItems": "center", "gap": "10px",
             "padding": "7px 0", "borderBottom": f"1px solid {_BD_CELL}",
