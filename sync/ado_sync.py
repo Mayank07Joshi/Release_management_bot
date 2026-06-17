@@ -64,6 +64,8 @@ _FIELDS = [
     "System.Parent",
     "Microsoft.VSTS.Common.Activity",
     "Microsoft.VSTS.Common.ActivatedDate",
+    "Custom.StorySize",
+    "Custom.StoryStatus",
 ]
 
 # ── Engine (singleton) ────────────────────────────────────────────────────────
@@ -193,6 +195,8 @@ def _transform(work_items) -> pd.DataFrame:
             "parent_id":         f.get("System.Parent"),   # int or None
             "activity":          f.get("Microsoft.VSTS.Common.Activity", ""),
             "activated_date":    f.get("Microsoft.VSTS.Common.ActivatedDate"),
+            "story_size":        f.get("Custom.StorySize", ""),
+            "story_status":      f.get("Custom.StoryStatus", ""),
         })
 
     if not rows:
@@ -216,9 +220,10 @@ def _transform(work_items) -> pd.DataFrame:
 
 def _upsert(df: pd.DataFrame, engine) -> int:
     """
-    Delete-then-insert upsert.
-    Removes existing rows for the affected IDs, then inserts the fresh data.
-    No primary-key constraint required on the table.
+    Delete-then-insert upsert (atomic transaction).
+    Removes existing rows for the affected IDs, then inserts fresh data.
+    work_items_main has a UNIQUE INDEX on work_item_id — concurrent sync
+    runs will raise an IntegrityError instead of silently creating duplicates.
     """
     if df.empty:
         return 0

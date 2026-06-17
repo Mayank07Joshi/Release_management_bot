@@ -73,17 +73,17 @@ def _load_sprint_history(sprint_path: str) -> dict[int, datetime | None]:
 def _kpi_card(number, label_main, label_sub, color):
     return html.Div([
         html.Div(str(number), style={
-            "fontSize": "38px", "fontWeight": "700", "color": color,
-            "lineHeight": "1.1", "marginBottom": "8px",
+            "fontSize": "26px", "fontWeight": "700", "color": color,
+            "lineHeight": "1.1", "marginBottom": "5px",
         }),
         html.Div(label_main, style={
-            "fontSize": "10px", "fontWeight": "700", "color": MT,
+            "fontSize": "9px", "fontWeight": "700", "color": MT,
             "letterSpacing": "0.08em", "textTransform": "uppercase",
         }),
-        html.Div(label_sub, style={"fontSize": "11px", "color": MT, "marginTop": "2px"}),
+        html.Div(label_sub, style={"fontSize": "10px", "color": MT, "marginTop": "2px"}),
     ], style={
         "background": CARD, "border": f"1px solid {BD}",
-        "borderRadius": "10px", "padding": "20px 24px",
+        "borderRadius": "10px", "padding": "14px 18px",
         "flex": "1", "minWidth": "0",
     })
 
@@ -167,8 +167,37 @@ _STATE_OPTIONS = [{"label": s, "value": s} for s in _ALL_STATES]
 _DEFAULT_STATES = ["Active", "Clarification", "Estimated", "New", "Reopened", "Request Estimate"]
 
 
-def focus_tab_content(default_tab="summary"):
+def focus_tab_content(default_tab="summary", tabs_visible=True):
     """Returns the VSTS Focus Area content for embedding in the Summary page."""
+    _breadcrumb = (
+        "TRENDS · ADDITION & DELETION"
+        if not tabs_visible else
+        "VSTS DATA · FOCUS AREA & SPRINT ACTIVITY"
+    )
+    _page_title = (
+        "Addition & Deletion"
+        if not tabs_visible else
+        "VSTS Focus Area & Sprint Activity"
+    )
+
+    tab_strip = html.Div([
+        html.Div([
+            html.Div("Data Load Summary", id="focus-tab-summary-btn", n_clicks=0,
+                     className="focus-tab-btn focus-tab-active"),
+            html.Div("Addition & Deletion", id="focus-tab-sprint-btn", n_clicks=0,
+                     className="focus-tab-btn"),
+        ], style={"display": "flex"}),
+        html.Div(id="focus-tab-meta", style={"fontSize": "12px", "color": MT}),
+    ], style={
+        "display": "flex", "justifyContent": "space-between", "alignItems": "flex-end",
+        "borderBottom": f"1px solid {BD}", "marginBottom": "24px",
+    }) if tabs_visible else html.Div([
+        # Hidden tabs — still need focus-tab-meta and stub buttons in DOM for callbacks
+        html.Div(id="focus-tab-summary-btn", n_clicks=0, style={"display": "none"}),
+        html.Div(id="focus-tab-sprint-btn",  n_clicks=0, style={"display": "none"}),
+        html.Div(id="focus-tab-meta", style={"display": "none"}),
+    ])
+
     return html.Div([
         dcc.Store(id="focus-type",         data="All"),
         dcc.Store(id="focus-tab",          data=default_tab),
@@ -215,24 +244,24 @@ def focus_tab_content(default_tab="summary"):
         }),
 
         # ── Breadcrumb ────────────────────────────────────────────────────────
-        html.Div("VSTS DATA · FOCUS AREA & SPRINT ACTIVITY", style={
+        html.Div(_breadcrumb, style={
             "fontSize": "10px", "fontWeight": "700", "color": MT,
             "letterSpacing": "0.12em", "marginBottom": "6px",
         }),
 
-        # ── Title row ─────────────────────────────────────────────────────────
+        # ── Title row (hidden on dedicated ADL page — content has its own title) ──
         html.Div([
             html.Div([
-                html.Div("VSTS Focus Area & Sprint Activity", style={
+                html.Div(_page_title, style={
                     "fontSize": "24px", "fontWeight": "700", "color": TXT,
                 }),
                 html.Div(id="focus-subtitle", style={
                     "fontSize": "13px", "color": MT, "marginTop": "4px",
                 }),
             ]),
-        ], style={"marginBottom": "24px"}),
+        ], style={"marginBottom": "24px", "display": "none" if not tabs_visible else "block"}),
 
-        # ── Sticky filter bar: STATE ──────────────────────────────────────────
+        # ── Sticky filter bar: STATE (summary tab only — hidden on ADL-only page) ──
         html.Div([
             html.Div([
                 html.Span("STATE", style={
@@ -260,21 +289,11 @@ def focus_tab_content(default_tab="summary"):
             "background": BG,
             "paddingTop": "8px", "paddingBottom": "10px",
             "marginBottom": "10px",
+            "display": "none" if not tabs_visible else "block",
         }),
 
         # ── Tab strip ─────────────────────────────────────────────────────────
-        html.Div([
-            html.Div([
-                html.Div("Data Load Summary", id="focus-tab-summary-btn", n_clicks=0,
-                         className="focus-tab-btn focus-tab-active"),
-                html.Div("Addition & Deletion", id="focus-tab-sprint-btn", n_clicks=0,
-                         className="focus-tab-btn"),
-            ], style={"display": "flex"}),
-            html.Div(id="focus-tab-meta", style={"fontSize": "12px", "color": MT}),
-        ], style={
-            "display": "flex", "justifyContent": "space-between", "alignItems": "flex-end",
-            "borderBottom": f"1px solid {BD}", "marginBottom": "24px",
-        }),
+        tab_strip,
 
         # ── Content ───────────────────────────────────────────────────────────
         dcc.Loading(
@@ -284,7 +303,7 @@ def focus_tab_content(default_tab="summary"):
             style={"minHeight": "200px"},
             children=html.Div(id="focus-content"),
         ),
-    ], style={"padding": "28px 32px"})
+    ], style={"padding": "20px 32px" if not tabs_visible else "28px 32px"})
 
 
 # ── Callbacks ─────────────────────────────────────────────────────────────────

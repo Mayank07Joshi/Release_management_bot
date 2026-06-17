@@ -1,0 +1,1057 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Release & Iteration Audit — May 2026 | Expense On Demand</title>
+<style>
+  :root {
+    --bg:        #0f1117;
+    --bg2:       #161b27;
+    --bg3:       #1e2535;
+    --border:    rgba(255,255,255,0.07);
+    --text:      #e2e8f0;
+    --muted:     #6b7280;
+    --subtle:    #94a3b8;
+    --green:     #34d399;
+    --gold:      #fbbf24;
+    --red:       #f87171;
+    --amber:     #fb923c;
+    --blue:      #60a5fa;
+    --purple:    #a78bfa;
+    --red-bg:    rgba(248,113,113,0.10);
+    --amber-bg:  rgba(251,146,60,0.10);
+    --green-bg:  rgba(52,211,153,0.10);
+    --grey-bg:   rgba(148,163,184,0.08);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  /* ── Cover ─────────────────────────────────────────────────────────── */
+  .cover {
+    background: linear-gradient(135deg, #0f1117 0%, #1a1f35 50%, #0f1117 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 60px 80px 50px;
+    position: relative;
+    overflow: hidden;
+  }
+  .cover::before {
+    content: '';
+    position: absolute; top: 0; right: 0;
+    width: 500px; height: 500px;
+    background: radial-gradient(circle at 70% 30%, rgba(167,139,250,0.06) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .cover-label {
+    font-size: 11px; font-weight: 700; letter-spacing: 2.5px;
+    text-transform: uppercase; color: var(--purple);
+    margin-bottom: 16px;
+  }
+  .cover-title {
+    font-size: 34px; font-weight: 800; color: var(--text);
+    line-height: 1.2; margin-bottom: 8px;
+  }
+  .cover-sub {
+    font-size: 16px; color: var(--subtle); margin-bottom: 36px;
+  }
+  .cover-meta {
+    display: flex; gap: 40px; flex-wrap: wrap;
+  }
+  .cover-meta-item { display: flex; flex-direction: column; gap: 4px; }
+  .cover-meta-label {
+    font-size: 10px; font-weight: 700; letter-spacing: 1.5px;
+    text-transform: uppercase; color: var(--muted);
+  }
+  .cover-meta-value { font-size: 14px; font-weight: 600; color: var(--subtle); }
+
+  /* ── Layout ─────────────────────────────────────────────────────────── */
+  .container { max-width: 1100px; margin: 0 auto; padding: 48px 40px; }
+
+  /* ── Verdict Cards ───────────────────────────────────────────────────── */
+  .verdict-row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 40px; }
+  .verdict-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px 28px 24px;
+    position: relative; overflow: hidden;
+  }
+  .verdict-card.red   { border-color: rgba(248,113,113,0.25); }
+  .verdict-card.amber { border-color: rgba(251,146,60,0.25); }
+  .verdict-card.green { border-color: rgba(52,211,153,0.25); }
+  .verdict-card::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0;
+    height: 3px; border-radius: 16px 16px 0 0;
+  }
+  .verdict-card.red::before   { background: var(--red); }
+  .verdict-card.amber::before { background: var(--amber); }
+  .verdict-card.green::before { background: var(--green); }
+
+  .verdict-type {
+    font-size: 10px; font-weight: 700; letter-spacing: 2px;
+    text-transform: uppercase; color: var(--muted); margin-bottom: 10px;
+  }
+  .verdict-rag {
+    font-size: 28px; font-weight: 800; margin-bottom: 10px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .verdict-rag.red   { color: var(--red); }
+  .verdict-rag.amber { color: var(--amber); }
+  .verdict-rag.green { color: var(--green); }
+  .verdict-dot {
+    width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0;
+    box-shadow: 0 0 10px currentColor;
+  }
+  .verdict-issue { font-size: 13px; color: var(--subtle); line-height: 1.55; }
+
+  /* ── KPI Grid ────────────────────────────────────────────────────────── */
+  .kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 40px; }
+  .kpi-card {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px;
+  }
+  .kpi-value { font-size: 30px; font-weight: 800; line-height: 1; margin-bottom: 4px; }
+  .kpi-label { font-size: 11px; font-weight: 700; text-transform: uppercase;
+               letter-spacing: 0.8px; color: var(--muted); margin-bottom: 6px; }
+  .kpi-sub   { font-size: 12px; color: var(--subtle); }
+  .kpi-card.red    .kpi-value { color: var(--red); }
+  .kpi-card.amber  .kpi-value { color: var(--amber); }
+  .kpi-card.green  .kpi-value { color: var(--green); }
+  .kpi-card.purple .kpi-value { color: var(--purple); }
+  .kpi-card.blue   .kpi-value { color: var(--blue); }
+
+  /* ── Section headers ─────────────────────────────────────────────────── */
+  .section { margin-bottom: 44px; }
+  .section-header {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 20px; padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .section-num {
+    background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 6px; padding: 3px 9px;
+    font-size: 11px; font-weight: 700; color: var(--muted);
+    font-family: monospace;
+  }
+  .section-title { font-size: 16px; font-weight: 700; color: var(--text); }
+  .section-tag {
+    margin-left: auto; font-size: 10px; font-weight: 700;
+    letter-spacing: 1.5px; text-transform: uppercase;
+    padding: 3px 10px; border-radius: 20px;
+  }
+  .section-tag.red    { color: var(--red);   background: var(--red-bg); }
+  .section-tag.amber  { color: var(--amber); background: var(--amber-bg); }
+  .section-tag.green  { color: var(--green); background: var(--green-bg); }
+  .section-tag.grey   { color: var(--muted); background: var(--grey-bg); }
+
+  /* ── Metric Table ────────────────────────────────────────────────────── */
+  .metric-table { width: 100%; border-collapse: collapse; }
+  .metric-table th {
+    text-align: left; padding: 8px 14px;
+    font-size: 10px; font-weight: 700; letter-spacing: 1px;
+    text-transform: uppercase; color: var(--muted);
+    border-bottom: 1px solid var(--border); background: var(--bg2);
+  }
+  .metric-table td {
+    padding: 12px 14px; border-bottom: 1px solid rgba(255,255,255,0.04);
+    font-size: 13px; vertical-align: top;
+  }
+  .metric-table tr:last-child td { border-bottom: none; }
+  .metric-table tr:hover td { background: rgba(255,255,255,0.02); }
+  .metric-table .col-metric { color: var(--subtle); width: 35%; }
+  .metric-table .col-target  { color: var(--muted); width: 12%; font-family: monospace; font-size: 12px; }
+  .metric-table .col-result  { width: 53%; }
+  .table-wrap {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 12px; overflow: hidden; margin-bottom: 20px;
+  }
+
+  /* ── RAG badges ──────────────────────────────────────────────────────── */
+  .rag {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
+    padding: 3px 9px; border-radius: 20px;
+  }
+  .rag::before { content: '●'; font-size: 9px; }
+  .rag.red    { color: var(--red);   background: var(--red-bg); }
+  .rag.amber  { color: var(--amber); background: var(--amber-bg); }
+  .rag.green  { color: var(--green); background: var(--green-bg); }
+  .rag.grey   { color: var(--muted); background: var(--grey-bg); }
+
+  /* ── Progress bars ───────────────────────────────────────────────────── */
+  .progress-wrap { margin-bottom: 20px; }
+  .progress-row {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 10px;
+  }
+  .progress-label { font-size: 12px; color: var(--subtle); min-width: 180px; }
+  .progress-bar-bg {
+    flex: 1; height: 7px; background: rgba(255,255,255,0.07);
+    border-radius: 4px; overflow: hidden;
+  }
+  .progress-bar-fill { height: 100%; border-radius: 4px; }
+  .progress-val { font-size: 12px; font-weight: 700; min-width: 50px; text-align: right; }
+
+  /* ── State breakdown ─────────────────────────────────────────────────── */
+  .state-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+  .state-pill {
+    padding: 5px 12px; border-radius: 20px;
+    font-size: 12px; font-weight: 600;
+    background: var(--bg3); border: 1px solid var(--border); color: var(--subtle);
+  }
+  .state-pill .cnt { font-weight: 800; margin-right: 5px; }
+  .state-pill.closed .cnt { color: var(--green); }
+  .state-pill.active .cnt { color: var(--gold); }
+  .state-pill.blocked .cnt { color: var(--red); }
+  .state-pill.dropped .cnt { color: var(--muted); }
+
+  /* ── Action items ────────────────────────────────────────────────────── */
+  .action-list { display: flex; flex-direction: column; gap: 10px; }
+  .action-item {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 18px;
+    display: grid; grid-template-columns: 28px 1fr auto;
+    gap: 12px; align-items: start;
+  }
+  .action-num {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--bg3); border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700; color: var(--muted);
+    flex-shrink: 0;
+  }
+  .action-text { font-size: 13px; color: var(--text); line-height: 1.5; }
+  .action-meta { font-size: 11px; color: var(--subtle); margin-top: 4px; }
+  .action-deadline {
+    font-size: 11px; font-weight: 700; color: var(--amber);
+    background: var(--amber-bg); padding: 3px 9px; border-radius: 6px;
+    white-space: nowrap; height: fit-content; margin-top: 2px;
+  }
+
+  /* ── Qualitative table ───────────────────────────────────────────────── */
+  .qual-table { width: 100%; border-collapse: collapse; }
+  .qual-table th {
+    text-align: left; padding: 8px 14px;
+    font-size: 10px; font-weight: 700; letter-spacing: 1px;
+    text-transform: uppercase; color: var(--muted);
+    border-bottom: 1px solid var(--border); background: var(--bg2);
+  }
+  .qual-table td {
+    padding: 12px 14px; border-bottom: 1px solid rgba(255,255,255,0.04);
+    font-size: 13px; vertical-align: middle;
+  }
+  .qual-table tr:last-child td { border-bottom: none; }
+  .qual-area { font-weight: 600; color: var(--subtle); }
+  .qual-note { color: var(--muted); font-size: 12.5px; line-height: 1.55; }
+
+  /* ── Gap callout ─────────────────────────────────────────────────────── */
+  .gap-box {
+    background: rgba(148,163,184,0.06); border: 1px solid rgba(148,163,184,0.15);
+    border-left: 3px solid var(--muted); border-radius: 0 8px 8px 0;
+    padding: 12px 16px; margin-bottom: 12px;
+    font-size: 12.5px; color: var(--muted); line-height: 1.6;
+  }
+  .gap-box strong { color: var(--subtle); }
+
+  /* ── Divider ─────────────────────────────────────────────────────────── */
+  .divider {
+    border: none; border-top: 1px solid var(--border); margin: 48px 0;
+  }
+
+  /* ── Part header ─────────────────────────────────────────────────────── */
+  .part-header {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px 28px; margin-bottom: 32px;
+    display: flex; align-items: center; gap: 16px;
+  }
+  .part-badge {
+    background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px 14px;
+    font-size: 11px; font-weight: 700; letter-spacing: 1.5px;
+    text-transform: uppercase; color: var(--purple);
+  }
+  .part-title { font-size: 17px; font-weight: 700; color: var(--text); }
+  .part-sub   { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+  /* ── Top findings ────────────────────────────────────────────────────── */
+  .findings-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 16px; margin-bottom: 40px; }
+  .finding-card {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px; position: relative;
+  }
+  .finding-rank {
+    font-size: 10px; font-weight: 700; letter-spacing: 1.5px;
+    text-transform: uppercase; color: var(--muted); margin-bottom: 8px;
+  }
+  .finding-metric { font-size: 22px; font-weight: 800; color: var(--red); margin-bottom: 4px; }
+  .finding-label  { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+  .finding-desc   { font-size: 12px; color: var(--muted); line-height: 1.55; }
+
+  /* ── Sprint status bar ───────────────────────────────────────────────── */
+  .sprint-bar {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px 24px; margin-bottom: 24px;
+    display: flex; align-items: center; gap: 32px; flex-wrap: wrap;
+  }
+  .sprint-stat { display: flex; flex-direction: column; gap: 3px; }
+  .sprint-stat-val { font-size: 20px; font-weight: 800; }
+  .sprint-stat-lbl { font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
+
+  /* ── Footer ──────────────────────────────────────────────────────────── */
+  .footer {
+    border-top: 1px solid var(--border);
+    padding: 24px 40px; text-align: center;
+    font-size: 11px; color: var(--muted); letter-spacing: 0.5px;
+  }
+
+  @media print {
+    body { background: white; color: #111; }
+    .cover { background: #f8fafc; border-bottom: 2px solid #e2e8f0; }
+    :root { --bg: white; --bg2: #f8fafc; --bg3: #f1f5f9; --border: #e2e8f0;
+            --text: #111827; --muted: #6b7280; --subtle: #374151; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── COVER ──────────────────────────────────────────────────────────── -->
+<div class="cover">
+  <div class="cover-label">Expense On Demand · Internal Confidential</div>
+  <div class="cover-title">Release &amp; Iteration Audit</div>
+  <div class="cover-sub">May 2026 Sprint · Mid-Sprint Snapshot</div>
+  <div class="cover-meta">
+    <div class="cover-meta-item">
+      <span class="cover-meta-label">Sprint</span>
+      <span class="cover-meta-value">Iteration 2026 05-May</span>
+    </div>
+    <div class="cover-meta-item">
+      <span class="cover-meta-label">Generated</span>
+      <span class="cover-meta-value">21 May 2026</span>
+    </div>
+    <div class="cover-meta-item">
+      <span class="cover-meta-label">Days Remaining</span>
+      <span class="cover-meta-value">~10 working days</span>
+    </div>
+    <div class="cover-meta-item">
+      <span class="cover-meta-label">Data Source</span>
+      <span class="cover-meta-value">Azure DevOps (live sync)</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── MANAGEMENT SUMMARY ─────────────────────────────────────────────── -->
+<div class="container">
+
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">00</span>
+      <span class="section-title">Management Summary</span>
+    </div>
+
+    <!-- Verdict cards -->
+    <div class="verdict-row">
+      <div class="verdict-card red">
+        <div class="verdict-type">Release Audit</div>
+        <div class="verdict-rag red">
+          <span class="verdict-dot" style="background:var(--red)"></span>
+          RED
+        </div>
+        <div class="verdict-issue">No completed production release exists in the tracking system. <code>p_releases</code> contains only a single "Test Release" in Planning state (target: 30 Apr 2026, never progressed). All release quality KPIs are unmeasurable — this is itself a governance failure.</div>
+      </div>
+      <div class="verdict-card red">
+        <div class="verdict-type">Iteration Audit — May 2026</div>
+        <div class="verdict-rag red">
+          <span class="verdict-dot" style="background:var(--red)"></span>
+          RED
+        </div>
+        <div class="verdict-issue">0 of 20 enhancements delivered at Day 15 of 23. Gate compliance is 0% across all 20 enhancement stories. 67 items (45% of sprint scope) were created after sprint start. The Story Completion Checklist has effectively stopped operating.</div>
+      </div>
+    </div>
+
+    <!-- Top findings -->
+    <div class="findings-grid">
+      <div class="finding-card">
+        <div class="finding-rank">Top Finding #1</div>
+        <div class="finding-metric">0%</div>
+        <div class="finding-label">Gate Compliance</div>
+        <div class="finding-desc">Not a single planning gate (DoR, story written, in-dev, in-QA, ready-to-ship) has been signed off for any of the 20 May enhancements. The lifecycle checklist is being bypassed entirely.</div>
+      </div>
+      <div class="finding-card">
+        <div class="finding-rank">Top Finding #2</div>
+        <div class="finding-metric">0 / 20</div>
+        <div class="finding-label">Enhancements Delivered</div>
+        <div class="finding-desc">Zero enhancements shipped with 10 days remaining. April delivered 13/22 (59%). May is on track for a clean zero — a significant regression from the prior sprint.</div>
+      </div>
+      <div class="finding-card">
+        <div class="finding-rank">Top Finding #3</div>
+        <div class="finding-metric">45%</div>
+        <div class="finding-label">Mid-Sprint Scope Injection</div>
+        <div class="finding-desc">67 of 149 sprint items were created after May 1st. The sprint was not scoped at planning; demand is being fed in reactively throughout the iteration, including 17 open P1 bugs.</div>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="section-header" style="margin-top:32px">
+      <span class="section-num">⚡</span>
+      <span class="section-title">Immediate Actions</span>
+    </div>
+    <div class="action-list">
+      <div class="action-item">
+        <div class="action-num">1</div>
+        <div>
+          <div class="action-text">Resolve 3 P1 bugs stuck in "Request Estimate" state — bugs #40656, #40800, #41103 (Xero/Credit Card). P1s must be estimated or downgraded within 48 hours; they cannot be parked.</div>
+          <div class="action-meta">Owner: Dev Lead</div>
+        </div>
+        <div class="action-deadline">23 May 2026</div>
+      </div>
+      <div class="action-item">
+        <div class="action-num">2</div>
+        <div>
+          <div class="action-text">Create a production release record in <code>p_releases</code> before next deployment. Without this, release quality is entirely unmeasurable from the system.</div>
+          <div class="action-meta">Owner: Release Manager</div>
+        </div>
+        <div class="action-deadline">23 May 2026</div>
+      </div>
+      <div class="action-item">
+        <div class="action-num">3</div>
+        <div>
+          <div class="action-text">Enforce DoR gate sign-off before any story enters Dev InProgress, starting June sprint. Block stories at the tooling level if DoR = false.</div>
+          <div class="action-meta">Owner: Release Manager + Dev Lead</div>
+        </div>
+        <div class="action-deadline">Sprint start June 2026</div>
+      </div>
+      <div class="action-item">
+        <div class="action-num">4</div>
+        <div>
+          <div class="action-text">Define sprint scope freeze policy — no new items added after Day 2 of sprint except verified P0. Triage framework must gate entry to the sprint, not just to the iteration.</div>
+          <div class="action-meta">Owner: Team Lead</div>
+        </div>
+        <div class="action-deadline">May retrospective</div>
+      </div>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- ── PART 1 ── -->
+  <div class="part-header">
+    <div>
+      <div class="part-badge">Part 1</div>
+    </div>
+    <div>
+      <div class="part-title">Release Audit</div>
+      <div class="part-sub">Run after every production release · Looks backward at what shipped</div>
+    </div>
+    <div class="rag red" style="margin-left:auto">RED</div>
+  </div>
+
+  <!-- 1.1 -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">1.1</span>
+      <span class="section-title">Story &amp; Requirements Quality</span>
+      <span class="section-tag grey">DATA GAP</span>
+    </div>
+    <div class="gap-box">
+      <strong>Critical data gap:</strong> <code>p_releases</code> contains only REL-001 "Test Release" (status: Planning, target: 30 Apr 2026). No release has been completed or tracked in the system. All release-specific KPIs below are unmeasurable. The absence of release tracking is itself a process failure.
+    </div>
+    <div class="table-wrap">
+      <table class="metric-table">
+        <thead>
+          <tr>
+            <th class="col-metric">Metric</th>
+            <th class="col-target">Target</th>
+            <th class="col-result">Result</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="col-metric">% stories with AC written &amp; approved before dev</td>
+            <td class="col-target">100%</td>
+            <td class="col-result"><span class="rag red">RED</span>&nbsp; <span style="color:var(--muted)">0/20 enhancements have any <code>p_planning_gates</code> entry. Cannot confirm AC was approved before dev started for any story.</span></td>
+          </tr>
+          <tr>
+            <td class="col-metric">% stories with Pre-Dev QA Review completed</td>
+            <td class="col-target">100%</td>
+            <td class="col-result"><span class="rag red">RED</span>&nbsp; <span style="color:var(--muted)">Only 2/20 enhancements (#38228, #40422) have tracker steps recorded. 18/20 entered development with zero documented lifecycle steps.</span></td>
+          </tr>
+          <tr>
+            <td class="col-metric">% stories with design, test case &amp; API doc link</td>
+            <td class="col-target">&gt;95%</td>
+            <td class="col-result"><span class="rag grey">UNKNOWN</span>&nbsp; <span style="color:var(--muted)">Not captured in current DB schema — tooling gap.</span></td>
+          </tr>
+          <tr>
+            <td class="col-metric">Stories blocked in QA due to unresolved dependencies</td>
+            <td class="col-target">0 blocked</td>
+            <td class="col-result"><span class="rag amber">AMBER</span>&nbsp; <span style="color:var(--muted)">14 items in "Clarification" state (9.4% of sprint). Root cause unknown from data alone; could be requirements, dependencies, or both.</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 1.2 -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">1.2</span>
+      <span class="section-title">Testing Depth &amp; Coverage</span>
+      <span class="section-tag red">RED</span>
+    </div>
+    <div class="table-wrap">
+      <table class="metric-table">
+        <thead>
+          <tr><th class="col-metric">Metric</th><th class="col-target">Target</th><th class="col-result">Result</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="col-metric">% stories with test cases documented before QA</td>
+            <td class="col-target">100%</td>
+            <td class="col-result"><span class="rag grey">UNKNOWN</span>&nbsp; <span style="color:var(--muted)">Not tracked in system. Flagged as a tooling gap — test case links are not enforced pre-QA entry.</span></td>
+          </tr>
+          <tr>
+            <td class="col-metric">Story Completion Checklist compliance</td>
+            <td class="col-target">&gt;90%</td>
+            <td class="col-result"><span class="rag red">RED — 10%</span>&nbsp; <span style="color:var(--muted)">2/20 enhancements have lifecycle steps checked. #38228 completed fully (107 steps); #40422 at 12/16. The remaining 18 have zero records.</span></td>
+          </tr>
+          <tr>
+            <td class="col-metric">QA Rework Rate (stories returned Dev → QA)</td>
+            <td class="col-target">&lt;15%</td>
+            <td class="col-result"><span class="rag amber">AMBER</span>&nbsp; <span style="color:var(--muted)">14 items in Clarification (9.4% of 149). Directionally within target, but full Dev→QA cycle history is not stored per-item.</span></td>
+          </tr>
+          <tr>
+            <td class="col-metric">Multi-QA-cycle stories</td>
+            <td class="col-target">0 target</td>
+            <td class="col-result"><span class="rag grey">UNKNOWN</span>&nbsp; <span style="color:var(--muted)">Cycle count not persisted per item — gap in state history logging.</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 1.4 -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">1.4</span>
+      <span class="section-title">Process Compliance &amp; VSTS Hygiene</span>
+      <span class="section-tag red">RED</span>
+    </div>
+    <div class="table-wrap">
+      <table class="metric-table">
+        <thead>
+          <tr><th class="col-metric">Metric</th><th class="col-target">Target</th><th class="col-result">Result</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="col-metric">Story Completion Checklist compliance rate</td>
+            <td class="col-target">&gt;90%</td>
+            <td class="col-result"><span class="rag red">RED — 10%</span>&nbsp; <span style="color:var(--muted)">2/20 May enhancements have any tracker steps. 18 stories in active development with zero documented lifecycle gate activity.</span></td>
+          </tr>
+          <tr>
+            <td class="col-metric">Stories added after sprint commitment (scope injection)</td>
+            <td class="col-target">0%</td>
+            <td class="col-result"><span class="rag red">RED — 45%</span>&nbsp; <span style="color:var(--muted)">67 of 149 sprint items created after 1 May. No sprint scope freeze is being enforced.</span></td>
+          </tr>
+          <tr>
+            <td class="col-metric">Stories with all required VSTS fields populated</td>
+            <td class="col-target">&gt;95%</td>
+            <td class="col-result"><span class="rag amber">AMBER — 76%</span>&nbsp; <span style="color:var(--muted)">21/89 active items are unestimated; 8 stuck in "Request Estimate" state with no estimate recorded including 3 P1 bugs.</span></td>
+          </tr>
+          <tr>
+            <td class="col-metric">All stories in Ready for Release before deploy</td>
+            <td class="col-target">100%</td>
+            <td class="col-result"><span class="rag grey">UNKNOWN</span>&nbsp; <span style="color:var(--muted)">No production release record exists to measure against.</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 1.5 -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">1.5</span>
+      <span class="section-title">Defect Analysis &amp; Release Outcome</span>
+      <span class="section-tag grey">DATA GAP</span>
+    </div>
+    <div class="gap-box">
+      <strong>Critical:</strong> <code>p_bugs</code> table has 0 rows. Production defects are not being logged in the system. Defect escape rate, hotfix frequency, and post-release incident counts are entirely unmeasurable. This represents a fundamental gap in release quality governance.
+    </div>
+    <div class="table-wrap">
+      <table class="metric-table">
+        <thead>
+          <tr><th class="col-metric">Metric</th><th class="col-target">Target</th><th class="col-result">Result</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="col-metric">Defect escape rate (production / total)</td>
+            <td class="col-target">&lt;10%</td>
+            <td class="col-result"><span class="rag grey">UNKNOWN — p_bugs empty</span></td>
+          </tr>
+          <tr>
+            <td class="col-metric">Hotfixes triggered within 7 days of release</td>
+            <td class="col-target">0</td>
+            <td class="col-result"><span class="rag grey">UNKNOWN — no release record</span></td>
+          </tr>
+          <tr>
+            <td class="col-metric">Post-release P0 incidents in first 72 hours</td>
+            <td class="col-target">0</td>
+            <td class="col-result"><span class="rag grey">UNKNOWN — no release record</span></td>
+          </tr>
+          <tr>
+            <td class="col-metric">Root cause documented for every production defect</td>
+            <td class="col-target">100%</td>
+            <td class="col-result"><span class="rag grey">UNKNOWN — p_bugs empty</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 1.6 Qualitative -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">1.6</span>
+      <span class="section-title">Qualitative — Discipline &amp; Behaviour</span>
+    </div>
+    <div class="table-wrap">
+      <table class="qual-table">
+        <thead>
+          <tr><th style="width:18%">Area</th><th style="width:12%">Rating</th><th>Observation</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="qual-area">Testing depth</td>
+            <td><span class="rag red">RED</span></td>
+            <td class="qual-note">Checklist adoption at 10% means testing quality is undocumented for 90% of enhancement stories and cannot be verified by QA or management.</td>
+          </tr>
+          <tr>
+            <td class="qual-area">Story owner engagement</td>
+            <td><span class="rag red">RED</span></td>
+            <td class="qual-note">0/20 planning gates filled for May enhancements; owners are not actively signing off at lifecycle checkpoints.</td>
+          </tr>
+          <tr>
+            <td class="qual-area">Demo quality</td>
+            <td><span class="rag grey">UNKNOWN</span></td>
+            <td class="qual-note">No demo attendance or outcome data is captured in the system — flagged as a tooling gap.</td>
+          </tr>
+          <tr>
+            <td class="qual-area">Defect response discipline</td>
+            <td><span class="rag amber">AMBER</span></td>
+            <td class="qual-note">17 P1 bugs open including 3 blocked in Request Estimate; response mechanism exists but triage is consistently incomplete for P1s.</td>
+          </tr>
+          <tr>
+            <td class="qual-area">Communication clarity</td>
+            <td><span class="rag amber">AMBER</span></td>
+            <td class="qual-note">14 items in Clarification state indicates requirements ambiguity is surfacing during dev/QA rather than being resolved at planning.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- ── PART 2 ── -->
+  <div class="part-header">
+    <div>
+      <div class="part-badge">Part 2</div>
+    </div>
+    <div>
+      <div class="part-title">Iteration Audit — May 2026</div>
+      <div class="part-sub">Mid-sprint snapshot · 2026-05-21 · Day 15 of ~23 working days</div>
+    </div>
+    <div class="rag red" style="margin-left:auto">RED</div>
+  </div>
+
+  <!-- Sprint status bar -->
+  <div class="sprint-bar">
+    <div class="sprint-stat">
+      <span class="sprint-stat-val" style="color:var(--text)">149</span>
+      <span class="sprint-stat-lbl">Total Items</span>
+    </div>
+    <div class="sprint-stat">
+      <span class="sprint-stat-val" style="color:var(--green)">43</span>
+      <span class="sprint-stat-lbl">Closed</span>
+    </div>
+    <div class="sprint-stat">
+      <span class="sprint-stat-val" style="color:var(--amber)">59</span>
+      <span class="sprint-stat-lbl">Dev Complete / Review</span>
+    </div>
+    <div class="sprint-stat">
+      <span class="sprint-stat-val" style="color:var(--red)">17</span>
+      <span class="sprint-stat-lbl">P1 Bugs Open</span>
+    </div>
+    <div class="sprint-stat">
+      <span class="sprint-stat-val" style="color:var(--red)">0</span>
+      <span class="sprint-stat-lbl">Enhancements Shipped</span>
+    </div>
+    <div class="sprint-stat">
+      <span class="sprint-stat-val" style="color:var(--amber)">~10</span>
+      <span class="sprint-stat-lbl">Working Days Left</span>
+    </div>
+  </div>
+
+  <!-- Item breakdown -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">2.0</span>
+      <span class="section-title">Sprint Composition &amp; Progress</span>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
+      <!-- Enhancements -->
+      <div class="table-wrap" style="margin-bottom:0">
+        <table class="metric-table">
+          <thead><tr><th colspan="2">Enhancements (20 total)</th></tr></thead>
+          <tbody>
+            <tr><td class="col-metric">Not Required (dropped)</td><td><span style="color:var(--muted)">3</span></td></tr>
+            <tr><td class="col-metric">New (not started)</td><td><span style="color:var(--muted)">5</span></td></tr>
+            <tr><td class="col-metric">Clarification (blocked)</td><td><span style="color:var(--amber)">2</span></td></tr>
+            <tr><td class="col-metric">Dev InProgress</td><td><span style="color:var(--gold)">4</span></td></tr>
+            <tr><td class="col-metric">Dev Review</td><td><span style="color:var(--gold)">1</span></td></tr>
+            <tr><td class="col-metric">Dev Complete (awaiting QA)</td><td><span style="color:var(--gold)">5</span></td></tr>
+            <tr><td class="col-metric" style="font-weight:700">Delivered (Closed)</td><td><span style="color:var(--red);font-weight:800">0</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <!-- Bugs -->
+      <div class="table-wrap" style="margin-bottom:0">
+        <table class="metric-table">
+          <thead><tr><th colspan="2">Bugs (129 total)</th></tr></thead>
+          <tbody>
+            <tr><td class="col-metric" style="font-weight:700">Closed</td><td><span style="color:var(--green);font-weight:800">43</span>&nbsp;<span style="color:var(--muted);font-size:11px">(33%)</span></td></tr>
+            <tr><td class="col-metric">Resolved / Not an issue</td><td><span style="color:var(--green)">18</span></td></tr>
+            <tr><td class="col-metric">Dev Complete / Review</td><td><span style="color:var(--gold)">51</span></td></tr>
+            <tr><td class="col-metric">Clarification</td><td><span style="color:var(--amber)">12</span></td></tr>
+            <tr><td class="col-metric">Request Estimate (blocked)</td><td><span style="color:var(--red)">8</span></td></tr>
+            <tr><td class="col-metric">Active / New</td><td><span style="color:var(--amber)">4</span></td></tr>
+            <tr><td class="col-metric">Watch List</td><td><span style="color:var(--muted)">2</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Progress bars -->
+    <div class="progress-wrap">
+      <div class="progress-row">
+        <span class="progress-label">Bug close rate (43/129)</span>
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill" style="width:33%;background:var(--gold)"></div>
+        </div>
+        <span class="progress-val" style="color:var(--gold)">33%</span>
+      </div>
+      <div class="progress-row">
+        <span class="progress-label">Enhancement delivery (0/20)</span>
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill" style="width:0%;background:var(--red)"></div>
+        </div>
+        <span class="progress-val" style="color:var(--red)">0%</span>
+      </div>
+      <div class="progress-row">
+        <span class="progress-label">Estimation compliance (68/89)</span>
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill" style="width:76%;background:var(--blue)"></div>
+        </div>
+        <span class="progress-val" style="color:var(--blue)">76%</span>
+      </div>
+      <div class="progress-row">
+        <span class="progress-label">Gate compliance (0/20)</span>
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill" style="width:0%;background:var(--red)"></div>
+        </div>
+        <span class="progress-val" style="color:var(--red)">0%</span>
+      </div>
+      <div class="progress-row">
+        <span class="progress-label">Checklist adherence (2/20)</span>
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill" style="width:10%;background:var(--red)"></div>
+        </div>
+        <span class="progress-val" style="color:var(--red)">10%</span>
+      </div>
+      <div class="progress-row">
+        <span class="progress-label">April comparison — enh delivered (13/22)</span>
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill" style="width:59%;background:var(--green)"></div>
+        </div>
+        <span class="progress-val" style="color:var(--green)">59%</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2.1 Delivery Health -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">2.1</span>
+      <span class="section-title">Delivery Health</span>
+      <span class="section-tag red">RED</span>
+    </div>
+    <div class="table-wrap">
+      <table class="metric-table">
+        <thead><tr><th class="col-metric">Metric</th><th class="col-target">Target</th><th class="col-result">Result</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="col-metric">Sprint completion rate (closed / committed)</td>
+            <td class="col-target">&gt;90%</td>
+            <td class="col-result"><span class="rag red">RED — 29%</span>&nbsp; <span style="color:var(--muted)">43 items closed out of 149 committed (Day 15 of 23). Even accounting for items in-flight, full completion is not achievable before sprint end.</span></td>
+          </tr>
+          <tr>
+            <td class="col-metric">Enhancement delivery rate</td>
+            <td class="col-target">100%</td>
+            <td class="col-result"><span class="rag red">RED — 0/20</span>&nbsp; <span style="color:var(--muted)">No enhancement has reached Closed state. 5 are in Dev Complete awaiting QA; with 10 days remaining and full QA + sign-off cycles needed, full delivery is extremely unlikely.</span></td>
+          </tr>
+          <tr>
+            <td class="col-metric">Spillover risk</td>
+            <td class="col-target">&lt;10%</td>
+            <td class="col-result"><span class="rag red">RED — HIGH</span>&nbsp; <span style="color:var(--muted)">All 20 enhancements are at risk of spillover. April comparison: 13/22 enhancements delivered (59%). May regression is significant.</span></td>
+          </tr>
+          <tr>
+            <td class="col-metric">Mid-sprint scope injection</td>
+            <td class="col-target">0%</td>
+            <td class="col-result"><span class="rag red">RED — 45%</span>&nbsp; <span style="color:var(--muted)">67 items created after 1 May 2026. No scope freeze policy is in operation. Sprint capacity is being diluted continuously.</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 2.2 Priority -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">2.2</span>
+      <span class="section-title">Priority &amp; Capacity Discipline</span>
+      <span class="section-tag red">RED</span>
+    </div>
+
+    <!-- KPI mini grid -->
+    <div class="kpi-grid" style="margin-bottom:20px">
+      <div class="kpi-card red">
+        <div class="kpi-label">P1 Bugs Still Open</div>
+        <div class="kpi-value">17</div>
+        <div class="kpi-sub">3 blocked in Request Estimate</div>
+      </div>
+      <div class="kpi-card red">
+        <div class="kpi-label">Items Unestimated</div>
+        <div class="kpi-value">21</div>
+        <div class="kpi-sub">incl. 8 stuck in Request Estimate state</div>
+      </div>
+      <div class="kpi-card amber">
+        <div class="kpi-label">Items in Clarification</div>
+        <div class="kpi-value">14</div>
+        <div class="kpi-sub">Requirements unresolved at Day 15</div>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table class="metric-table">
+        <thead><tr><th class="col-metric">Metric</th><th class="col-target">Target</th><th class="col-result">Result</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="col-metric">P1 bugs resolved before sprint end</td>
+            <td class="col-target">100%</td>
+            <td class="col-result"><span class="rag red">RED — 17 open</span>&nbsp; <span style="color:var(--muted)">Open P1s include: #40656, #40800, #41103 (Request Estimate — Xero/Credit Card); #40926, #36582, #41014 (Active/Clarification); #34409, #40206 (Dev Review Completed, not yet closed).</span></td>
+          </tr>
+          <tr>
+            <td class="col-metric">P1 bugs stuck without estimate</td>
+            <td class="col-target">0</td>
+            <td class="col-result"><span class="rag red">RED — 3 items</span>&nbsp; <span style="color:var(--muted)">#40656 (Credit Card), #40800 (Credit Card), #41103 (Credit Card). P1 classification requires estimate before Dev assignment per triage framework.</span></td>
+          </tr>
+          <tr>
+            <td class="col-metric">Mid-sprint P0/P1 interruptions</td>
+            <td class="col-target">Track trend</td>
+            <td class="col-result"><span class="rag amber">AMBER</span>&nbsp; <span style="color:var(--muted)">67 items injected mid-sprint; P0/P1 classification at injection not recorded with timestamps — triage SLA cannot be computed. Gap in triage audit trail.</span></td>
+          </tr>
+          <tr>
+            <td class="col-metric">Overhead vs capacity (May, team-wide)</td>
+            <td class="col-target">Track</td>
+            <td class="col-result"><span class="rag amber">AMBER</span>&nbsp; <span style="color:var(--muted)">1,250h standalone overhead tasks vs 738h committed feature work across 10 developers. Overhead is consuming 63% of team capacity. Notable: Jyoti Dahiya 291h overhead, Pranjal Jindal 188h, Shivi Prajapati 161h — all exceeding monthly 180h capacity before feature work is counted.</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 2.3 Process -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">2.3</span>
+      <span class="section-title">Process Adherence &amp; Working Rhythm</span>
+      <span class="section-tag red">RED</span>
+    </div>
+    <div class="table-wrap">
+      <table class="metric-table">
+        <thead><tr><th class="col-metric">Metric</th><th class="col-target">Target</th><th class="col-result">Result</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="col-metric">Story Completion Checklist compliance</td>
+            <td class="col-target">&gt;90%</td>
+            <td class="col-result"><span class="rag red">RED — 10%</span>&nbsp; <span style="color:var(--muted)">2/20 enhancements. #38228: 107 steps checked (fully compliant). #40422: 12/16 steps. The remaining 18 stories have zero recorded lifecycle activity.</span></td>
+          </tr>
+          <tr>
+            <td class="col-metric">Planning gate compliance (DoR / story-written / in-dev)</td>
+            <td class="col-target">&gt;90%</td>
+            <td class="col-result"><span class="rag red">RED — 0%</span>&nbsp; <span style="color:var(--muted)">0/20 enhancements have any <code>p_planning_gates</code> field populated. No DoR, no story-written sign-off, no in-dev gate recorded for any May enhancement.</span></td>
+          </tr>
+          <tr>
+            <td class="col-metric">Estimation compliance (active items)</td>
+            <td class="col-target">&gt;95%</td>
+            <td class="col-result"><span class="rag amber">AMBER — 76%</span>&nbsp; <span style="color:var(--muted)">68/89 active items estimated. 21 unestimated: 8 stuck in "Request Estimate" state, remainder entered sprint without an estimate.</span></td>
+          </tr>
+          <tr>
+            <td class="col-metric">Maker Time violations</td>
+            <td class="col-target">&lt;2/person/wk</td>
+            <td class="col-result"><span class="rag grey">UNKNOWN</span>&nbsp; <span style="color:var(--muted)">Not tracked in system. The 1,250h overhead total suggests significant non-feature activity but session-level Maker Time data is not captured.</span></td>
+          </tr>
+          <tr>
+            <td class="col-metric">QA rework rate</td>
+            <td class="col-target">&lt;15%</td>
+            <td class="col-result"><span class="rag amber">AMBER — 9.4%</span>&nbsp; <span style="color:var(--muted)">14 items in Clarification (9.4%). Within target directionally; full rework cycle data not available.</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 2.4 Qualitative -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">2.4</span>
+      <span class="section-title">Qualitative — Discipline &amp; Behaviour</span>
+    </div>
+    <div class="table-wrap">
+      <table class="qual-table">
+        <thead>
+          <tr><th style="width:18%">Area</th><th style="width:12%">Rating</th><th>Observation</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="qual-area">Planning honesty</td>
+            <td><span class="rag red">RED</span></td>
+            <td class="qual-note">67 of 149 sprint items were created after sprint start. The sprint was not genuinely scoped at planning; demand is being loaded reactively. This undermines capacity planning and commitment reliability.</td>
+          </tr>
+          <tr>
+            <td class="qual-area">Triage discipline</td>
+            <td><span class="rag red">RED</span></td>
+            <td class="qual-note">3 P1 bugs remain in "Request Estimate" state — P1 classification is being applied without completing mandatory triage (estimate before Dev assignment). P1 without an estimate is a contradiction in the priority framework.</td>
+          </tr>
+          <tr>
+            <td class="qual-area">Maker Time culture</td>
+            <td><span class="rag grey">UNKNOWN</span></td>
+            <td class="qual-note">Not measurable from current system data. High standalone overhead (1,250h team-wide) suggests significant non-feature activity, but session-level interruption tracking is not in place.</td>
+          </tr>
+          <tr>
+            <td class="qual-area">Retrospective quality</td>
+            <td><span class="rag grey">UNKNOWN</span></td>
+            <td class="qual-note">No retrospective action log found in system. <code>p_audit_log</code> has only 5 entries total. April's lower-but-nonzero delivery rate (59%) vs May's 0% suggests lessons from April were not actioned.</td>
+          </tr>
+          <tr>
+            <td class="qual-area">Process ownership</td>
+            <td><span class="rag red">RED</span></td>
+            <td class="qual-note">18/20 enhancements have zero lifecycle tracking steps. The Story Completion Checklist and planning gates are not being enforced as entry criteria — process ownership has broken down at the team level.</td>
+          </tr>
+          <tr>
+            <td class="qual-area">Critical thinking</td>
+            <td><span class="rag amber">AMBER</span></td>
+            <td class="qual-note">April delivered 13/22 enhancements (59%). May is on track for 0/20 with no evidence of root cause analysis between the two sprints. The regression went unaddressed at sprint planning.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 2.5 Verdict -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">2.5</span>
+      <span class="section-title">Iteration Verdict</span>
+    </div>
+    <div class="verdict-card red" style="max-width:100%">
+      <div class="verdict-type">Iteration 2026 05-May · Overall Rating</div>
+      <div class="verdict-rag red">
+        <span class="verdict-dot" style="background:var(--red)"></span>
+        RED
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin:16px 0">
+        <div>
+          <div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin-bottom:6px">KPIs Confirmed RED</div>
+          <div style="font-size:22px;font-weight:800;color:var(--red)">5</div>
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin-bottom:6px">Qualitative RED Flags</div>
+          <div style="font-size:22px;font-weight:800;color:var(--red)">3</div>
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin-bottom:6px">Data Gaps (process failures)</div>
+          <div style="font-size:22px;font-weight:800;color:var(--muted)">6</div>
+        </div>
+      </div>
+      <div class="verdict-issue">
+        <strong style="color:var(--text)">Primary issue:</strong> The Story Completion Checklist and planning gates are being bypassed on 90% of enhancements, zero planning gates have been signed off for any May story, and 67 items were injected mid-sprint without scope governance — the sprint planning and quality gate process has effectively stopped operating for this iteration.
+      </div>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- Data Gaps -->
+  <div class="section">
+    <div class="section-header">
+      <span class="section-num">★</span>
+      <span class="section-title">Data Gaps — Process Failures, Not Tooling Gaps</span>
+    </div>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:16px">Each item below represents a conscious or unconscious decision not to record. They are listed as actions, not observations.</p>
+    <div class="table-wrap">
+      <table class="metric-table">
+        <thead><tr><th style="width:28%">Gap</th><th style="width:25%">Table / Field</th><th>Consequence</th></tr></thead>
+        <tbody>
+          <tr>
+            <td style="color:var(--red);font-weight:600">No production release logged</td>
+            <td style="color:var(--muted);font-family:monospace;font-size:12px">p_releases — 0 completed</td>
+            <td style="color:var(--muted);font-size:12.5px">Entire Release Audit is unmeasurable. Release quality governance is blind.</td>
+          </tr>
+          <tr>
+            <td style="color:var(--red);font-weight:600">No production defects recorded</td>
+            <td style="color:var(--muted);font-family:monospace;font-size:12px">p_bugs — 0 rows</td>
+            <td style="color:var(--muted);font-size:12.5px">Defect escape rate, hotfix count, post-release incidents all unknown.</td>
+          </tr>
+          <tr>
+            <td style="color:var(--amber);font-weight:600">Gate compliance not populated</td>
+            <td style="color:var(--muted);font-family:monospace;font-size:12px">p_planning_gates — 0/20</td>
+            <td style="color:var(--muted);font-size:12.5px">AC approval, DoR sign-off, story-written status unmeasurable for May sprint.</td>
+          </tr>
+          <tr>
+            <td style="color:var(--amber);font-weight:600">Triage timestamps absent</td>
+            <td style="color:var(--muted);font-family:monospace;font-size:12px">No triaged_at field</td>
+            <td style="color:var(--muted);font-size:12.5px">Triage SLA adherence (&gt;90% within 2h) unmeasurable.</td>
+          </tr>
+          <tr>
+            <td style="color:var(--muted);font-weight:600">Maker Time not tracked</td>
+            <td style="color:var(--muted);font-family:monospace;font-size:12px">No system field</td>
+            <td style="color:var(--muted);font-size:12.5px">Maker Time compliance (&lt;2 violations/person/week) cannot be audited.</td>
+          </tr>
+          <tr>
+            <td style="color:var(--muted);font-weight:600">Demo attendance not recorded</td>
+            <td style="color:var(--muted);font-family:monospace;font-size:12px">No system field</td>
+            <td style="color:var(--muted);font-size:12.5px">Story owner engagement in progress reviews is unmeasurable.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<div class="footer">
+  Expense On Demand &nbsp;·&nbsp; Internal Confidential &nbsp;·&nbsp;
+  Generated from live Azure DevOps sync via Release Analytics &nbsp;·&nbsp; 2026-05-21
+</div>
+
+</body>
+</html>

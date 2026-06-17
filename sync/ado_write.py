@@ -58,8 +58,10 @@ FIELD_MAP: dict[str, str] = {
     "main_designer":     "Custom.MainDesigner",
     "tags":              "System.Tags",
     "description":       "System.Description",
-    # NOTE: verify exact ADO custom field name for your project before using
-    "release_date":      "Custom.ReleaseDate",
+    "release_date":      "Custom.Releasedate",
+    "story_size":        "Custom.StorySize",
+    "story_status":      "Custom.StoryStatus",
+    "story_owner":       "Custom.Userstoryowner",
 }
 
 # ── Internal: failure queue (capped, thread-safe via deque) ──────────────────

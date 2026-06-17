@@ -1392,15 +1392,8 @@ def _render_func_timeline(size_filter):
     Input("dcap-tab",            "data"),
     Input("dcap-gantt-show-all", "data"),
     Input("gantt-cust-filter",   "value"),
-    Input("plan-main-tab",       "data"),   # fires when user clicks Developer Capacity
-    prevent_initial_call=True,              # do NOT build on page load
 )
-def _render(view, tab, show_all, cust_filter, active_tab):
-    # Only build when Developer Capacity is the active tab
-    if active_tab is not None and active_tab != "devcap":
-        from dash import no_update
-        return no_update, no_update, no_update, no_update, no_update
-
+def _render(view, tab, show_all, cust_filter):
     cust_filter = cust_filter or "all"
     cust_key = {"customer": "Customer", "internal": "Internal"}.get(cust_filter.lower(), "All")
 

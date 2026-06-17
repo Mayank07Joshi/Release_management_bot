@@ -376,7 +376,7 @@ body {
 .btn-close { filter: invert(1) !important; }
 
 /* ── Sidebar Nav ─────────────────────────────────────────────────────────────── */
-:root { --sidebar-w: 220px; }
+:root { --sidebar-w: 232px; }
 
 .sidebar-nav-item {
     display: flex;

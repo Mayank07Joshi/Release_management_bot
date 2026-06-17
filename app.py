@@ -76,13 +76,14 @@ _NAV_TREE = [
         ("Addition & Deletion", "/addition-deletion", "◉", True),
     ]),
     ("ENHANCEMENTS", "#818cf8", [
-        ("Unestimated Items",  "/unestimated",       "⊙", False),
+        ("Unestimated Items",  "/unestimated",       "⊙", True),
         ("Story Readiness",    "/planning",           "✓", True),
         ("Designer Planning",  "/designer-planning",  "∖", False),
         ("Release Status",     "/release-status",     "▶", False),
     ]),
     ("BUGS & ISSUES", "#f87171", [
-        ("Issue Planning", "/issue-planning", "≡", False),
+        ("Unestimated Bugs", "/bugs-unestimated", "⊙", True),
+        ("Issue Planning",   "/issue-planning",   "≡", True),
     ]),
     ("CAPACITY", "#60a5fa", [
         ("Developer Capacity", "/dev-capacity", "≡", True),
@@ -101,73 +102,89 @@ def _build_sidebar_nav(pathname):
         if section_label:
             items.append(html.Div([
                 html.Span(style={
-                    "width": "6px", "height": "6px", "borderRadius": "50%",
+                    "width": "6px", "height": "6px", "borderRadius": "2px",
                     "background": dot_color, "display": "inline-block",
                     "marginRight": "7px", "flexShrink": "0",
                 }),
                 html.Span(section_label, style={
-                    "fontSize": "9px", "fontWeight": "700",
-                    "color": "var(--text-muted)",
-                    "letterSpacing": "0.12em",
+                    "fontSize": "9.5px", "fontWeight": "700",
+                    "color": "rgb(91,98,118)",
+                    "textTransform": "uppercase", "letterSpacing": "0.7px",
                 }),
             ], style={
                 "display": "flex", "alignItems": "center",
-                "padding": "14px 16px 5px 16px",
+                "padding": "0px 8px 6px", "marginTop": "12px",
             }))
 
         for (label, href, icon, built) in nav_items:
             is_active = (pathname or "/") == href
             trailing = []
             if not built:
-                trailing = [html.Span(style={
+                trailing = [html.Span(title="Placeholder", style={
                     "width": "6px", "height": "6px", "borderRadius": "50%",
-                    "background": "#fb923c", "flexShrink": "0", "marginLeft": "auto",
+                    "background": "rgb(224,162,60)", "opacity": "0.8",
+                    "flexShrink": "0", "marginLeft": "auto",
                 })]
             items.append(html.A([
                 html.Span(icon, style={
-                    "fontSize": "11px", "width": "16px", "flexShrink": "0",
-                    "color": "var(--purple)" if is_active else "var(--text-muted)",
-                    "textAlign": "center", "lineHeight": "1",
+                    "width": "18px", "textAlign": "center",
+                    "color": "rgb(110,118,241)" if is_active else "rgb(139,146,164)",
+                    "fontSize": "13px", "flexShrink": "0",
                 }),
                 html.Span(label, style={
-                    "flex": "1", "overflow": "hidden",
-                    "textOverflow": "ellipsis", "whiteSpace": "nowrap",
+                    "flex": "1", "fontSize": "12.5px",
+                    "fontWeight": "700" if is_active else "500",
+                    "color": "rgb(234,236,242)" if is_active else "rgb(139,146,164)",
+                    "overflow": "hidden", "textOverflow": "ellipsis", "whiteSpace": "nowrap",
                 }),
                 *trailing,
-            ], href=href,
-               className="sidebar-nav-item sidebar-nav-active"
-                          if is_active else "sidebar-nav-item",
-            ))
+            ], href=href, style={
+                "width": "100%", "display": "flex", "alignItems": "center", "gap": "10px",
+                "padding": "8px 9px", "borderRadius": "8px", "cursor": "pointer",
+                "textDecoration": "none", "marginBottom": "2px",
+                "background": "rgba(110,118,241,0.11)" if is_active else "transparent",
+                "border": "1px solid rgba(110,118,241,0.4)" if is_active else "1px solid transparent",
+            }))
+
+    # Bottom legend
+    items.append(html.Div([
+        html.Span(style={
+            "display": "inline-block", "width": "6px", "height": "6px",
+            "borderRadius": "50%", "background": "rgb(224,162,60)",
+            "marginRight": "5px",
+        }),
+        "Amber dot = screen still a placeholder",
+    ], style={
+        "marginTop": "auto", "padding": "10px 8px 0px",
+        "fontSize": "10px", "color": "rgb(91,98,118)",
+        "lineHeight": "1.5", "borderTop": "1px solid rgb(30,36,51)",
+    }))
+
     return items
 
 
 sidebar = html.Div([
     # ── Branding ───────────────────────────────────────────────────────────────
     html.Div([
-        html.Div([
-            html.Span("EOD", style={"color": "var(--purple)", "fontWeight": "800"}),
-            html.Span(" · ", style={"color": "var(--text-muted)"}),
-            html.Span("PLANNING", style={"color": "var(--text-primary)", "fontWeight": "700"}),
-        ], style={"fontSize": "11px", "letterSpacing": "0.05em", "marginBottom": "3px"}),
-        html.Div("Product workspace", style={
-            "fontSize": "10px", "color": "var(--text-muted)", "fontWeight": "500",
+        html.Div("EOD · PLANNING", style={
+            "fontSize": "11px", "fontWeight": "700",
+            "color": "rgb(110,118,241)", "letterSpacing": "1.2px",
         }),
-    ], style={
-        "padding": "18px 16px 14px 16px",
-        "borderBottom": "1px solid rgba(255,255,255,0.05)",
-        "flexShrink": "0",
-    }),
+        html.Div("Product workspace", style={
+            "fontSize": "12.5px", "color": "rgb(139,146,164)", "marginTop": "3px",
+        }),
+    ], style={"padding": "0px 8px 14px", "flexShrink": "0"}),
 
     # ── Nav (updated by callback on every URL change) ──────────────────────────
     html.Div(id="sidebar-nav", style={
         "flex": "1", "overflowY": "auto", "overflowX": "hidden",
-        "padding": "6px 0 12px 0",
+        "display": "flex", "flexDirection": "column", "gap": "4px",
     }),
 
     # ── Bottom: freshness + theme + user ───────────────────────────────────────
     html.Div([
         html.Div(id="data-freshness-display", style={
-            "fontSize": "10px", "color": "var(--text-muted)",
+            "fontSize": "10px", "color": "rgb(91,98,118)",
             "marginBottom": "10px", "whiteSpace": "nowrap",
         }),
         html.Div([
@@ -176,26 +193,28 @@ sidebar = html.Div([
                         title="Toggle light/dark theme", n_clicks=0, style={
                             "background": "transparent",
                             "border": "1px solid rgba(255,255,255,0.08)",
-                            "color": "var(--text-muted)", "cursor": "pointer",
+                            "color": "rgb(139,146,164)", "cursor": "pointer",
                             "fontSize": "13px", "padding": "4px 7px",
                             "borderRadius": "6px",
                         }),
         ], style={"display": "flex", "alignItems": "center",
                   "justifyContent": "space-between", "gap": "8px"}),
     ], style={
-        "padding": "12px 16px",
-        "borderTop": "1px solid rgba(255,255,255,0.05)",
+        "padding": "12px 8px",
+        "borderTop": "1px solid rgb(30,36,51)",
         "flexShrink": "0",
     }),
 ], id="sidebar", style={
-    "width": "220px", "minWidth": "220px",
-    "background": "#07070f",
+    "width": "232px", "minWidth": "232px",
+    "background": "rgb(18,22,31)",
     "height": "100vh",
     "position": "fixed", "left": "0", "top": "0",
     "display": "flex", "flexDirection": "column",
-    "borderRight": "1px solid rgba(255,255,255,0.06)",
+    "borderRight": "1px solid rgb(38,44,58)",
+    "padding": "18px 12px",
+    "boxSizing": "border-box",
     "zIndex": "100",
-    "overflowY": "hidden",
+    "overflowY": "auto",
 })
 
 # ── Auth setup ────────────────────────────────────────────────────────────────
@@ -377,9 +396,20 @@ if __name__ == "__main__":
     except Exception as _e:
         logging.getLogger(__name__).warning("Aggregation table init failed: %s", _e)
 
+    try:
+        from db.issue_planning import init_issue_planning_tables
+        init_issue_planning_tables()
+    except Exception as _e:
+        logging.getLogger(__name__).warning("Issue planning table init failed: %s", _e)
+
     scheduler = BackgroundScheduler(daemon=True)
     scheduler.add_job(run_sync, "interval", minutes=15, id="ado_sync",
                       misfire_grace_time=60)
+    scheduler.add_job(
+        lambda: run_sync(full=True),
+        "cron", hour=0, minute=0, id="ado_sync_full",
+        misfire_grace_time=300,
+    )
     scheduler.start()
     atexit.register(lambda: scheduler.shutdown(wait=False))
 

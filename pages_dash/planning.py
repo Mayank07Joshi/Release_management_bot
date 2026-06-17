@@ -2995,11 +2995,8 @@ def _build_full_layout():
                     "padding":      "7px 18px", "cursor": "pointer", "marginRight": "6px",
                 },
             ) for i, (lbl, tid) in enumerate([
-                ("Story Readiness",    "readiness"),
-                ("Unestimated Items",  "unest"),
-                ("Developer Capacity", "devcap"),
-                ("Delivery Timeline",  "gantt"),
-                ("BA Team Brief",      "bateam"),
+                ("Story Readiness",   "readiness"),
+                ("Delivery Timeline", "gantt"),
             ])],
         ], style={"display": "flex", "alignItems": "center", "gap": "4px",
                   "marginBottom": "20px", "borderBottom": f"1px solid {BD}",

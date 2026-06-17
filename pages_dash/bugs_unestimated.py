@@ -1,8 +1,8 @@
-"""Enhancements — Unestimated Items (standalone page)"""
+"""Bugs & Issues — Unestimated Bugs (standalone page)"""
 import dash
 from dash import dcc, html
 
-dash.register_page(__name__, path="/unestimated", name="Unestimated Items")
+dash.register_page(__name__, path="/bugs-unestimated", name="Unestimated Bugs")
 
 # Style constants defined inline — avoids importing planning.py at module level
 # (top-level cross-page imports cause Dash to double-register planning.py callbacks)
@@ -38,7 +38,7 @@ def layout(**_):
     from pages_dash.planning import _load_unestimated_data, _build_unest_tab
 
     all_items   = _load_unestimated_data()
-    unest_items = [s for s in all_items if s["type"] == "Enhancement"]
+    unest_items = [s for s in all_items if s["type"] == "Issue"]
 
     return html.Div([
         # ── Stores (same IDs as planning.py — only one page in DOM at a time) ──
@@ -72,12 +72,12 @@ def layout(**_):
         ], id="unest-side-panel", style=_PANEL_CLOSED),
 
         # ── Page header ───────────────────────────────────────────────────────
-        html.Div("ENHANCEMENTS · UNESTIMATED ITEMS", style={
+        html.Div("BUGS & ISSUES · UNESTIMATED BUGS", style={
             "fontSize": "10px", "fontWeight": "700", "color": _MT,
             "letterSpacing": "0.12em", "marginBottom": "6px",
         }),
         html.Div([
-            html.Div("Unestimated Items", style={
+            html.Div("Unestimated Bugs", style={
                 "fontSize": "26px", "fontWeight": "700", "color": _TX,
                 "display": "inline", "marginRight": "12px",
             }),
@@ -90,7 +90,7 @@ def layout(**_):
             }),
         ], style={"marginBottom": "6px"}),
         html.Div(
-            "2026 Enhancements missing estimates — click any card or matrix cell for detail.",
+            "2026 Bugs & Issues missing estimates — click any card or matrix cell for detail.",
             style={"fontSize": "13px", "color": _MT, "marginBottom": "24px"},
         ),
 

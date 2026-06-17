@@ -6,4 +6,4 @@ dash.register_page(__name__, path="/addition-deletion", name="Addition & Deletio
 
 
 def layout(**_):
-    return focus_tab_content(default_tab="sprint")
+    return focus_tab_content(default_tab="sprint", tabs_visible=False)
