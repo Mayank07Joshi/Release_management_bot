@@ -402,46 +402,60 @@ def _build_balance_panel(stories: list):
     max_pts  = max(max(all_vals), _TARGET_PTS, 1)
     tgt_pct  = _TARGET_PTS / max_pts * 100
 
-    def _bar(pts, is_unassigned=False):
+    # ── Single bar row (used in the top summary block) ────────────────────────
+    def _bar_row(label, pts, label_color=_FG):
         bar_pct   = min(pts / max_pts * 100, 100)
-        bar_color = _SALMON if is_unassigned else _INDIGO
         delta     = pts - _TARGET_PTS
         if   delta > 0: dtxt, dcol = f"{delta}p OVER",  _RED
         elif delta < 0: dtxt, dcol = f"{-delta}p UNDER", _DIM
         else:           dtxt, dcol = "On target",        _GREEN
 
         return html.Div([
+            html.Span(label, style={
+                "fontSize": "12.5px", "fontWeight": "700",
+                "color": label_color, "minWidth": "82px", "flexShrink": "0",
+            }),
             html.Div([
-                html.Div([
+                html.Div([                                       # track (overflow hidden)
                     html.Div(style={
                         "width": f"{bar_pct:.1f}%", "height": "100%",
-                        "background": bar_color, "borderRadius": "3px",
+                        "background": _INDIGO, "borderRadius": "3px",
                     }),
                 ], style={
                     "height": "6px", "borderRadius": "3px",
                     "background": _BG_HEAD, "overflow": "hidden",
                 }),
-                html.Div(style={
+                html.Div(style={                                 # target line overlay
                     "position": "absolute", "left": f"{tgt_pct:.1f}%",
                     "top": "-3px", "height": "12px", "width": "2px",
-                    "background": _BD, "borderRadius": "1px",
-                    "transform": "translateX(-50%)",
+                    "background": _FG, "opacity": "0.35",
+                    "borderRadius": "1px", "transform": "translateX(-50%)",
                 }),
             ], style={"position": "relative", "flex": "1"}),
             html.Span(dtxt, style={
                 "fontSize": "10px", "fontWeight": "700", "color": dcol,
                 "whiteSpace": "nowrap", "marginLeft": "10px",
-                "minWidth": "58px", "textAlign": "right",
+                "minWidth": "64px", "textAlign": "right",
             }),
-        ], style={"display": "flex", "alignItems": "center"})
+        ], style={"display": "flex", "alignItems": "center", "gap": "10px", "marginBottom": "9px"})
 
+    # ── Story row ─────────────────────────────────────────────────────────────
     def _story_row(s, current_designer):
         sz       = s.get("size") or ""
         abbr     = _SIZE_ABBR.get(sz, "?")
         sz_color = _SIZE_COLORS.get(sz, _MT)
         r        = _rgb(sz_color)
-        t        = s["title"][:42] + ("…" if len(s["title"]) > 42 else "")
+        t        = s["title"][:45] + ("…" if len(s["title"]) > 45 else "")
         start    = f"start {_MON_ABBR[s['des_month']]}"
+
+        size_tag = html.Span(abbr, style={
+            "fontSize": "10px", "fontWeight": "800",
+            "color": sz_color,
+            "background": f"rgba({r},0.18)",
+            "border": f"1px solid rgba({r},0.35)",
+            "borderRadius": "4px", "padding": "2px 6px",
+            "flexShrink": "0", "minWidth": "22px", "textAlign": "center",
+        })
 
         reassign_btns = []
         for d in _DESIGNERS:
@@ -464,19 +478,15 @@ def _build_balance_panel(stories: list):
                 id={"type": "dp-unassign-btn", "story": str(s["id"])},
                 n_clicks=0,
                 style={
-                    "fontSize": "11px", "color": _DIM,
+                    "fontSize": "12px", "color": _DIM,
                     "background": "transparent", "border": "none",
-                    "cursor": "pointer", "padding": "2px 4px",
+                    "cursor": "pointer", "padding": "2px 5px",
                 },
             ))
 
         return html.Div([
             html.Div([
-                html.Span(abbr, style={
-                    "fontSize": "9px", "fontWeight": "700", "color": sz_color,
-                    "background": f"rgba({r},0.15)", "borderRadius": "3px",
-                    "padding": "1px 4px", "flexShrink": "0",
-                }),
+                size_tag,
                 html.A(f"#{s['id']}",
                        href=(f"https://expenseondemand.visualstudio.com/"
                              f"Solo%20Expenses/_workitems/edit/{s['id']}"),
@@ -490,11 +500,32 @@ def _build_balance_panel(stories: list):
                     "fontSize": "11.5px", "color": _MT, "flex": "1",
                     "overflow": "hidden", "textOverflow": "ellipsis", "whiteSpace": "nowrap",
                 }),
-                html.Span(start, style={"fontSize": "10px", "color": _DIM, "flexShrink": "0"}),
+                html.Span(start, style={
+                    "fontSize": "10px", "color": _DIM, "flexShrink": "0", "whiteSpace": "nowrap",
+                }),
             ], style={"display": "flex", "alignItems": "center", "gap": "6px", "marginBottom": "5px"}),
-            html.Div(reassign_btns, style={"display": "flex", "gap": "5px", "paddingLeft": "20px", "flexWrap": "wrap"}),
+            html.Div(reassign_btns, style={
+                "display": "flex", "gap": "5px", "paddingLeft": "28px", "flexWrap": "wrap",
+            }),
         ], style={"padding": "7px 0", "borderBottom": f"1px solid {_BD_CELL}"})
 
+    # ── Top summary: all bars grouped ─────────────────────────────────────────
+    bar_rows = [_bar_row(d.split()[0], _pts(des_stories[d])) for d in _DESIGNERS]
+
+    summary_block = html.Div([
+        *bar_rows,
+        html.Div(
+            f"Vertical line = target.  "
+            f"Load pts: Big {_SIZE_PTS['Big']} · Medium {_SIZE_PTS['Medium']} · "
+            f"Small {_SIZE_PTS['Small']} · Very Small {_SIZE_PTS['Very Small']}.",
+            style={"fontSize": "10px", "color": _DIM, "marginTop": "4px"},
+        ),
+    ], style={
+        "padding": "14px 16px 12px",
+        "borderBottom": f"1px solid {_BD}",
+    })
+
+    # ── Per-designer story sections ───────────────────────────────────────────
     sections = []
     for d in _DESIGNERS:
         slist = des_stories[d]
@@ -502,13 +533,13 @@ def _build_balance_panel(stories: list):
         sections.append(html.Div([
             html.Div([
                 html.Span(d.split()[0], style={"fontSize": "13px", "fontWeight": "700", "color": _FG}),
-                html.Span(f"{len(slist)} stories · {pts}p", style={"fontSize": "11px", "color": _DIM, "marginLeft": "8px"}),
-            ], style={"display": "flex", "alignItems": "baseline", "marginBottom": "7px"}),
-            _bar(pts),
+                html.Span(f"{len(slist)} stories · {pts}p",
+                          style={"fontSize": "11px", "color": _DIM, "marginLeft": "8px"}),
+            ], style={"display": "flex", "alignItems": "baseline", "marginBottom": "8px"}),
             html.Div(
                 [_story_row(s, d) for s in slist] if slist
-                else [html.Div("No stories assigned.", style={"fontSize": "11px", "color": _DIM, "marginTop": "6px"})],
-                style={"marginTop": "9px"},
+                else [html.Div("No stories assigned.",
+                               style={"fontSize": "11px", "color": _DIM})],
             ),
         ], style={"marginBottom": "20px"}))
 
@@ -516,17 +547,18 @@ def _build_balance_panel(stories: list):
     sections.append(html.Div([
         html.Div([
             html.Span("Unassigned", style={"fontSize": "13px", "fontWeight": "700", "color": _SALMON}),
-            html.Span(f"{len(unassigned_stories)} stories · {upts}p", style={"fontSize": "11px", "color": _DIM, "marginLeft": "8px"}),
-        ], style={"display": "flex", "alignItems": "baseline", "marginBottom": "7px"}),
-        _bar(upts, is_unassigned=True),
+            html.Span(f"{len(unassigned_stories)} stories · {upts}p",
+                      style={"fontSize": "11px", "color": _DIM, "marginLeft": "8px"}),
+        ], style={"display": "flex", "alignItems": "baseline", "marginBottom": "8px"}),
         html.Div(
             [_story_row(s, None) for s in unassigned_stories] if unassigned_stories
-            else [html.Div("All stories assigned.", style={"fontSize": "11px", "color": _GREEN, "marginTop": "6px"})],
-            style={"marginTop": "9px"},
+            else [html.Div("All stories assigned.",
+                           style={"fontSize": "11px", "color": _GREEN})],
         ),
     ]))
 
     return html.Div([
+        # Header
         html.Div([
             html.Div([
                 html.Div("BALANCE DESIGNERS", style={
@@ -540,21 +572,17 @@ def _build_balance_panel(stories: list):
             ], style={"flex": "1"}),
             html.Button("✕", id="dp-panel-close", n_clicks=0, style={
                 "background": "none", "border": "none", "color": _DIM,
-                "fontSize": "16px", "cursor": "pointer", "padding": "0 0 0 10px",
+                "fontSize": "18px", "cursor": "pointer", "padding": "0 0 0 10px",
+                "lineHeight": "1",
             }),
         ], style={
             "display": "flex", "alignItems": "flex-start",
             "padding": "16px 16px 12px", "borderBottom": f"1px solid {_BD}",
         }),
-        html.Div([
-            html.Div(
-                f"Vertical line = target. "
-                f"Load pts: Big {_SIZE_PTS['Big']} · Medium {_SIZE_PTS['Medium']} · "
-                f"Small {_SIZE_PTS['Small']} · Very Small {_SIZE_PTS['Very Small']}.",
-                style={"fontSize": "10px", "color": _DIM, "marginBottom": "16px"},
-            ),
-            *sections,
-        ], style={"padding": "14px 16px 24px"}),
+        # Summary bars (always at top)
+        summary_block,
+        # Story sections (scrollable)
+        html.Div([*sections], style={"padding": "16px 16px 24px"}),
     ])
 
 
@@ -851,7 +879,7 @@ def layout(**_):
             html.Div(id="dp-panel-content"),
         ], id="dp-panel-wrapper", style={
             "position": "fixed", "top": "0", "right": "0",
-            "height": "100vh", "width": "420px",
+            "height": "100vh", "width": "480px",
             "background": _BG_CARD, "borderLeft": f"1px solid {_BD}",
             "overflowY": "auto", "zIndex": "41", "display": "none",
             "boxShadow": "rgba(0,0,0,0.467) -8px 0px 24px",
@@ -872,7 +900,7 @@ def layout(**_):
 def _panel_visibility(visible):
     base = {
         "position": "fixed", "top": "0", "right": "0",
-        "height": "100vh", "width": "420px",
+        "height": "100vh", "width": "480px",
         "background": _BG_CARD, "borderLeft": f"1px solid {_BD}",
         "overflowY": "auto", "zIndex": "41",
         "boxShadow": "rgba(0,0,0,0.467) -8px 0px 24px",
