@@ -240,25 +240,24 @@ def _build_pills(releases, selected):
 
 
 # ── Table ─────────────────────────────────────────────────────────────────────
+_SALMON = "rgb(240,137,122)"
+
 def _build_table(stories, stage_data, row_data):
     fixed_cols = [
-        ("ID",      {"minWidth": "58px", "position": "sticky", "left": "0px",
-                     "zIndex": "3", "background": _BG_HEAD}),
-        ("Title",   {"minWidth": "260px", "maxWidth": "320px",
-                     "position": "sticky", "left": "58px",
-                     "zIndex": "3", "background": _BG_HEAD}),
-        ("Owner",   {"minWidth": "72px"}),
-        ("Dev",     {"minWidth": "72px"}),
-        ("QA",      {"minWidth": "90px"}),
-        ("Size",    {"minWidth": "84px", "textAlign": "center"}),
-        ("Status",  {"minWidth": "96px", "textAlign": "center"}),
-        ("Release", {"minWidth": "110px",
-                     "background": f"rgba({_rgb(_AMBER)},0.12)", "color": _AMBER}),
+        ("Name of Story", {"minWidth": "200px", "position": "sticky", "left": "0px",
+                           "zIndex": "3", "background": _BG_HEAD, "textAlign": "center"}),
+        ("User Story Owner", {"minWidth": "85px"}),
+        ("Developer",        {"minWidth": "85px"}),
+        ("QA",               {"minWidth": "85px"}),
+        ("Story Size",       {"minWidth": "78px"}),
+        ("Story Status",     {"minWidth": "95px"}),
+        ("Release Date",     {"minWidth": "115px",
+                              "background": "rgba(239,110,99,0.2)", "color": _SALMON}),
     ]
     head_cells = [html.Th(c, style={**_TH_B, **ex}) for c, ex in fixed_cols]
     for _, lbl in _STAGES:
-        head_cells.append(html.Th(lbl, style={**_TH_B, "minWidth": "110px"}))
-    head_cells.append(html.Th("Comment", style={**_TH_B, "minWidth": "140px"}))
+        head_cells.append(html.Th(lbl, style={**_TH_B, "minWidth": "96px"}))
+    head_cells.append(html.Th("Comment", style={**_TH_B, "minWidth": "150px"}))
 
     body_rows = []
     for s in stories:
@@ -268,44 +267,43 @@ def _build_table(stories, stage_data, row_data):
         comment  = s_row.get("comment", "")
         qa_val   = s_row.get("qa", "")
         sz       = s["story_size"].strip().title() if s["story_size"] else ""
+        sz_color = _SIZE_COLORS.get(sz, _MT)
         sc       = _GREEN if s["story_status"] == "Complete" else _MT
 
         body_rows.append(html.Tr([
-            html.Td(
-                html.A(str(wid),
-                       href=(f"https://expenseondemand.visualstudio.com/"
-                             f"Solo%20Expenses/_workitems/edit/{wid}"),
-                       target="_blank",
-                       style={"color": _INDIGO, "fontFamily": _MONO,
-                              "fontSize": "11.5px", "fontWeight": "700",
-                              "textDecoration": "none"}),
-                style={**_TD_B, "position": "sticky", "left": "0px",
-                       "zIndex": "2", "background": _BG_CARD},
-            ),
-            html.Td(
-                html.Span(s["title"], style={
-                    "display": "block", "maxWidth": "320px", "overflow": "hidden",
-                    "textOverflow": "ellipsis", "whiteSpace": "nowrap", "color": _FG,
-                }),
-                style={**_TD_B, "position": "sticky", "left": "58px",
-                       "zIndex": "2", "background": _BG_CARD},
-            ),
+            # Name of Story — ID inline + title, single sticky column
+            html.Td([
+                html.Span(f"#{wid} ",
+                          style={"fontFamily": _MONO, "fontSize": "10px",
+                                 "color": _INDIGO, "marginRight": "6px",
+                                 "fontWeight": "700"}),
+                s["title"],
+            ], style={**_TD_B, "position": "sticky", "left": "0px",
+                      "zIndex": "2", "background": _BG_CARD,
+                      "fontWeight": "600", "whiteSpace": "normal", "maxWidth": "200px"}),
             html.Td(s["story_owner"] or "—",
-                    style={**_TD_B, "color": _MT, "fontSize": "11px"}),
+                    style={**_TD_B, "color": _FG, "fontSize": "12px",
+                           "whiteSpace": "nowrap", "maxWidth": "85px"}),
             html.Td(
                 s["main_developer"].split()[0] if s["main_developer"] else "—",
-                style={**_TD_B, "color": _MT, "fontSize": "11px"}),
+                style={**_TD_B, "color": _FG, "fontSize": "12px",
+                       "whiteSpace": "nowrap", "maxWidth": "85px"}),
             html.Td(
                 qa_val.split()[0] if qa_val else "—",
-                style={**_TD_B, "color": _MT, "fontSize": "11px"}),
-            html.Td(_size_badge(sz), style={**_TD_B, "textAlign": "center"}),
+                style={**_TD_B, "color": _FG, "fontSize": "12px",
+                       "whiteSpace": "nowrap", "maxWidth": "85px"}),
+            html.Td(sz or "—",
+                    style={**_TD_B, "color": sz_color if sz else _MT,
+                           "fontSize": "12px", "whiteSpace": "nowrap",
+                           "maxWidth": "78px"}),
             html.Td(
                 html.Span(s["story_status"] or "—",
                           style={"fontSize": "11px", "fontWeight": "700", "color": sc}),
                 style={**_TD_B, "textAlign": "center"}),
             html.Td(s["release_date"] or "—",
-                    style={**_TD_B, "color": _AMBER, "fontFamily": _MONO,
-                           "fontSize": "11px", "fontWeight": "700"}),
+                    style={**_TD_B, "color": _FG, "fontFamily": _MONO,
+                           "fontSize": "12px", "whiteSpace": "nowrap",
+                           "maxWidth": "115px"}),
             *[_stage_cell(s_stages.get(k, {}).get("status", ""),
                           s_stages.get(k, {}).get("date",   ""))
               for k, _ in _STAGES],
