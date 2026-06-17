@@ -593,17 +593,18 @@ def run_sync(full: bool = False) -> dict:
         engine     = _get_engine()
         wit_client = _get_wit_client()
 
-        # Ensure activity + activated_date columns exist before any upsert attempt
+        # Ensure all columns exist before any upsert attempt
+        _new_cols = [
+            "ALTER TABLE work_items_main ADD COLUMN IF NOT EXISTS activity       VARCHAR(100) DEFAULT ''",
+            "ALTER TABLE work_items_main ADD COLUMN IF NOT EXISTS activated_date TIMESTAMP",
+            "ALTER TABLE work_items_main ADD COLUMN IF NOT EXISTS story_size     VARCHAR(50)  DEFAULT ''",
+            "ALTER TABLE work_items_main ADD COLUMN IF NOT EXISTS story_status   VARCHAR(50)  DEFAULT ''",
+            "ALTER TABLE work_items_main ADD COLUMN IF NOT EXISTS story_owner    VARCHAR(100) DEFAULT ''",
+        ]
         try:
             with engine.begin() as conn:
-                conn.execute(text(
-                    "ALTER TABLE work_items_main "
-                    "ADD COLUMN IF NOT EXISTS activity VARCHAR(100) DEFAULT ''"
-                ))
-                conn.execute(text(
-                    "ALTER TABLE work_items_main "
-                    "ADD COLUMN IF NOT EXISTS activated_date TIMESTAMP"
-                ))
+                for _sql in _new_cols:
+                    conn.execute(text(_sql))
         except Exception as _col_err:
             log.warning("column migration (non-fatal): %s", _col_err)
 
