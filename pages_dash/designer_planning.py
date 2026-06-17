@@ -759,7 +759,9 @@ def _build_table(stories: list, plan_months: list, today: date):
         legend,
         html.Div(
             html.Table(
-                [html.Thead(html.Tr(head_cells)), html.Tbody(body_rows)],
+                [html.Thead(html.Tr(head_cells),
+                            style={"position": "sticky", "top": "0", "zIndex": "2"}),
+                 html.Tbody(body_rows)],
                 style={"borderCollapse": "collapse", "width": "100%", "minWidth": "1400px"},
             ),
             style={
