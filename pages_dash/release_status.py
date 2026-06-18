@@ -214,6 +214,30 @@ def _tog(label, btn_id, active, color=_INDIGO):
     })
 
 
+def _story_status_badge(wid: int):
+    with engine.connect() as conn:
+        g = conn.execute(text("""
+            SELECT claude_screens, text_written, our_screens, html_screens, sn_signoff
+            FROM p_planning_gates WHERE work_item_id = :id
+        """), {"id": wid}).fetchone()
+    done  = sum([bool(g.claude_screens), bool(g.text_written), bool(g.our_screens),
+                 bool(g.html_screens), bool(g.sn_signoff)]) if g else 0
+    total = 5
+    complete = done == total
+    c = _GREEN if complete else (_AMBER if done > 0 else _DIM)
+    r = _rgb(c)
+    return html.Div([
+        html.Span("Complete" if complete else "Incomplete",
+                  style={"fontSize": "12px", "fontWeight": "700", "color": c}),
+        html.Span(f"  {done}/{total} gates",
+                  style={"fontSize": "10.5px", "color": _DIM, "marginLeft": "6px"}),
+    ], style={
+        "padding": "6px 10px", "borderRadius": "7px",
+        "background": f"rgba({r},0.1)", "border": f"1px solid rgba({r},0.25)",
+        "display": "inline-flex", "alignItems": "center",
+    })
+
+
 def _sec(label):
     return html.Div(label, style={
         "fontSize": "9.5px", "fontWeight": "700", "color": _DIM,
@@ -368,121 +392,218 @@ def _build_panel(wid: int):
     cur_own = row.story_owner    or ""
     cur_sts = row.story_status   or ""
 
+    def _lbl(t):
+        return html.Div(t, style={
+            "fontSize": "9.5px", "fontWeight": "700", "color": _DIM,
+            "textTransform": "uppercase", "letterSpacing": "0.5px",
+            "marginBottom": "5px",
+        })
+
+    _inp_style = {
+        "width": "100%", "padding": "8px 10px",
+        "background": _BG_HEAD, "border": f"1px solid {_BD}",
+        "borderRadius": "7px", "color": _FG,
+        "fontSize": "12.5px", "boxSizing": "border-box",
+    }
+
     def _stage_row(key, label):
         sd     = stages_db.get(key, {})
         cur_st = sd.get("status", "")
         cur_dt = sd.get("date",   "")
 
-        def _sbtn(val, symbol, color):
+        def _sbtn(val, color):
             active = cur_st == val
             r = _rgb(color)
-            return html.Button(symbol,
+            return html.Button("✓" if active else "",
                                id={"type": "rs-stage-btn", "stage": key, "val": val},
                                n_clicks=0, style={
-                "width": "26px", "height": "26px", "borderRadius": "50%",
-                "border": f"2px solid rgba({r},0.7)" if active else f"1px solid {_BD}",
-                "background": f"rgba({r},0.2)" if active else "transparent",
-                "color": color if active else _DIM,
-                "cursor": "pointer", "fontSize": "13px", "lineHeight": "1",
+                "width": "22px", "height": "22px", "borderRadius": "50%",
+                "cursor": "pointer", "padding": "0",
+                "background": color if active else "transparent",
+                "border": f"2px solid {color}" if active else f"2px solid rgba({r},0.4)",
                 "display": "flex", "alignItems": "center", "justifyContent": "center",
+                "color": _BG_PAGE, "fontSize": "11px", "fontWeight": "800",
+                "lineHeight": "1",
             })
 
         return html.Div([
-            html.Span(label, style={
-                "fontSize": "12px", "fontWeight": "600", "color": _MT, "flex": "1",
-            }),
+            html.Span(label, style={"flex": "1", "fontSize": "12px",
+                                    "color": _FG, "lineHeight": "1.3"}),
             html.Div([
-                _sbtn("done",        "✓", _GREEN),
-                _sbtn("wip",         "◑", _AMBER),
-                _sbtn("not_started", "✕", _RED),
+                _sbtn("done",        _GREEN),
+                _sbtn("wip",         _AMBER),
+                _sbtn("not_started", _RED),
             ], style={"display": "flex", "gap": "5px"}),
             dcc.Input(type="text", value=cur_dt, debounce=True,
                       placeholder="YYYY-MM-DD",
                       id={"type": "rs-stage-date", "stage": key},
                       style={
+                          "width": "122px", "padding": "5px 6px",
                           "background": _BG_HEAD, "border": f"1px solid {_BD}",
-                          "color": _FG, "borderRadius": "6px", "padding": "4px 8px",
+                          "color": _FG, "borderRadius": "6px",
                           "fontSize": "11px", "fontFamily": _MONO,
-                          "width": "110px",
                       }),
         ], style={
-            "display": "flex", "alignItems": "center", "gap": "10px",
-            "padding": "7px 0", "borderBottom": f"1px solid {_BD_CELL}",
+            "display": "flex", "alignItems": "center", "gap": "7px",
+            "padding": "6px 8px", "borderRadius": "7px",
+            "border": f"1px solid {_BD_CELL}",
+            "marginBottom": "4px",
         })
 
+    _divider = html.Div(style={
+        "borderTop": f"1px solid {_BD_CELL}", "margin": "13px 0 10px",
+    })
+
     return html.Div([
-        # Header
+        # ── Header ──────────────────────────────────────────────────────────
         html.Div([
             html.Div([
-                html.Div(f"EDIT RELEASE ROW · #{wid}", style={
+                html.Div("Edit release row", style={
                     "fontSize": "9.5px", "fontWeight": "700", "color": _INDIGO,
                     "textTransform": "uppercase", "letterSpacing": "0.6px",
                 }),
                 html.Div(row.title or "", style={
-                    "fontSize": "13px", "fontWeight": "600", "color": _FG,
-                    "marginTop": "5px", "lineHeight": "1.4",
+                    "fontSize": "14px", "fontWeight": "700", "color": _FG,
+                    "marginTop": "4px", "lineHeight": "1.4",
+                }),
+                html.Div(f"#{wid} · {cur_dev or '—'}", style={
+                    "fontSize": "11px", "color": _MT, "marginTop": "3px",
+                    "fontFamily": _MONO,
                 }),
             ], style={"flex": "1"}),
             html.Button("✕", id="rs-panel-close", n_clicks=0, style={
                 "background": "none", "border": "none", "color": _DIM,
-                "fontSize": "16px", "cursor": "pointer", "padding": "0 0 0 10px",
+                "fontSize": "20px", "cursor": "pointer", "padding": "0 0 0 12px",
+                "lineHeight": "1",
             }),
-        ], style={"display": "flex", "alignItems": "flex-start",
-                  "padding": "16px 16px 12px", "borderBottom": f"1px solid {_BD}"}),
+        ], style={
+            "display": "flex", "alignItems": "flex-start",
+            "padding": "18px 20px 14px", "borderBottom": f"1px solid {_BD}",
+        }),
 
+        # ── Fields ──────────────────────────────────────────────────────────
         html.Div([
-            _sec("Story Owner"),
-            html.Div([_tog(o, {"type": "rs-owner-btn", "key": o},
-                           active=(o == cur_own)) for o in _STORY_OWNERS],
-                     style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
 
-            _sec("Developer"),
-            html.Div([_tog(d.split()[0], {"type": "rs-dev-btn", "key": d},
-                           active=(d == cur_dev)) for d in DEV_NAMES],
-                     style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
-
-            _sec("QA"),
-            html.Div([_tog(q.split()[0], {"type": "rs-qa-btn", "key": q},
-                           active=(q == qa_val), color=_CYAN) for q in _QA_NAMES],
-                     style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
-
-            _sec("Story Size"),
-            html.Div([_tog(sz, {"type": "rs-size-btn", "key": sz},
-                           active=(sz == cur_sz)) for sz in _SIZES],
-                     style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
-
-            _sec("Story Status"),
+            # Story Owner + Developer — side-by-side text inputs
             html.Div([
-                _tog("Complete",     {"type": "rs-sstatus-btn", "key": "Complete"},
-                     active=(cur_sts == "Complete"), color=_GREEN),
-                _tog("Not complete", {"type": "rs-sstatus-btn", "key": "Not complete"},
-                     active=(cur_sts not in ("", "Complete")), color=_MT),
-            ], style={"display": "flex", "gap": "6px"}),
+                html.Div([
+                    _lbl("Story Owner"),
+                    dcc.Input(type="text", id="rs-owner-input", value=cur_own,
+                              debounce=True, placeholder="Full name",
+                              style=_inp_style),
+                ], style={"flex": "1", "minWidth": "0"}),
+                html.Div([
+                    _lbl("Developer"),
+                    dcc.Input(type="text", id="rs-dev-input", value=cur_dev,
+                              debounce=True, placeholder="Full name",
+                              style=_inp_style),
+                ], style={"flex": "1", "minWidth": "0"}),
+            ], style={"display": "flex", "gap": "10px", "marginBottom": "14px"}),
 
-            _sec("Stages · set status & date"),
+            # QA
             html.Div([
-                html.Span("✓ Done",        style={"fontSize": "10px", "color": _GREEN,
-                                                   "marginRight": "10px"}),
-                html.Span("◑ WIP",         style={"fontSize": "10px", "color": _AMBER,
-                                                   "marginRight": "10px"}),
-                html.Span("✕ Not started", style={"fontSize": "10px", "color": _RED}),
-            ], style={"marginBottom": "8px"}),
+                _lbl("QA"),
+                html.Div([
+                    html.Div([
+                        _tog(q, {"type": "rs-qa-btn", "key": q},
+                             active=(q == qa_val), color=_CYAN)
+                        for q in _QA_NAMES
+                    ], style={"display": "flex", "flexWrap": "wrap",
+                              "gap": "6px", "flex": "1"}),
+                    html.Button("View all QA load", n_clicks=0, style={
+                        "padding": "6px 10px", "borderRadius": "7px",
+                        "background": "transparent", "border": f"1px solid {_RED}",
+                        "color": _RED, "cursor": "pointer", "fontSize": "11px",
+                        "fontWeight": "600", "whiteSpace": "nowrap", "flexShrink": "0",
+                    }),
+                ], style={"display": "flex", "gap": "8px",
+                          "alignItems": "flex-start", "flexWrap": "wrap"}),
+            ], style={"marginBottom": "14px"}),
+
+            # Story Size
+            html.Div([
+                _lbl("Story Size"),
+                html.Div([
+                    _tog(sz, {"type": "rs-size-btn", "key": sz},
+                         active=(sz == cur_sz),
+                         color=_SIZE_COLORS.get(sz, _INDIGO))
+                    for sz in _SIZES
+                ], style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
+            ], style={"marginBottom": "14px"}),
+
+            # Story Status + Release Date — side by side
+            html.Div([
+                html.Div([
+                    _lbl("Story Status"),
+                    _story_status_badge(wid),
+                ], style={"flex": "1", "minWidth": "0"}),
+                html.Div([
+                    _lbl("Release date"),
+                    dcc.Input(type="text", id="rs-release-date-input",
+                              value=row.release_date or "", debounce=True,
+                              placeholder="YYYY-MM-DD",
+                              style=_inp_style),
+                ], style={"flex": "1", "minWidth": "0"}),
+            ], style={"display": "flex", "gap": "10px", "marginBottom": "4px"}),
+
+            _divider,
+
+            # Stages header + legend
+            html.Div([
+                html.Span("Stages · set status & date", style={
+                    "fontSize": "10px", "fontWeight": "700", "color": _DIM,
+                    "textTransform": "uppercase", "letterSpacing": "0.5px",
+                }),
+                html.Div([
+                    html.Span([
+                        html.Span(style={
+                            "width": "10px", "height": "10px", "borderRadius": "50%",
+                            "border": f"2px solid {c}", "display": "inline-block",
+                            "marginRight": "4px",
+                        }),
+                        html.Span(lbl, style={"fontSize": "10px", "color": _DIM}),
+                    ], style={"display": "inline-flex", "alignItems": "center",
+                              "marginLeft": "10px"})
+                    for lbl, c in [("Done", _GREEN), ("WIP", _AMBER),
+                                   ("Not started", _RED)]
+                ], style={"display": "flex"}),
+            ], style={
+                "display": "flex", "justifyContent": "space-between",
+                "alignItems": "center", "marginBottom": "9px",
+            }),
+
+            # Stage rows
             html.Div([_stage_row(k, lbl) for k, lbl in _STAGES]),
 
-            _sec("Comment"),
-            dcc.Textarea(id="rs-comment-input", value=comment,
-                         placeholder="Add a note…", style={
-                "width": "100%", "minHeight": "68px",
-                "background": _BG_HEAD, "border": f"1px solid {_BD}",
-                "color": _FG, "borderRadius": "8px", "padding": "10px",
-                "fontSize": "12px", "resize": "vertical", "boxSizing": "border-box",
+            _divider,
+
+            # Comment
+            html.Div([
+                _lbl("Comment"),
+                dcc.Textarea(id="rs-comment-input", value=comment,
+                             placeholder="Add a note…", style={
+                    "width": "100%", "minHeight": "68px",
+                    "background": _BG_HEAD, "border": f"1px solid {_BD}",
+                    "color": _FG, "borderRadius": "8px", "padding": "10px",
+                    "fontSize": "12px", "resize": "vertical",
+                    "boxSizing": "border-box",
+                }),
+                html.Button("Save comment", id="rs-comment-save", n_clicks=0, style={
+                    "marginTop": "7px", "padding": "5px 13px", "borderRadius": "7px",
+                    "background": "transparent", "border": f"1px solid {_BD}",
+                    "color": _DIM, "cursor": "pointer", "fontSize": "11px",
+                }),
+            ], style={"marginBottom": "14px"}),
+
+            # Delete story row
+            html.Button("Delete story row", id="rs-delete-btn", n_clicks=0, style={
+                "width": "100%", "padding": "9px", "borderRadius": "8px",
+                "background": "transparent", "border": f"1px solid {_RED}",
+                "color": _RED, "cursor": "pointer", "fontSize": "12px",
+                "fontWeight": "600",
             }),
-            html.Button("Save comment", id="rs-comment-save", n_clicks=0, style={
-                "marginTop": "8px", "padding": "6px 14px", "borderRadius": "7px",
-                "background": "transparent", "border": f"1px solid {_BD}",
-                "color": _MT, "cursor": "pointer", "fontSize": "12px",
-            }),
-        ], style={"padding": "0 16px 32px"}),
+
+        ], style={"padding": "18px 20px 28px"}),
     ])
 
 
@@ -670,39 +791,33 @@ def _render_panel(story_id):
 
 @callback(
     Output("rs-panel-store", "data", allow_duplicate=True),
-    Input({"type": "rs-owner-btn", "key": ALL}, "n_clicks"),
+    Input("rs-owner-input", "value"),
     State("rs-panel-store", "data"),
     prevent_initial_call=True,
 )
-def _save_owner(clicks, story_id):
-    if not story_id or not any(clicks):
+def _save_owner(val, story_id):
+    if not story_id or not val:
         raise PreventUpdate
-    tid = ctx.triggered_id
-    if not tid:
-        raise PreventUpdate
-    write_fields(story_id, {"story_owner": tid["key"]})
+    write_fields(story_id, {"story_owner": val})
     with engine.begin() as conn:
         conn.execute(text("UPDATE work_items_main SET story_owner=:o WHERE work_item_id=:id"),
-                     {"o": tid["key"], "id": story_id})
+                     {"o": val, "id": story_id})
     return story_id
 
 
 @callback(
     Output("rs-panel-store", "data", allow_duplicate=True),
-    Input({"type": "rs-dev-btn", "key": ALL}, "n_clicks"),
+    Input("rs-dev-input", "value"),
     State("rs-panel-store", "data"),
     prevent_initial_call=True,
 )
-def _save_developer(clicks, story_id):
-    if not story_id or not any(clicks):
+def _save_developer(val, story_id):
+    if not story_id or not val:
         raise PreventUpdate
-    tid = ctx.triggered_id
-    if not tid:
-        raise PreventUpdate
-    write_fields(story_id, {"main_developer": tid["key"]})
+    write_fields(story_id, {"main_developer": val})
     with engine.begin() as conn:
         conn.execute(text("UPDATE work_items_main SET main_developer=:d WHERE work_item_id=:id"),
-                     {"d": tid["key"], "id": story_id})
+                     {"d": val, "id": story_id})
     return story_id
 
 
@@ -746,24 +861,6 @@ def _save_size(clicks, story_id):
                      {"s": tid["key"], "id": story_id})
     return story_id
 
-
-@callback(
-    Output("rs-panel-store", "data", allow_duplicate=True),
-    Input({"type": "rs-sstatus-btn", "key": ALL}, "n_clicks"),
-    State("rs-panel-store", "data"),
-    prevent_initial_call=True,
-)
-def _save_story_status(clicks, story_id):
-    if not story_id or not any(clicks):
-        raise PreventUpdate
-    tid = ctx.triggered_id
-    if not tid:
-        raise PreventUpdate
-    write_fields(story_id, {"story_status": tid["key"]})
-    with engine.begin() as conn:
-        conn.execute(text("UPDATE work_items_main SET story_status=:s WHERE work_item_id=:id"),
-                     {"s": tid["key"], "id": story_id})
-    return story_id
 
 
 @callback(
@@ -835,3 +932,36 @@ def _save_comment(n, comment, story_id):
             SET comment = EXCLUDED.comment, updated_at = NOW()
         """), {"id": story_id, "c": comment or ""})
     return story_id
+
+
+@callback(
+    Output("rs-panel-store", "data", allow_duplicate=True),
+    Input("rs-release-date-input", "value"),
+    State("rs-panel-store",        "data"),
+    prevent_initial_call=True,
+)
+def _save_release_date(val, story_id):
+    if not story_id or not val:
+        raise PreventUpdate
+    write_fields(story_id, {"release_date": val})
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE work_items_main SET release_date=:d WHERE work_item_id=:id"),
+                     {"d": val, "id": story_id})
+    return story_id
+
+
+@callback(
+    Output("rs-panel-visible", "data", allow_duplicate=True),
+    Input("rs-delete-btn",    "n_clicks"),
+    State("rs-panel-store",   "data"),
+    prevent_initial_call=True,
+)
+def _delete_row(n, story_id):
+    if not n or not story_id:
+        raise PreventUpdate
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM p_release_stages WHERE work_item_id = :id"),
+                     {"id": story_id})
+        conn.execute(text("DELETE FROM p_release_rows   WHERE work_item_id = :id"),
+                     {"id": story_id})
+    return False

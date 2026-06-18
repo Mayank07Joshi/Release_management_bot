@@ -86,6 +86,32 @@ def _rgb(color_str: str) -> str:
     return f"{m.group(1)},{m.group(2)},{m.group(3)}" if m else "139,146,164"
 
 
+def _story_status_badge(wid: int):
+    from data.loader import engine as _eng
+    from sqlalchemy import text as _text
+    with _eng.connect() as conn:
+        g = conn.execute(_text("""
+            SELECT claude_screens, text_written, our_screens, html_screens, sn_signoff
+            FROM p_planning_gates WHERE work_item_id = :id
+        """), {"id": wid}).fetchone()
+    done  = sum([bool(g.claude_screens), bool(g.text_written), bool(g.our_screens),
+                 bool(g.html_screens), bool(g.sn_signoff)]) if g else 0
+    total = 5
+    complete = done == total
+    c = _GREEN if complete else (_AMBER if done > 0 else _DIM)
+    r = _rgb(c)
+    return html.Div([
+        html.Span("Complete" if complete else "Incomplete",
+                  style={"fontSize": "12px", "fontWeight": "700", "color": c}),
+        html.Span(f"  {done}/{total} gates",
+                  style={"fontSize": "10.5px", "color": _DIM, "marginLeft": "6px"}),
+    ], style={
+        "padding": "6px 10px", "borderRadius": "7px",
+        "background": f"rgba({r},0.1)", "border": f"1px solid rgba({r},0.25)",
+        "display": "inline-flex", "alignItems": "center",
+    })
+
+
 def _cell_status(story: dict, today: date) -> str:
     if story["design_done"]:
         return "complete"
@@ -1048,13 +1074,8 @@ def _render_panel(story_id):
             ], style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
 
             _sec("Story Status"),
-            html.Div([
-                _tog("Complete",   {"type": "dp-sstatus-btn", "key": "Complete"},
-                     active=(cur_story_status == "Complete"),   color=_GREEN),
-                _tog("Incomplete", {"type": "dp-sstatus-btn", "key": "Incomplete"},
-                     active=(cur_story_status == "Incomplete"), color=_MT),
-            ], style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
-            html.Div("Complete = design added to the story (Story Planning done).",
+            _story_status_badge(row.work_item_id),
+            html.Div("Driven by Story Readiness gates. Set gates there to update.",
                      style={"fontSize": "11px", "color": _DIM, "marginTop": "5px"}),
 
             _sec("Dev Month"),
@@ -1144,25 +1165,6 @@ def _save_designer(clicks, story_id):
         ), {"d": tid["key"], "id": story_id})
     return story_id
 
-
-@callback(
-    Output("dp-panel-store", "data", allow_duplicate=True),
-    Input({"type": "dp-sstatus-btn", "key": ALL}, "n_clicks"),
-    State("dp-panel-store", "data"),
-    prevent_initial_call=True,
-)
-def _save_story_status(clicks, story_id):
-    if not story_id or not any(clicks):
-        raise PreventUpdate
-    tid = ctx.triggered_id
-    if not tid:
-        raise PreventUpdate
-    write_fields(story_id, {"story_status": tid["key"]})
-    with engine.begin() as conn:
-        conn.execute(text(
-            "UPDATE work_items_main SET story_status=:s WHERE work_item_id=:id"
-        ), {"s": tid["key"], "id": story_id})
-    return story_id
 
 
 @callback(
