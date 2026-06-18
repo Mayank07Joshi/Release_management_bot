@@ -72,12 +72,12 @@ def layout(**_):
         ], id="unest-side-panel", style=_PANEL_CLOSED),
 
         # ── Page header ───────────────────────────────────────────────────────
-        html.Div("BUGS & ISSUES · UNESTIMATED BUGS", style={
+        html.Div("BUGS & ISSUES · ESTIMATION STATUS", style={
             "fontSize": "10px", "fontWeight": "700", "color": _MT,
             "letterSpacing": "0.12em", "marginBottom": "6px",
         }),
         html.Div([
-            html.Div("Unestimated Bugs", style={
+            html.Div("Estimation Status", style={
                 "fontSize": "26px", "fontWeight": "700", "color": _TX,
                 "display": "inline", "marginRight": "12px",
             }),
