@@ -95,7 +95,7 @@ def layout(**_):
         ),
 
         # ── Main content ──────────────────────────────────────────────────────
-        _build_unest_tab(unest_items),
+        _build_unest_tab(unest_items, hide_cards={"issues"}),
 
     ], style={
         "padding": "24px 32px",

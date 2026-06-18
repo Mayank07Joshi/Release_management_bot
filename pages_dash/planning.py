@@ -1407,7 +1407,7 @@ _FLT_PANEL_OPEN   = {**_FLT_PANEL_BASE, "transform": "translateX(0%)"}
 _FLT_PANEL_CLOSED = {**_FLT_PANEL_BASE, "transform": "translateX(-110%)"}
 
 
-def _build_unest_tab(items: list[dict]) -> html.Div:
+def _build_unest_tab(items: list[dict], hide_cards: set | None = None) -> html.Div:
     """Build full content for the Unestimated Items tab from pre-loaded items."""
     unest_only = [s for s in items if s["est_status"] in ("unestimated", "partial")]
     if not items:
@@ -1440,11 +1440,12 @@ def _build_unest_tab(items: list[dict]) -> html.Div:
            n_clicks=0,
            style=_kcard_style(color, False))
 
+    _hc = hide_cards or set()
     kpi_strip = html.Div([
         _kcard(total,        "Total Unestimated", f"{partial} partial (some tasks missing)", "all"),
         _kcard(p1_count,     "P1 Items",          "Highest urgency",                          "p1"),
-        _kcard(issues,       "Issues",            f"{iss_pct}% of total",                     "issues"),
-        _kcard(enhancements, "Enhancements",      f"{enh_pct}% of total",                     "enhanc"),
+        *([_kcard(issues,       "Issues",       f"{iss_pct}% of total", "issues")]  if "issues" not in _hc else []),
+        *([_kcard(enhancements, "Enhancements", f"{enh_pct}% of total", "enhanc")]  if "enhanc" not in _hc else []),
         _kcard(devs_p1,      "Devs with P1 Gap",  f"of {total_devs} developers",              "devsp1"),
     ], style={"display": "flex", "gap": "12px", "marginBottom": "16px", "flexWrap": "wrap"})
 
