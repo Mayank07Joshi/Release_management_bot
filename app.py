@@ -86,6 +86,7 @@ _NAV_TREE = [
         ("Issue Planning",   "/issue-planning",   "≡", True),
     ]),
     ("CAPACITY", "#60a5fa", [
+        ("Team Pulse",         "/team-pulse",   "⊡", True),
         ("Developer Capacity", "/dev-capacity", "≡", True),
         ("Admin Hours",        "/admin-hours",  "⊙", False),
     ]),
