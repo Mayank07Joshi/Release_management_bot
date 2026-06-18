@@ -273,9 +273,9 @@ def _build_grid(items: list[dict], team_filter: str, horizon_d: int) -> html.Div
                                   "iss_e": 0, "iss_u": 0,
                                   "enh_e": 0, "enh_u": 0}
         cell = dev_data[dev][mk]
-        cell["orig_h"]    += x["orig_h"]
+        cell["orig_h"]    += x["est_h"]
         if x["task_h"] > 0 and x["orig_h"] == 0:
-            cell["has_tasks"] = True
+            cell["has_tasks"] = True  # task-only estimate → show dash indicator
         if x["type"] == "issue":
             if x["estimated"]: cell["iss_e"] += 1
             else:              cell["iss_u"] += 1
