@@ -4,7 +4,7 @@ import re
 from datetime import date, timedelta
 
 import dash
-from dash import html, dcc, callback, Input, Output, ALL, ctx
+from dash import html, dcc, callback, Input, Output, State, ALL, ctx
 from dash.exceptions import PreventUpdate
 from sqlalchemy import text
 
@@ -154,6 +154,289 @@ def _load_items() -> list[dict]:
     return items
 
 
+# ── Panel data loader ────────────────────────────────────────────────────────
+def _panel_load(mk: str, team_filter: str) -> list[dict]:
+    """All items for a given month key, with team filter applied."""
+    year, month = int(mk[:4]), int(mk[5:7])
+    iter_pat = f"%{year} {month:02d}-%"
+    with engine.connect() as conn:
+        rows = conn.execute(text("""
+            SELECT
+                w.work_item_id,
+                COALESCE(w.title, '') AS title,
+                w.work_item_type,
+                COALESCE(w.main_developer, '') AS main_developer,
+                COALESCE(w.original_estimate, 0) AS orig_est,
+                COALESCE(a.task_est_sum, 0)       AS task_est,
+                COALESCE(a.est_status, 'unestimated') AS est_status,
+                COALESCE(w.type, 'Internal')      AS cust_type,
+                COALESCE(w.priority, '')           AS priority
+            FROM work_items_main w
+            LEFT JOIN agg_story_estimation a ON a.work_item_id = w.work_item_id
+            WHERE w.state NOT IN (
+                'Closed','Resolved','Not Required','Not an issue',
+                'No Customer Response','Not Specified','Userstory Update'
+            )
+            AND w.main_developer IS NOT NULL
+            AND w.main_developer NOT IN ('', 'Unassigned', 'Not Specified')
+            AND w.work_item_type IN ('Enhancement','User Story','Issue','Bug')
+            AND w.iteration_path LIKE :pat
+        """), {"pat": iter_pat}).fetchall()
+    result = []
+    for r in rows:
+        is_issue = r.work_item_type in ("Issue", "Bug")
+        orig_h   = float(r.orig_est or 0)
+        task_h   = float(r.task_est or 0)
+        est_h    = task_h if task_h > 0 else orig_h
+        team     = _TEAM_MAP.get(r.main_developer, "Other")
+        if team_filter != "All" and team != team_filter:
+            continue
+        result.append({
+            "id":        int(r.work_item_id),
+            "title":     str(r.title),
+            "type":      "issue" if is_issue else "enh",
+            "dev":       str(r.main_developer),
+            "team":      team,
+            "pri":       _classify_pri(r.priority),
+            "size":      _classify_size(est_h) if not is_issue else None,
+            "est_h":     est_h,
+            "estimated": r.est_status in ("estimated", "estimated_via_tasks"),
+            "cust_type": str(r.cust_type or "Internal"),
+        })
+    return result
+
+
+# ── Panel content builder ─────────────────────────────────────────────────────
+def _build_panel_content(panel_ctx: dict, team_filter: str) -> html.Div:
+    kind = panel_ctx["kind"]
+    key  = panel_ctx["key"]
+    mk   = panel_ctx["mk"]
+
+    all_items = _panel_load(mk, team_filter)
+
+    if kind == "issue_pri":
+        items      = [x for x in all_items if x["type"] == "issue" and x["pri"] == key]
+        title_txt  = f"{key} issues"
+        type_label = "Issues"
+    elif kind == "enh_size":
+        items      = [x for x in all_items if x["type"] == "enh" and x["size"] == key]
+        title_txt  = f"{key} enhancements"
+        type_label = "Enhancements"
+    elif kind == "dev_hours":
+        items      = [x for x in all_items if x["dev"] == key]
+        title_txt  = key
+        type_label = "All work"
+    elif kind == "dev_issues":
+        items      = [x for x in all_items if x["dev"] == key and x["type"] == "issue"]
+        title_txt  = key
+        type_label = "Issues"
+    elif kind == "dev_enhancements":
+        items      = [x for x in all_items if x["dev"] == key and x["type"] == "enh"]
+        title_txt  = key
+        type_label = "Enhancements"
+    else:
+        return html.Div("Unknown context", style={"color": _DIM})
+
+    n_total = len(items)
+    n_est   = sum(1 for x in items if x["estimated"])
+    n_unest = n_total - n_est
+    total_h = sum(x["est_h"] for x in items)
+    y, m    = int(mk[:4]), int(mk[5:7])
+    ml      = _month_label(y, m)
+    tl      = team_filter if team_filter != "All" else "All teams"
+
+    # Title row — dev kinds get a team badge
+    title_children: list = [html.Span(title_txt, style={
+        "fontSize": "17px", "fontWeight": "700", "color": _FG,
+    })]
+    if kind in ("dev_hours", "dev_issues", "dev_enhancements"):
+        team = _TEAM_MAP.get(key, "Other")
+        tc   = _TEAM_COLORS.get(team, _DIM)
+        r    = _rgb(tc)
+        title_children.append(html.Span(team, style={
+            "fontSize": "10px", "fontWeight": "700", "color": tc,
+            "background": f"rgba({r},0.13)", "border": f"1px solid rgba({r},0.35)",
+            "borderRadius": "5px", "padding": "2px 7px", "marginLeft": "8px",
+        }))
+        subtitle = (f"{type_label} · {ml} · {n_total} item{'s' if n_total!=1 else ''} "
+                    f"· {n_est} of {n_total} estimated")
+    else:
+        subtitle = (f"{ml} · {tl} · {n_total} item{'s' if n_total!=1 else ''} "
+                    f"· {n_est} of {n_total} estimated")
+
+    # ── Item row ──────────────────────────────────────────────────────────────
+    def _item_row(x: dict, is_est: bool) -> html.Div:
+        h_str   = f"{int(x['est_h'])}h" if x["est_h"] > 0 else "—"
+        h_color = _FG if is_est else _AMBER
+        return html.Div([
+            html.Span(f"#{x['id']}", style={
+                "fontFamily": _MONO, "fontSize": "11px", "color": _DIM,
+                "flexShrink": "0", "width": "54px",
+            }),
+            html.Div([
+                html.Div(x["title"], style={
+                    "overflow": "hidden", "textOverflow": "ellipsis",
+                    "whiteSpace": "nowrap", "color": _FG, "fontSize": "12px",
+                }),
+                html.Div(x["dev"], style={
+                    "fontSize": "10px", "color": _DIM, "marginTop": "1px",
+                }),
+            ], style={"overflow": "hidden", "flex": "1"}),
+            html.Span(h_str, style={
+                "fontFamily": _MONO, "fontWeight": "600", "color": h_color,
+                "minWidth": "42px", "textAlign": "right", "flexShrink": "0",
+            }),
+        ], style={
+            "display": "grid", "gridTemplateColumns": "54px 1fr 55px",
+            "padding": "7px 10px", "fontSize": "12px", "borderRadius": "6px",
+            "alignItems": "center",
+            "background": f"rgba({_rgb(_AMBER)},0.08)" if not is_est else "transparent",
+            "borderBottom": f"1px solid rgba({_rgb(_BD_CELL)},0.5)",
+        })
+
+    # ── Section content ───────────────────────────────────────────────────────
+    def _section_header(label: str, color: str, count: int, total: int) -> html.Div:
+        r = _rgb(color)
+        return html.Div([
+            html.Div(style={"width": "6px", "height": "6px", "borderRadius": "50%",
+                            "background": color, "flexShrink": "0"}),
+            html.Span(label, style={"fontSize": "13px", "fontWeight": "600", "color": color}),
+            html.Span(f"{count} / {total}", style={
+                "fontSize": "10px", "padding": "2px 8px", "borderRadius": "10px",
+                "fontWeight": "600", "fontFamily": _MONO,
+                "background": f"rgba({r},0.12)", "color": color,
+                "border": f"1px solid rgba({r},0.2)", "whiteSpace": "nowrap",
+            }),
+        ], style={"display": "flex", "alignItems": "center", "gap": "8px",
+                  "marginBottom": "10px"})
+
+    def _total_line(label: str, h: float) -> html.Div:
+        return html.Div([
+            html.Span(label, style={"fontWeight": "600"}),
+            html.Span(f"{int(h)}h", style={"fontFamily": _MONO, "fontWeight": "600"}),
+        ], style={
+            "display": "flex", "justifyContent": "space-between",
+            "padding": "8px 10px", "fontSize": "13px",
+            "borderTop": f"1px solid rgba({_rgb(_BD_CELL)},0.5)",
+            "marginTop": "6px",
+        })
+
+    if kind == "dev_hours":
+        # Group by issues / enhancements
+        iss_items = sorted([x for x in items if x["type"] == "issue"],
+                           key=lambda x: x["est_h"], reverse=True)
+        enh_items = sorted([x for x in items if x["type"] == "enh"],
+                           key=lambda x: x["est_h"], reverse=True)
+        iss_h = sum(x["est_h"] for x in iss_items)
+        enh_h = sum(x["est_h"] for x in enh_items)
+        iss_est = sum(1 for x in iss_items if x["estimated"])
+        enh_est = sum(1 for x in enh_items if x["estimated"])
+
+        sections: list = []
+        if iss_items:
+            sections += [
+                _section_header("Issues", _RED, iss_est, len(iss_items)),
+                *[_item_row(x, x["estimated"]) for x in iss_items],
+                _total_line("Hours on issues", iss_h),
+                html.Div(style={"marginBottom": "16px"}),
+            ]
+        if enh_items:
+            sections += [
+                _section_header("Enhancements", _GREEN, enh_est, len(enh_items)),
+                *[_item_row(x, x["estimated"]) for x in enh_items],
+                _total_line("Hours on enhancements", enh_h),
+                html.Div(style={"marginBottom": "8px"}),
+            ]
+        sections.append(_total_line("Total hours — all work", total_h))
+    else:
+        est_items   = sorted([x for x in items if x["estimated"]],
+                             key=lambda x: x["est_h"], reverse=True)
+        unest_items = [x for x in items if not x["estimated"]]
+        sections = []
+        if est_items:
+            sections += [
+                _section_header("Estimated", _GREEN, n_est, n_total),
+                *[_item_row(x, True) for x in est_items],
+                _total_line("Total hours", total_h),
+            ]
+        if unest_items:
+            sections += [
+                html.Div(style={"marginBottom": "16px"}),
+                _section_header("Unestimated", _AMBER, n_unest, n_total),
+                *[_item_row(x, False) for x in unest_items],
+            ]
+
+    # ── Customer / Internal pills ─────────────────────────────────────────────
+    cust_counts: dict[str, int] = {}
+    for x in items:
+        cust_counts[x["cust_type"]] = cust_counts.get(x["cust_type"], 0) + 1
+    _CUST_CLR = {
+        "Customer": "rgb(6,182,212)",
+        "Internal": "rgb(139,92,246)",
+    }
+    pills = [
+        html.Span(f"{ct}: {cnt}", style={
+            "fontSize": "10px", "padding": "3px 10px", "borderRadius": "12px",
+            "fontWeight": "600",
+            "background": f"rgba({_rgb(_CUST_CLR.get(ct,_DIM))},0.08)",
+            "color": _CUST_CLR.get(ct, _DIM),
+            "border": f"1px solid rgba({_rgb(_CUST_CLR.get(ct,_DIM))},0.2)",
+        })
+        for ct, cnt in sorted(cust_counts.items())
+    ]
+
+    return html.Div([
+        # Header
+        html.Div([
+            html.Div([
+                html.Div(title_children,
+                         style={"display": "flex", "alignItems": "center", "gap": "8px"}),
+                html.Div(subtitle, style={"fontSize": "13px", "color": _MT, "marginTop": "2px"}),
+            ]),
+            html.Button("✕", id="tp-panel-close", n_clicks=0, style={
+                "background": "none", "border": "none", "color": _DIM,
+                "cursor": "pointer", "fontSize": "20px", "padding": "4px 8px",
+                "borderRadius": "6px", "lineHeight": "1",
+            }),
+        ], style={"display": "flex", "justifyContent": "space-between",
+                  "alignItems": "flex-start", "marginBottom": "20px"}),
+
+        # KPI cards
+        html.Div([
+            html.Div([
+                html.Div(f"{int(total_h)}h", style={
+                    "fontFamily": _MONO, "fontSize": "28px", "fontWeight": "700",
+                    "color": _FG,
+                }),
+                html.Div("Total hours", style={"fontSize": "11px", "color": _MT, "marginTop": "2px"}),
+            ], style={
+                "background": _BG_HEAD, "borderRadius": "10px",
+                "padding": "14px 16px",
+                "border": f"1px solid rgba({_rgb(_BD)},0.25)",
+            }),
+            html.Div([
+                html.Div(f"{n_unest} / {n_total}", style={
+                    "fontFamily": _MONO, "fontSize": "28px", "fontWeight": "700",
+                    "color": _AMBER,
+                }),
+                html.Div("Unestimated", style={"fontSize": "11px", "color": _MT, "marginTop": "2px"}),
+            ], style={
+                "background": f"rgba({_rgb(_AMBER)},0.08)", "borderRadius": "10px",
+                "padding": "14px 16px",
+                "border": f"1px solid rgba({_rgb(_AMBER)},0.19)",
+            }),
+        ], style={"display": "grid", "gridTemplateColumns": "1fr 1fr",
+                  "gap": "10px", "marginBottom": "20px"}),
+
+        # Items
+        html.Div(sections),
+
+        # Customer / Internal pills
+        html.Div(pills, style={"display": "flex", "flexWrap": "wrap",
+                               "gap": "6px", "marginTop": "20px"}),
+    ])
+
+
 # ── Table cells ───────────────────────────────────────────────────────────────
 _TH_S = {
     "padding": "8px 10px", "fontSize": "10px", "fontWeight": "700",
@@ -167,39 +450,51 @@ _TD_S = {
     "textAlign": "center",
 }
 
-def _num_cell(n: int, hi_thresh=25, red_thresh=32, style=None) -> html.Td:
+def _num_cell(n: int, hi_thresh=25, red_thresh=32, style=None, cid=None) -> html.Td:
     if n == 0:
         return html.Td("–", style={**_TD_S, "color": _DIM, **(style or {})})
     color = _RED if n >= red_thresh else (_AMBER if n >= hi_thresh else _FG)
-    return html.Td(str(n), style={**_TD_S, "color": color,
-                                   "fontWeight": "700" if color != _FG else "500",
-                                   **(style or {})})
+    fw    = "700" if color != _FG else "500"
+    if cid:
+        return html.Td(
+            html.Div(str(n), id=cid, n_clicks=0,
+                     style={"cursor": "pointer", "color": color, "fontWeight": fw}),
+            style={**_TD_S, **(style or {})},
+        )
+    return html.Td(str(n), style={**_TD_S, "color": color, "fontWeight": fw, **(style or {})})
 
-def _hours_cell(h: float, has_tasks: bool) -> html.Td:
+def _hours_cell(h: float, has_tasks: bool, cid=None) -> html.Td:
     if h == 0 and not has_tasks:
         return html.Td("–", style={**_TD_S, "color": _DIM})
     color = _RED if h > 120 else (_AMBER if h > 60 else _FG)
-    children: list = [html.Div(f"{int(h)}h", style={
+    inner: list = [html.Div(f"{int(h)}h", style={
         "color": color, "fontWeight": "700", "fontFamily": _MONO, "fontSize": "11px",
     })]
     if has_tasks and h == 0:
-        children.append(html.Div("– – – –", style={
+        inner.append(html.Div("– – – –", style={
             "fontSize": "8.5px", "color": _DIM, "letterSpacing": "1.5px", "marginTop": "1px",
         }))
-    return html.Td(children, style={**_TD_S, "padding": "4px 8px"})
+    if cid:
+        return html.Td(html.Div(inner, id=cid, n_clicks=0, style={"cursor": "pointer"}),
+                       style={**_TD_S, "padding": "4px 8px"})
+    return html.Td(inner, style={**_TD_S, "padding": "4px 8px"})
 
-def _eu_cell(est: int, unest: int) -> html.Td:
+def _eu_cell(est: int, unest: int, cid=None) -> html.Td:
     total = est + unest
     if total == 0:
         return html.Td("–", style={**_TD_S, "color": _DIM})
-    return html.Td([
+    inner = [
         html.Div(str(total), style={"fontWeight": "700", "color": _FG, "fontSize": "12px"}),
         html.Div([
             html.Span(f"{est}e",   style={"color": _GREEN}),
             html.Span(" · ",       style={"color": _DIM}),
             html.Span(f"{unest}u", style={"color": _AMBER if unest else _DIM}),
         ], style={"fontSize": "9px", "marginTop": "1px", "fontFamily": _MONO}),
-    ], style={**_TD_S, "padding": "4px 8px"})
+    ]
+    if cid:
+        return html.Td(html.Div(inner, id=cid, n_clicks=0, style={"cursor": "pointer"}),
+                       style={**_TD_S, "padding": "4px 8px"})
+    return html.Td(inner, style={**_TD_S, "padding": "4px 8px"})
 
 def _label_cell(txt: str, style: dict | None = None) -> html.Td:
     return html.Td(txt, style={
@@ -314,7 +609,10 @@ def _build_grid(items: list[dict], team_filter: str, horizon_d: int) -> html.Div
     for pri in _PRI_LABELS:
         cells = [_label_cell(pri)]
         for mk in mks:
-            cells.append(_num_cell(iss_by_pri[pri][mk]))
+            cells.append(_num_cell(
+                iss_by_pri[pri][mk],
+                cid={"type": "tp-cell", "kind": "issue_pri", "key": pri, "mk": mk},
+            ))
         tbody_rows.append(html.Tr(cells))
 
     # ── Enhancements section ──────────────────────────────────────────────────
@@ -322,7 +620,10 @@ def _build_grid(items: list[dict], team_filter: str, horizon_d: int) -> html.Div
     for sz in _ENH_SIZES:
         cells = [_label_cell(sz)]
         for mk in mks:
-            cells.append(_num_cell(enh_by_sz[sz][mk]))
+            cells.append(_num_cell(
+                enh_by_sz[sz][mk],
+                cid={"type": "tp-cell", "kind": "enh_size", "key": sz, "mk": mk},
+            ))
         tbody_rows.append(html.Tr(cells))
 
     # Total row
@@ -370,21 +671,30 @@ def _build_grid(items: list[dict], team_filter: str, horizon_d: int) -> html.Div
         h_cells = [_label_cell("Hours")]
         for mk in mks:
             c = dev_data[dev][mk]
-            h_cells.append(_hours_cell(c["orig_h"], c["has_tasks"]))
+            h_cells.append(_hours_cell(
+                c["orig_h"], c["has_tasks"],
+                cid={"type": "tp-cell", "kind": "dev_hours", "key": dev, "mk": mk},
+            ))
         tbody_rows.append(html.Tr(h_cells))
 
         # ISSUES row
         i_cells = [_label_cell("Issues")]
         for mk in mks:
             c = dev_data[dev][mk]
-            i_cells.append(_eu_cell(c["iss_e"], c["iss_u"]))
+            i_cells.append(_eu_cell(
+                c["iss_e"], c["iss_u"],
+                cid={"type": "tp-cell", "kind": "dev_issues", "key": dev, "mk": mk},
+            ))
         tbody_rows.append(html.Tr(i_cells))
 
         # ENHANCEMENTS row
         e_cells = [_label_cell("Enhancements")]
         for mk in mks:
             c = dev_data[dev][mk]
-            e_cells.append(_eu_cell(c["enh_e"], c["enh_u"]))
+            e_cells.append(_eu_cell(
+                c["enh_e"], c["enh_u"],
+                cid={"type": "tp-cell", "kind": "dev_enhancements", "key": dev, "mk": mk},
+            ))
         tbody_rows.append(html.Tr(e_cells))
 
     rows.append(html.Tbody(tbody_rows))
@@ -392,7 +702,7 @@ def _build_grid(items: list[dict], team_filter: str, horizon_d: int) -> html.Div
     # Summary stats
     n_devs  = len(devs)
     n_items = len(filtered)
-    n_hours = int(sum(x["orig_h"] for x in filtered))
+    n_hours = int(sum(x["est_h"] for x in filtered))
 
     return html.Div([
         # Stats bar
@@ -505,6 +815,25 @@ def layout(**_):
     return html.Div([
         dcc.Store(id="tp-team-store",    data="All"),
         dcc.Store(id="tp-horizon-store", data=365),
+        dcc.Store(id="tp-panel-ctx",     data=None),
+
+        # ── Drill-down panel (fixed right overlay) ────────────────────────────
+        html.Div(
+            id="tp-panel-wrap",
+            style={"display": "none"},
+            children=html.Div(
+                id="tp-panel-body",
+                style={
+                    "position": "fixed", "top": "0", "right": "0",
+                    "height": "100vh", "width": "400px",
+                    "background": "rgb(17,24,39)",
+                    "borderLeft": f"1px solid {_BD}",
+                    "overflowY": "auto", "padding": "24px 20px",
+                    "zIndex": "100",
+                    "boxShadow": "-8px 0 32px rgba(0,0,0,0.6)",
+                },
+            ),
+        ),
 
         # ── Header ────────────────────────────────────────────────────────────
         html.Div([
@@ -671,3 +1000,51 @@ def _select_horizon(clicks):
 def _render_grid(team, horizon):
     items = _load_items()
     return _build_grid(items, team or "All", horizon or 365)
+
+
+# ── Panel callbacks ───────────────────────────────────────────────────────────
+@callback(
+    Output("tp-panel-ctx", "data"),
+    Input({"type": "tp-cell", "kind": ALL, "key": ALL, "mk": ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def _open_panel(clicks):
+    if not any(clicks):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid:
+        raise PreventUpdate
+    return {"kind": tid["kind"], "key": tid["key"], "mk": tid["mk"]}
+
+
+@callback(
+    Output("tp-panel-ctx", "data", allow_duplicate=True),
+    Input("tp-panel-close", "n_clicks"),
+    prevent_initial_call=True,
+)
+def _close_panel(n):
+    if not n:
+        raise PreventUpdate
+    return None
+
+
+@callback(
+    Output("tp-panel-wrap", "style"),
+    Output("tp-panel-body", "children"),
+    Input("tp-panel-ctx", "data"),
+    State("tp-team-store", "data"),
+)
+def _render_panel(panel_ctx, team_filter):
+    _PANEL_STYLE = {
+        "position": "fixed", "top": "0", "right": "0",
+        "height": "100vh", "width": "400px",
+        "background": "rgb(17,24,39)",
+        "borderLeft": f"1px solid {_BD}",
+        "overflowY": "auto", "padding": "24px 20px",
+        "zIndex": "100",
+        "boxShadow": "-8px 0 32px rgba(0,0,0,0.6)",
+    }
+    if not panel_ctx:
+        return {"display": "none"}, []
+    content = _build_panel_content(panel_ctx, team_filter or "All")
+    return {"display": "block"}, html.Div(content, style=_PANEL_STYLE)
