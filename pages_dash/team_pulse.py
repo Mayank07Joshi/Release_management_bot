@@ -116,7 +116,8 @@ def _load_items() -> list[dict]:
                 COALESCE(w.original_estimate, 0) AS orig_est,
                 COALESCE(a.task_est_sum, 0)       AS task_est,
                 w.iteration_path,
-                COALESCE(a.est_status, 'unestimated') AS est_status
+                COALESCE(a.est_status, 'unestimated') AS est_status,
+                COALESCE(w.type, 'Internal')      AS cust_type
             FROM work_items_main w
             LEFT JOIN agg_story_estimation a ON a.work_item_id = w.work_item_id
             WHERE w.state NOT IN (
@@ -133,16 +134,18 @@ def _load_items() -> list[dict]:
         ym = _parse_iter_ym(r.iteration_path)
         if not ym:
             continue
-        is_issue = r.work_item_type in ("Issue", "Bug")
-        orig_h   = float(r.orig_est or 0)
-        task_h   = float(r.task_est or 0)
-        est_h    = task_h if task_h > 0 else orig_h
+        is_issue  = r.work_item_type in ("Issue", "Bug")
+        orig_h    = float(r.orig_est or 0)
+        task_h    = float(r.task_est or 0)
+        est_h     = task_h if task_h > 0 else orig_h
         estimated = r.est_status in ("estimated", "estimated_via_tasks")
+        team      = _TEAM_MAP.get(r.main_developer, "Other")
+        platform  = "Mobile" if team == "Mobile Dev" else ("Web" if team == "Web Dev" else None)
         items.append({
             "type":      "issue" if is_issue else "enh",
             "pri":       _classify_pri(r.priority),
             "dev":       r.main_developer,
-            "team":      _TEAM_MAP.get(r.main_developer, "Other"),
+            "team":      team,
             "orig_h":    orig_h,
             "task_h":    task_h,
             "est_h":     est_h,
@@ -150,13 +153,16 @@ def _load_items() -> list[dict]:
             "ym":        ym,
             "mk":        _month_key(*ym),
             "estimated": estimated,
+            "cust_type": str(r.cust_type or "Internal"),
+            "platform":  platform,
         })
     return items
 
 
 # ── Panel data loader ────────────────────────────────────────────────────────
-def _panel_load(mk: str, team_filter: str) -> list[dict]:
-    """All items for a given month key, with team filter applied."""
+def _panel_load(mk: str, team_filter: str,
+                source_filter: str = "All", platform_filter: str = "All") -> list[dict]:
+    """All items for a given month key, with team/source/platform filters applied."""
     year, month = int(mk[:4]), int(mk[5:7])
     iter_pat = f"%{year} {month:02d}-%"
     with engine.connect() as conn:
@@ -191,6 +197,12 @@ def _panel_load(mk: str, team_filter: str) -> list[dict]:
         team     = _TEAM_MAP.get(r.main_developer, "Other")
         if team_filter != "All" and team != team_filter:
             continue
+        if source_filter != "All" and str(r.cust_type or "Internal") != source_filter:
+            continue
+        if platform_filter != "All":
+            plat = "Mobile" if team == "Mobile Dev" else ("Web" if team == "Web Dev" else None)
+            if plat != platform_filter:
+                continue
         result.append({
             "id":        int(r.work_item_id),
             "title":     str(r.title),
@@ -207,12 +219,13 @@ def _panel_load(mk: str, team_filter: str) -> list[dict]:
 
 
 # ── Panel content builder ─────────────────────────────────────────────────────
-def _build_panel_content(panel_ctx: dict, team_filter: str) -> html.Div:
+def _build_panel_content(panel_ctx: dict, team_filter: str,
+                         source_filter: str = "All", platform_filter: str = "All") -> html.Div:
     kind = panel_ctx["kind"]
     key  = panel_ctx["key"]
     mk   = panel_ctx["mk"]
 
-    all_items = _panel_load(mk, team_filter)
+    all_items = _panel_load(mk, team_filter, source_filter, platform_filter)
 
     if kind == "issue_pri":
         items      = [x for x in all_items if x["type"] == "issue" and x["pri"] == key]
@@ -515,8 +528,59 @@ def _section_row(label: str, n_cols: int) -> html.Tr:
     )
 
 
+_PLAT_COLORS = {"Mobile": "rgb(6,182,212)", "Web": "rgb(139,92,246)"}
+
+
+def _build_platform_table(plat_by_mk: dict, months: list, mks: list, today_mk: str) -> html.Div:
+    head_cells = [html.Th("Items by Platform", style={
+        **_TH_S, "textAlign": "left", "minWidth": "160px",
+    })]
+    for y, m in months:
+        mk = _month_key(y, m)
+        lbl = _month_label(y, m)
+        is_now = mk == today_mk
+        head_cells.append(html.Th(lbl, style={
+            **_TH_S, "minWidth": "76px",
+            "color": _INDIGO if is_now else _DIM,
+            "borderBottom": f"2px solid {_INDIGO}" if is_now else f"1px solid {_BD}",
+        }))
+    tbody_rows = []
+    for plat in ("Mobile", "Web"):
+        color = _PLAT_COLORS[plat]
+        r     = _rgb(color)
+        name_cell = html.Td([
+            html.Span(style={
+                "display": "inline-block", "width": "7px", "height": "7px",
+                "borderRadius": "2px", "background": color,
+                "marginRight": "8px", "verticalAlign": "middle",
+            }),
+            plat,
+        ], style={**_TD_S, "textAlign": "left", "color": color,
+                  "fontWeight": "600", "paddingLeft": "12px"})
+        cells = [name_cell]
+        for mk in mks:
+            n = plat_by_mk[plat].get(mk, 0)
+            if n == 0:
+                cells.append(html.Td("–", style={**_TD_S, "color": _DIM}))
+            else:
+                cells.append(html.Td(str(n), style={
+                    **_TD_S, "color": color, "fontWeight": "600", "fontFamily": _MONO,
+                }))
+        tbody_rows.append(html.Tr(cells))
+    return html.Div(
+        html.Table([
+            html.Thead(html.Tr(head_cells)),
+            html.Tbody(tbody_rows),
+        ], style={"borderCollapse": "collapse", "width": "100%",
+                  "minWidth": f"{160 + len(mks) * 80}px"}),
+        style={"border": f"1px solid {_BD}", "borderRadius": "10px",
+               "overflow": "auto", "marginBottom": "16px"},
+    )
+
+
 # ── Main grid builder ─────────────────────────────────────────────────────────
-def _build_grid(items: list[dict], team_filter: str, horizon_d: int) -> html.Div:
+def _build_grid(items: list[dict], team_filter: str, horizon_d: int,
+                source_filter: str = "All", platform_filter: str = "All") -> html.Div:
     all_months  = _rolling_months(12)
     active_mks  = _horizon_months(horizon_d, all_months)
     months      = [(y, m) for y, m in all_months if _month_key(y, m) in active_mks]
@@ -533,6 +597,14 @@ def _build_grid(items: list[dict], team_filter: str, horizon_d: int) -> html.Div
     # Apply horizon filter
     filtered = [x for x in filtered if x["mk"] in active_mks]
 
+    # Apply source filter
+    if source_filter != "All":
+        filtered = [x for x in filtered if x.get("cust_type") == source_filter]
+
+    # Apply platform filter
+    if platform_filter != "All":
+        filtered = [x for x in filtered if x.get("platform") == platform_filter]
+
     # ── Aggregate: issues by priority × month ─────────────────────────────────
     iss_by_pri: dict[str, dict[str, int]] = {p: {mk: 0 for mk in mks} for p in _PRI_LABELS}
     for x in filtered:
@@ -544,6 +616,15 @@ def _build_grid(items: list[dict], team_filter: str, horizon_d: int) -> html.Div
     for x in filtered:
         if x["type"] == "enh" and x["mk"] in mks and x["size"]:
             enh_by_sz[x["size"]][x["mk"]] += 1
+
+    # ── Platform counts per month ─────────────────────────────────────────────
+    plat_by_mk: dict[str, dict[str, int]] = {
+        "Mobile": {mk: 0 for mk in mks},
+        "Web":    {mk: 0 for mk in mks},
+    }
+    for x in filtered:
+        if x["mk"] in mks and x.get("platform") in ("Mobile", "Web"):
+            plat_by_mk[x["platform"]][x["mk"]] += 1
 
     # ── Total per month ───────────────────────────────────────────────────────
     total_by_mk: dict[str, int] = {mk: 0 for mk in mks}
@@ -705,6 +786,9 @@ def _build_grid(items: list[dict], team_filter: str, horizon_d: int) -> html.Div
     n_hours = int(sum(x["est_h"] for x in filtered))
 
     return html.Div([
+        # Platform mini-table
+        _build_platform_table(plat_by_mk, months, mks, today_mk),
+
         # Stats bar
         html.Div([
             html.Span(f"{n_devs} people · {n_items} items · {n_hours:,}h",
@@ -755,6 +839,20 @@ def layout(**_):
                    for t in all_teams}
     total_devs  = len({x["dev"] for x in items})
 
+    # Source counts
+    source_counts: dict[str, int] = {}
+    for x in items:
+        ct = x.get("cust_type", "Internal")
+        source_counts[ct] = source_counts.get(ct, 0) + 1
+    total_items = len(items)
+
+    # Platform counts
+    platform_counts: dict[str, int] = {}
+    for x in items:
+        p = x.get("platform")
+        if p in ("Mobile", "Web"):
+            platform_counts[p] = platform_counts.get(p, 0) + 1
+
     def _pill(label, count, tid):
         return html.Div(
             f"{label}  {count}",
@@ -792,6 +890,25 @@ def layout(**_):
             },
         )
 
+    def _fpill(label, count, pill_type, val, active, color):
+        r = _rgb(color)
+        return html.Div([
+            html.Span(label, style={"marginRight": "5px"}),
+            html.Span(str(count), style={
+                "fontFamily": _MONO, "fontSize": "10px", "fontWeight": "700",
+                "padding": "1px 6px", "borderRadius": "8px",
+                "background": f"rgba({r},0.18)" if active else f"rgba({_rgb(_DIM)},0.22)",
+                "color": color if active else _DIM,
+            }),
+        ], id={"type": pill_type, "val": val}, n_clicks=0, style={
+            "display": "flex", "alignItems": "center", "gap": "2px",
+            "padding": "4px 10px", "borderRadius": "16px",
+            "cursor": "pointer", "fontSize": "11px", "fontWeight": "600",
+            "background": f"rgba({r},0.1)" if active else "transparent",
+            "border": f"1.5px solid rgba({r},0.45)" if active else f"1px solid {_BD}",
+            "color": color if active else _MT, "whiteSpace": "nowrap",
+        })
+
     pills = [_pill("All", total_devs, "All")]
     for team in all_teams:
         if team == "Other":
@@ -813,9 +930,11 @@ def layout(**_):
         ))
 
     return html.Div([
-        dcc.Store(id="tp-team-store",    data="All"),
-        dcc.Store(id="tp-horizon-store", data=365),
-        dcc.Store(id="tp-panel-ctx",     data=None),
+        dcc.Store(id="tp-team-store",     data="All"),
+        dcc.Store(id="tp-horizon-store",  data=365),
+        dcc.Store(id="tp-source-store",   data="All"),
+        dcc.Store(id="tp-platform-store", data="All"),
+        dcc.Store(id="tp-panel-ctx",      data=None),
 
         # ── Drill-down panel (fixed right overlay) ────────────────────────────
         html.Div(
@@ -872,26 +991,52 @@ def layout(**_):
             "background": _BG_CARD,
         }),
 
-        # ── Horizon filter bar ─────────────────────────────────────────────────
+        # ── Horizon / Source / Platform filter bar ────────────────────────────
         html.Div([
-            html.Div([
-                html.Span("Horizon", style={
-                    "fontSize": "10px", "fontWeight": "700", "color": _DIM,
-                    "textTransform": "uppercase", "letterSpacing": "0.5px",
-                    "marginRight": "8px",
-                }),
-                html.Div(id="tp-horizon-pills",
-                         children=[
-                             _hpill("30d",  30,  False),
-                             _hpill("90d",  90,  False),
-                             _hpill("180d", 180, False),
-                             _hpill("365d", 365, True),
-                         ],
-                         style={"display": "flex", "gap": "6px"}),
-            ], style={"display": "flex", "alignItems": "center"}),
+            # Horizon
+            html.Span("Horizon", style={
+                "fontSize": "10px", "fontWeight": "700", "color": _DIM,
+                "textTransform": "uppercase", "letterSpacing": "0.5px",
+                "marginRight": "6px", "whiteSpace": "nowrap",
+            }),
+            html.Div(id="tp-horizon-pills",
+                     children=[
+                         _hpill("30d",  30,  False),
+                         _hpill("90d",  90,  False),
+                         _hpill("180d", 180, False),
+                         _hpill("365d", 365, True),
+                     ],
+                     style={"display": "flex", "gap": "5px", "marginRight": "18px"}),
+            # Source
+            html.Span("Source", style={
+                "fontSize": "10px", "fontWeight": "700", "color": _DIM,
+                "textTransform": "uppercase", "letterSpacing": "0.5px",
+                "marginRight": "6px", "whiteSpace": "nowrap",
+            }),
+            html.Div(id="tp-source-pills",
+                     children=[
+                         _fpill("All",      total_items,                               "tp-source-pill",   "All",      True,  _FG),
+                         _fpill("Customer", source_counts.get("Customer", 0),          "tp-source-pill",   "Customer", False, "rgb(6,182,212)"),
+                         _fpill("Internal", source_counts.get("Internal", 0),          "tp-source-pill",   "Internal", False, "rgb(139,92,246)"),
+                     ],
+                     style={"display": "flex", "gap": "5px", "marginRight": "18px"}),
+            # Platform
+            html.Span("Platform", style={
+                "fontSize": "10px", "fontWeight": "700", "color": _DIM,
+                "textTransform": "uppercase", "letterSpacing": "0.5px",
+                "marginRight": "6px", "whiteSpace": "nowrap",
+            }),
+            html.Div(id="tp-platform-pills",
+                     children=[
+                         _fpill("All",    total_items,                           "tp-platform-pill", "All",    True,  _FG),
+                         _fpill("Mobile", platform_counts.get("Mobile", 0),      "tp-platform-pill", "Mobile", False, "rgb(6,182,212)"),
+                         _fpill("Web",    platform_counts.get("Web",    0),      "tp-platform-pill", "Web",    False, "rgb(139,92,246)"),
+                     ],
+                     style={"display": "flex", "gap": "5px"}),
         ], style={
             "padding": "10px 24px", "borderBottom": f"1px solid {_BD}",
-            "background": _BG_CARD,
+            "background": _BG_CARD, "display": "flex",
+            "alignItems": "center", "flexWrap": "wrap", "gap": "6px",
         }),
 
         # ── Grid content ──────────────────────────────────────────────────────
@@ -992,14 +1137,84 @@ def _select_horizon(clicks):
     ]
 
 
+def _make_fpill(label, count, pill_type, val, active, color):
+    r = _rgb(color)
+    return html.Div([
+        html.Span(label, style={"marginRight": "5px"}),
+        html.Span(str(count), style={
+            "fontFamily": _MONO, "fontSize": "10px", "fontWeight": "700",
+            "padding": "1px 6px", "borderRadius": "8px",
+            "background": f"rgba({r},0.18)" if active else f"rgba({_rgb(_DIM)},0.22)",
+            "color": color if active else _DIM,
+        }),
+    ], id={"type": pill_type, "val": val}, n_clicks=0, style={
+        "display": "flex", "alignItems": "center", "gap": "2px",
+        "padding": "4px 10px", "borderRadius": "16px",
+        "cursor": "pointer", "fontSize": "11px", "fontWeight": "600",
+        "background": f"rgba({r},0.1)" if active else "transparent",
+        "border": f"1.5px solid rgba({r},0.45)" if active else f"1px solid {_BD}",
+        "color": color if active else _MT, "whiteSpace": "nowrap",
+    })
+
+
+@callback(
+    Output("tp-source-store",  "data"),
+    Output("tp-source-pills",  "children"),
+    Input({"type": "tp-source-pill", "val": ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def _select_source(clicks):
+    if not any(clicks):
+        raise PreventUpdate
+    selected = ctx.triggered_id["val"]
+    items = _load_items()
+    sc: dict[str, int] = {}
+    for x in items:
+        ct = x.get("cust_type", "Internal")
+        sc[ct] = sc.get(ct, 0) + 1
+    total = len(items)
+    return selected, [
+        _make_fpill("All",      total,                  "tp-source-pill", "All",      selected == "All",      _FG),
+        _make_fpill("Customer", sc.get("Customer", 0),  "tp-source-pill", "Customer", selected == "Customer", "rgb(6,182,212)"),
+        _make_fpill("Internal", sc.get("Internal", 0),  "tp-source-pill", "Internal", selected == "Internal", "rgb(139,92,246)"),
+    ]
+
+
+@callback(
+    Output("tp-platform-store",  "data"),
+    Output("tp-platform-pills",  "children"),
+    Input({"type": "tp-platform-pill", "val": ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def _select_platform(clicks):
+    if not any(clicks):
+        raise PreventUpdate
+    selected = ctx.triggered_id["val"]
+    items = _load_items()
+    pc: dict[str, int] = {}
+    for x in items:
+        p = x.get("platform")
+        if p in ("Mobile", "Web"):
+            pc[p] = pc.get(p, 0) + 1
+    total = len(items)
+    return selected, [
+        _make_fpill("All",    total,                "tp-platform-pill", "All",    selected == "All",    _FG),
+        _make_fpill("Mobile", pc.get("Mobile", 0), "tp-platform-pill", "Mobile", selected == "Mobile", "rgb(6,182,212)"),
+        _make_fpill("Web",    pc.get("Web",    0), "tp-platform-pill", "Web",    selected == "Web",    "rgb(139,92,246)"),
+    ]
+
+
 @callback(
     Output("tp-grid", "children"),
-    Input("tp-team-store",    "data"),
-    Input("tp-horizon-store", "data"),
+    Input("tp-team-store",     "data"),
+    Input("tp-horizon-store",  "data"),
+    Input("tp-source-store",   "data"),
+    Input("tp-platform-store", "data"),
 )
-def _render_grid(team, horizon):
+def _render_grid(team, horizon, source, platform):
     items = _load_items()
-    return _build_grid(items, team or "All", horizon or 365)
+    return _build_grid(items, team or "All", horizon or 365,
+                       source or "All", platform or "All")
 
 
 # ── Panel callbacks ───────────────────────────────────────────────────────────
@@ -1032,9 +1247,11 @@ def _close_panel(n):
     Output("tp-panel-wrap", "style"),
     Output("tp-panel-body", "children"),
     Input("tp-panel-ctx", "data"),
-    State("tp-team-store", "data"),
+    State("tp-team-store",     "data"),
+    State("tp-source-store",   "data"),
+    State("tp-platform-store", "data"),
 )
-def _render_panel(panel_ctx, team_filter):
+def _render_panel(panel_ctx, team_filter, source_filter, platform_filter):
     _PANEL_STYLE = {
         "position": "fixed", "top": "0", "right": "0",
         "height": "100vh", "width": "400px",
@@ -1046,5 +1263,6 @@ def _render_panel(panel_ctx, team_filter):
     }
     if not panel_ctx:
         return {"display": "none"}, []
-    content = _build_panel_content(panel_ctx, team_filter or "All")
+    content = _build_panel_content(panel_ctx, team_filter or "All",
+                                   source_filter or "All", platform_filter or "All")
     return {"display": "block"}, html.Div(content, style=_PANEL_STYLE)
