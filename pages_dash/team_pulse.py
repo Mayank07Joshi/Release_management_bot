@@ -463,22 +463,24 @@ _TD_S = {
     "textAlign": "center",
 }
 
-def _num_cell(n: int, hi_thresh=25, red_thresh=32, style=None, cid=None) -> html.Td:
+def _num_cell(n: int, hi_thresh=25, red_thresh=32, style=None, cid=None, highlight=False) -> html.Td:
+    hl = {"outline": f"2px solid {_INDIGO}", "outlineOffset": "-2px"} if highlight else {}
     if n == 0:
-        return html.Td("–", style={**_TD_S, "color": _DIM, **(style or {})})
+        return html.Td("–", style={**_TD_S, "color": _DIM, **(style or {}), **hl})
     color = _RED if n >= red_thresh else (_AMBER if n >= hi_thresh else _FG)
     fw    = "700" if color != _FG else "500"
     if cid:
         return html.Td(
             html.Div(str(n), id=cid, n_clicks=0,
                      style={"cursor": "pointer", "color": color, "fontWeight": fw}),
-            style={**_TD_S, **(style or {})},
+            style={**_TD_S, **(style or {}), **hl},
         )
-    return html.Td(str(n), style={**_TD_S, "color": color, "fontWeight": fw, **(style or {})})
+    return html.Td(str(n), style={**_TD_S, "color": color, "fontWeight": fw, **(style or {}), **hl})
 
-def _hours_cell(h: float, has_tasks: bool, cid=None) -> html.Td:
+def _hours_cell(h: float, has_tasks: bool, cid=None, highlight=False) -> html.Td:
+    hl = {"outline": f"2px solid {_INDIGO}", "outlineOffset": "-2px"} if highlight else {}
     if h == 0 and not has_tasks:
-        return html.Td("–", style={**_TD_S, "color": _DIM})
+        return html.Td("–", style={**_TD_S, "color": _DIM, **hl})
     color = _RED if h > 120 else (_AMBER if h > 60 else _FG)
     inner: list = [html.Div(f"{int(h)}h", style={
         "color": color, "fontWeight": "700", "fontFamily": _MONO, "fontSize": "11px",
@@ -489,13 +491,14 @@ def _hours_cell(h: float, has_tasks: bool, cid=None) -> html.Td:
         }))
     if cid:
         return html.Td(html.Div(inner, id=cid, n_clicks=0, style={"cursor": "pointer"}),
-                       style={**_TD_S, "padding": "4px 8px"})
-    return html.Td(inner, style={**_TD_S, "padding": "4px 8px"})
+                       style={**_TD_S, "padding": "4px 8px", **hl})
+    return html.Td(inner, style={**_TD_S, "padding": "4px 8px", **hl})
 
-def _eu_cell(est: int, unest: int, cid=None) -> html.Td:
+def _eu_cell(est: int, unest: int, cid=None, highlight=False) -> html.Td:
+    hl    = {"outline": f"2px solid {_INDIGO}", "outlineOffset": "-2px"} if highlight else {}
     total = est + unest
     if total == 0:
-        return html.Td("–", style={**_TD_S, "color": _DIM})
+        return html.Td("–", style={**_TD_S, "color": _DIM, **hl})
     inner = [
         html.Div(str(total), style={"fontWeight": "700", "color": _FG, "fontSize": "12px"}),
         html.Div([
@@ -506,8 +509,8 @@ def _eu_cell(est: int, unest: int, cid=None) -> html.Td:
     ]
     if cid:
         return html.Td(html.Div(inner, id=cid, n_clicks=0, style={"cursor": "pointer"}),
-                       style={**_TD_S, "padding": "4px 8px"})
-    return html.Td(inner, style={**_TD_S, "padding": "4px 8px"})
+                       style={**_TD_S, "padding": "4px 8px", **hl})
+    return html.Td(inner, style={**_TD_S, "padding": "4px 8px", **hl})
 
 def _label_cell(txt: str, style: dict | None = None) -> html.Td:
     return html.Td(txt, style={
@@ -580,7 +583,8 @@ def _build_platform_table(plat_by_mk: dict, months: list, mks: list, today_mk: s
 
 # ── Main grid builder ─────────────────────────────────────────────────────────
 def _build_grid(items: list[dict], team_filter: str, horizon_d: int,
-                source_filter: str = "All", platform_filter: str = "All") -> html.Div:
+                source_filter: str = "All", platform_filter: str = "All",
+                panel_ctx: dict | None = None) -> html.Div:
     all_months  = _rolling_months(12)
     active_mks  = _horizon_months(horizon_d, all_months)
     months      = [(y, m) for y, m in all_months if _month_key(y, m) in active_mks]
@@ -659,6 +663,14 @@ def _build_grid(items: list[dict], team_filter: str, horizon_d: int,
             if x["estimated"]: cell["enh_e"] += 1
             else:              cell["enh_u"] += 1
 
+    # ── Active cell check (for highlight) ────────────────────────────────────
+    def _is_active(kind: str, key: str, mk: str) -> bool:
+        if not panel_ctx:
+            return False
+        return (panel_ctx.get("kind") == kind and
+                panel_ctx.get("key") == key and
+                panel_ctx.get("mk") == mk)
+
     # ── Sort developers by team order ─────────────────────────────────────────
     def _dev_sort_key(name):
         team = _TEAM_MAP.get(name, "Other")
@@ -693,6 +705,7 @@ def _build_grid(items: list[dict], team_filter: str, horizon_d: int,
             cells.append(_num_cell(
                 iss_by_pri[pri][mk],
                 cid={"type": "tp-cell", "kind": "issue_pri", "key": pri, "mk": mk},
+                highlight=_is_active("issue_pri", pri, mk),
             ))
         tbody_rows.append(html.Tr(cells))
 
@@ -704,6 +717,7 @@ def _build_grid(items: list[dict], team_filter: str, horizon_d: int,
             cells.append(_num_cell(
                 enh_by_sz[sz][mk],
                 cid={"type": "tp-cell", "kind": "enh_size", "key": sz, "mk": mk},
+                highlight=_is_active("enh_size", sz, mk),
             ))
         tbody_rows.append(html.Tr(cells))
 
@@ -755,6 +769,7 @@ def _build_grid(items: list[dict], team_filter: str, horizon_d: int,
             h_cells.append(_hours_cell(
                 c["orig_h"], c["has_tasks"],
                 cid={"type": "tp-cell", "kind": "dev_hours", "key": dev, "mk": mk},
+                highlight=_is_active("dev_hours", dev, mk),
             ))
         tbody_rows.append(html.Tr(h_cells))
 
@@ -765,6 +780,7 @@ def _build_grid(items: list[dict], team_filter: str, horizon_d: int,
             i_cells.append(_eu_cell(
                 c["iss_e"], c["iss_u"],
                 cid={"type": "tp-cell", "kind": "dev_issues", "key": dev, "mk": mk},
+                highlight=_is_active("dev_issues", dev, mk),
             ))
         tbody_rows.append(html.Tr(i_cells))
 
@@ -775,6 +791,7 @@ def _build_grid(items: list[dict], team_filter: str, horizon_d: int,
             e_cells.append(_eu_cell(
                 c["enh_e"], c["enh_u"],
                 cid={"type": "tp-cell", "kind": "dev_enhancements", "key": dev, "mk": mk},
+                highlight=_is_active("dev_enhancements", dev, mk),
             ))
         tbody_rows.append(html.Tr(e_cells))
 
@@ -1210,11 +1227,12 @@ def _select_platform(clicks):
     Input("tp-horizon-store",  "data"),
     Input("tp-source-store",   "data"),
     Input("tp-platform-store", "data"),
+    Input("tp-panel-ctx",      "data"),
 )
-def _render_grid(team, horizon, source, platform):
+def _render_grid(team, horizon, source, platform, panel_ctx):
     items = _load_items()
     return _build_grid(items, team or "All", horizon or 365,
-                       source or "All", platform or "All")
+                       source or "All", platform or "All", panel_ctx)
 
 
 # ── Panel callbacks ───────────────────────────────────────────────────────────
