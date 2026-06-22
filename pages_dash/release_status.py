@@ -8,7 +8,7 @@ from dash import html, dcc, callback, Input, Output, State, ctx, ALL
 from dash.exceptions import PreventUpdate
 from sqlalchemy import text
 
-from config.dev_capacity import DEV_NAMES
+from config.dev_capacity import DEV_NAMES, QA_NAMES, STORY_OWNER_NAMES
 from data.loader import engine
 from sync.ado_write import write_fields
 
@@ -31,8 +31,8 @@ _STAGES = [
 ]
 _STAGE_KEYS = [k for k, _ in _STAGES]
 
-_QA_NAMES     = ["Geetika Khanna", "Chhavi Bhardwaj", "Sunil", "Vineeta"]
-_STORY_OWNERS = ["Geetika", "Chhavi", "Sunil", "Vineeta"]
+_QA_NAMES     = QA_NAMES
+_STORY_OWNERS = STORY_OWNER_NAMES
 _SIZES        = ["Big", "Medium", "Small", "Very Small"]
 
 _ST_COLOR = {
@@ -266,7 +266,7 @@ def _build_pills(releases, selected):
 # ── Table ─────────────────────────────────────────────────────────────────────
 _SALMON = "rgb(240,137,122)"
 
-def _build_table(stories, stage_data, row_data):
+def _build_table(stories, stage_data, row_data, selected_id=None):
     fixed_cols = [
         ("Name of Story", {"minWidth": "200px", "position": "sticky", "left": "0px",
                            "zIndex": "3", "background": _BG_HEAD, "textAlign": "center"}),
@@ -293,6 +293,13 @@ def _build_table(stories, stage_data, row_data):
         sz       = s["story_size"].strip().title() if s["story_size"] else ""
         sz_color = _SIZE_COLORS.get(sz, _MT)
         sc       = _GREEN if s["story_status"] == "Complete" else _MT
+
+        is_selected = (wid == selected_id)
+        row_style = {
+            "cursor": "pointer",
+            "background": "rgba(110,118,241,0.09)" if is_selected else "transparent",
+            "boxShadow": "inset 3px 0 0 rgb(110,118,241)" if is_selected else "none",
+        }
 
         body_rows.append(html.Tr([
             # Name of Story — ID inline + title, single sticky column
@@ -340,7 +347,7 @@ def _build_table(stories, stage_data, row_data):
         ],
             id={"type": "rs-row", "key": str(wid)},
             n_clicks=0,
-            style={"cursor": "pointer", "background": "transparent"},
+            style=row_style,
         ))
 
     return html.Div(
@@ -484,19 +491,29 @@ def _build_panel(wid: int):
         # ── Fields ──────────────────────────────────────────────────────────
         html.Div([
 
-            # Story Owner + Developer — side-by-side text inputs
+            # Story Owner + Developer — dropdowns
             html.Div([
                 html.Div([
                     _lbl("Story Owner"),
-                    dcc.Input(type="text", id="rs-owner-input", value=cur_own,
-                              debounce=True, placeholder="Full name",
-                              style=_inp_style),
+                    dcc.Dropdown(
+                        id="rs-owner-dd",
+                        options=[{"label": o, "value": o} for o in _STORY_OWNERS],
+                        value=cur_own or None,
+                        placeholder="Select owner…",
+                        clearable=True,
+                        style={"fontSize": "12.5px"},
+                    ),
                 ], style={"flex": "1", "minWidth": "0"}),
                 html.Div([
                     _lbl("Developer"),
-                    dcc.Input(type="text", id="rs-dev-input", value=cur_dev,
-                              debounce=True, placeholder="Full name",
-                              style=_inp_style),
+                    dcc.Dropdown(
+                        id="rs-dev-dd",
+                        options=[{"label": d, "value": d} for d in sorted(DEV_NAMES)],
+                        value=cur_dev or None,
+                        placeholder="Select developer…",
+                        clearable=True,
+                        style={"fontSize": "12.5px"},
+                    ),
                 ], style={"flex": "1", "minWidth": "0"}),
             ], style={"display": "flex", "gap": "10px", "marginBottom": "14px"}),
 
@@ -539,12 +556,26 @@ def _build_panel(wid: int):
                 ], style={"flex": "1", "minWidth": "0"}),
                 html.Div([
                     _lbl("Release date"),
-                    dcc.Input(type="text", id="rs-release-date-input",
-                              value=row.release_date or "", debounce=True,
-                              placeholder="YYYY-MM-DD",
-                              style=_inp_style),
+                    dcc.Dropdown(
+                        id="rs-release-date-dd",
+                        options=[{"label": r, "value": r} for r in _get_releases()],
+                        value=row.release_date or None,
+                        placeholder="Select release…",
+                        clearable=True,
+                        style={"fontSize": "12.5px"},
+                    ),
                 ], style={"flex": "1", "minWidth": "0"}),
-            ], style={"display": "flex", "gap": "10px", "marginBottom": "4px"}),
+            ], style={"display": "flex", "gap": "10px", "marginBottom": "12px"}),
+
+            # Save to ADO button
+            html.Button("Save to ADO", id="rs-save-btn", n_clicks=0, style={
+                "width": "100%", "padding": "9px", "borderRadius": "8px",
+                "background": "rgba(110,118,241,0.133)",
+                "border": f"1px solid rgba(110,118,241,0.5)",
+                "color": _INDIGO, "cursor": "pointer",
+                "fontSize": "12px", "fontWeight": "700",
+                "marginBottom": "4px",
+            }),
 
             _divider,
 
@@ -734,11 +765,10 @@ def _select_release(clicks):
 @callback(
     Output("rs-table-wrapper", "children"),
     Input("rs-release-store",  "data"),
+    Input("rs-panel-store",    "data"),
     Input("rs-panel-visible",  "data"),
 )
-def _render_table(release, panel_visible):
-    if panel_visible:
-        raise PreventUpdate
+def _render_table(release, selected_id, panel_visible):
     if not release:
         return html.Div("Select a release above to view stories.",
                         style={"padding": "40px", "color": _MT, "textAlign": "center"})
@@ -749,7 +779,8 @@ def _render_table(release, panel_visible):
     if not stories:
         return html.Div(f"No active stories found for: {release}",
                         style={"padding": "40px", "color": _MT, "textAlign": "center"})
-    return _build_table(stories, stage_data, row_data)
+    effective_id = selected_id if panel_visible else None
+    return _build_table(stories, stage_data, row_data, selected_id=effective_id)
 
 
 @callback(
@@ -791,14 +822,13 @@ def _render_panel(story_id):
 
 @callback(
     Output("rs-panel-store", "data", allow_duplicate=True),
-    Input("rs-owner-input", "value"),
+    Input("rs-owner-dd", "value"),
     State("rs-panel-store", "data"),
     prevent_initial_call=True,
 )
 def _save_owner(val, story_id):
     if not story_id or not val:
         raise PreventUpdate
-    write_fields(story_id, {"story_owner": val})
     with engine.begin() as conn:
         conn.execute(text("UPDATE work_items_main SET story_owner=:o WHERE work_item_id=:id"),
                      {"o": val, "id": story_id})
@@ -807,14 +837,13 @@ def _save_owner(val, story_id):
 
 @callback(
     Output("rs-panel-store", "data", allow_duplicate=True),
-    Input("rs-dev-input", "value"),
+    Input("rs-dev-dd", "value"),
     State("rs-panel-store", "data"),
     prevent_initial_call=True,
 )
 def _save_developer(val, story_id):
     if not story_id or not val:
         raise PreventUpdate
-    write_fields(story_id, {"main_developer": val})
     with engine.begin() as conn:
         conn.execute(text("UPDATE work_items_main SET main_developer=:d WHERE work_item_id=:id"),
                      {"d": val, "id": story_id})
@@ -855,7 +884,6 @@ def _save_size(clicks, story_id):
     tid = ctx.triggered_id
     if not tid:
         raise PreventUpdate
-    write_fields(story_id, {"story_size": tid["key"]})
     with engine.begin() as conn:
         conn.execute(text("UPDATE work_items_main SET story_size=:s WHERE work_item_id=:id"),
                      {"s": tid["key"], "id": story_id})
@@ -936,17 +964,42 @@ def _save_comment(n, comment, story_id):
 
 @callback(
     Output("rs-panel-store", "data", allow_duplicate=True),
-    Input("rs-release-date-input", "value"),
-    State("rs-panel-store",        "data"),
+    Input("rs-release-date-dd", "value"),
+    State("rs-panel-store",     "data"),
     prevent_initial_call=True,
 )
 def _save_release_date(val, story_id):
     if not story_id or not val:
         raise PreventUpdate
-    write_fields(story_id, {"release_date": val})
     with engine.begin() as conn:
         conn.execute(text("UPDATE work_items_main SET release_date=:d WHERE work_item_id=:id"),
                      {"d": val, "id": story_id})
+    return story_id
+
+
+@callback(
+    Output("rs-panel-store", "data", allow_duplicate=True),
+    Input("rs-save-btn",     "n_clicks"),
+    State("rs-panel-store",  "data"),
+    prevent_initial_call=True,
+)
+def _save_to_ado(n, story_id):
+    if not n or not story_id:
+        raise PreventUpdate
+    with engine.connect() as conn:
+        row = conn.execute(text("""
+            SELECT story_owner, main_developer, story_size, release_date
+            FROM work_items_main WHERE work_item_id = :id
+        """), {"id": story_id}).fetchone()
+    if not row:
+        raise PreventUpdate
+    fields = {}
+    if row.story_owner:    fields["story_owner"]    = row.story_owner
+    if row.main_developer: fields["main_developer"] = row.main_developer
+    if row.story_size:     fields["story_size"]     = row.story_size
+    if row.release_date:   fields["release_date"]   = row.release_date
+    if fields:
+        write_fields(story_id, fields)
     return story_id
 
 

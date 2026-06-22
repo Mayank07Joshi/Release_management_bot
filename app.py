@@ -2,10 +2,23 @@
 
 import dash
 import dash_bootstrap_components as dbc
-from dash import Dash, dcc, html, Input, Output, State, callback
+from dash import Dash, dcc, html, Input, Output, State, callback, no_update
 import sys, os, logging, threading
 import plotly.graph_objects as go
 import plotly.io as pio
+
+# ── Manual sync state ─────────────────────────────────────────────────────────
+_sync_running = False
+_sync_lock    = threading.Lock()
+_sync_start   = 0.0
+
+def _do_sync():
+    global _sync_running
+    try:
+        from sync.ado_sync import run_sync
+        run_sync()
+    finally:
+        _sync_running = False
 
 # Make project root importable
 sys.path.insert(0, os.path.dirname(__file__))
@@ -184,10 +197,20 @@ sidebar = html.Div([
 
     # ── Bottom: freshness + theme + user ───────────────────────────────────────
     html.Div([
-        html.Div(id="data-freshness-display", style={
-            "fontSize": "10px", "color": "rgb(91,98,118)",
-            "marginBottom": "10px", "whiteSpace": "nowrap",
-        }),
+        html.Div([
+            html.Div(id="data-freshness-display", style={
+                "fontSize": "10px", "color": "rgb(91,98,118)",
+                "whiteSpace": "nowrap", "flex": "1",
+            }),
+            html.Button("↻ Sync", id="sync-now-btn", n_clicks=0, style={
+                "background": "transparent",
+                "border": "1px solid rgba(255,255,255,0.08)",
+                "color": "rgb(110,118,241)", "cursor": "pointer",
+                "fontSize": "11px", "fontWeight": "600",
+                "padding": "3px 9px", "borderRadius": "6px",
+                "whiteSpace": "nowrap",
+            }),
+        ], style={"display": "flex", "alignItems": "center", "gap": "8px", "marginBottom": "10px"}),
         html.Div([
             html.Div(id="topnav-avatar-display", style={"flex": "1", "minWidth": "0"}),
             html.Button("☀", id="theme-toggle-btn", className="theme-toggle-btn",
@@ -235,6 +258,7 @@ app.layout = html.Div([
     # ── ADO write-back failure/success toasts + data freshness ───────────────
     dcc.Interval(id="ado-failure-poll", interval=5000, n_intervals=0),
     dcc.Interval(id="data-freshness-poll", interval=30000, n_intervals=0),
+    dcc.Interval(id="sync-timer-tick", interval=1000, n_intervals=0, disabled=True),
     html.Div(id="ado-failure-toast-container", style={
         "position": "fixed", "bottom": "24px", "right": "24px",
         "zIndex": 9999, "display": "flex", "flexDirection": "column", "gap": "10px",
@@ -311,12 +335,46 @@ def _data_freshness(n, _path):
         return "data: loading…"
     age = int(_time.time() - t)
     if age < 60:
-        label = f"{age}s ago"
+        return f"↻ {age}s ago"
     elif age < 3600:
-        label = f"{age // 60}m ago"
-    else:
-        label = f"{age // 3600}h ago"
-    return f"↻ {label}"
+        return f"↻ {age // 60}m ago"
+    return f"↻ {age // 3600}h ago"
+
+
+@app.callback(
+    Output("sync-now-btn",    "children"),
+    Output("sync-now-btn",    "disabled"),
+    Output("sync-timer-tick", "disabled"),
+    Input("sync-now-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def _manual_sync(n):
+    global _sync_running, _sync_start
+    if not n:
+        raise dash.exceptions.PreventUpdate
+    with _sync_lock:
+        if _sync_running:
+            raise dash.exceptions.PreventUpdate
+        _sync_running = True
+        import time as _time
+        _sync_start = _time.time()
+    threading.Thread(target=_do_sync, daemon=True, name="manual-ado-sync").start()
+    return "syncing… 0s", True, False
+
+
+@app.callback(
+    Output("sync-now-btn",    "children",  allow_duplicate=True),
+    Output("sync-now-btn",    "disabled",  allow_duplicate=True),
+    Output("sync-timer-tick", "disabled",  allow_duplicate=True),
+    Input("sync-timer-tick", "n_intervals"),
+    prevent_initial_call=True,
+)
+def _sync_timer_tick(n):
+    import time as _time
+    if _sync_running:
+        elapsed = int(_time.time() - _sync_start)
+        return f"syncing… {elapsed}s", True, False
+    return "↻ Sync", False, True
 
 
 app.clientside_callback(

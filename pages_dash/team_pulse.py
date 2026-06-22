@@ -4,7 +4,7 @@ import re
 from datetime import date, timedelta
 
 import dash
-from dash import html, dcc, callback, Input, Output, State, ALL, ctx
+from dash import html, dcc, callback, Input, Output, State, ALL, ctx, no_update
 from dash.exceptions import PreventUpdate
 from sqlalchemy import text
 
@@ -112,6 +112,7 @@ def _load_items() -> list[dict]:
                 w.work_item_id,
                 w.work_item_type,
                 COALESCE(w.priority, '') AS priority,
+                w.work_item_id,
                 COALESCE(w.main_developer, '') AS main_developer,
                 COALESCE(w.original_estimate, 0) AS orig_est,
                 COALESCE(a.task_est_sum, 0)       AS task_est,
@@ -142,6 +143,7 @@ def _load_items() -> list[dict]:
         team      = _TEAM_MAP.get(r.main_developer, "Other")
         platform  = "Mobile" if team == "Mobile Dev" else ("Web" if team == "Web Dev" else None)
         items.append({
+            "wid":       int(r.work_item_id),
             "type":      "issue" if is_issue else "enh",
             "pri":       _classify_pri(r.priority),
             "dev":       r.main_developer,
@@ -168,11 +170,14 @@ def _load_task_hours() -> list[dict]:
         rows = conn.execute(text("""
             SELECT
                 COALESCE(t.main_developer, '') AS main_developer,
-                COALESCE(t.original_estimate, 0) AS task_est,
+                COALESCE(t.remaining_work, t.original_estimate, 0) AS task_est,
                 t.iteration_path                 AS task_iter,
-                COALESCE(w.type, 'Internal')     AS cust_type
+                COALESCE(w.type, 'Internal')     AS cust_type,
+                t.parent_id                      AS parent_id,
+                COALESCE(a.est_status, 'unestimated') AS parent_est_status
             FROM work_items_main t
             INNER JOIN work_items_main w ON w.work_item_id = t.parent_id
+            LEFT JOIN agg_story_estimation a ON a.work_item_id = t.parent_id
             WHERE t.work_item_type = 'Task'
             AND t.state NOT IN (
                 'Closed','Dev Complete','Resolved','Not Required','Not an issue'
@@ -196,12 +201,14 @@ def _load_task_hours() -> list[dict]:
         team     = _TEAM_MAP.get(dev, "Other")
         platform = "Mobile" if team == "Mobile Dev" else ("Web" if team == "Web Dev" else None)
         result.append({
-            "dev":      dev,
-            "team":     team,
-            "mk":       _month_key(*ym),
-            "est_h":    float(r.task_est or 0),
-            "cust_type": str(r.cust_type or "Internal"),
-            "platform": platform,
+            "dev":        dev,
+            "team":       team,
+            "mk":         _month_key(*ym),
+            "est_h":      float(r.task_est or 0),
+            "cust_type":  str(r.cust_type or "Internal"),
+            "platform":   platform,
+            "parent_id":  int(r.parent_id) if r.parent_id else None,
+            "parent_est": str(r.parent_est_status or "unestimated"),
         })
     return result
 
@@ -223,12 +230,13 @@ def _panel_load(mk: str, team_filter: str,
                 COALESCE(a.est_status, 'unestimated') AS est_status,
                 COALESCE(w.type, 'Internal')      AS cust_type,
                 COALESCE(w.priority, '')           AS priority,
-                COALESCE(tk.iter_task_est, 0)     AS iter_task_est
+                COALESCE(tk.iter_task_est, 0)     AS iter_task_est,
+                COALESCE(ar.active_remaining, 0)  AS task_est_total
             FROM work_items_main w
             LEFT JOIN agg_story_estimation a ON a.work_item_id = w.work_item_id
             LEFT JOIN (
                 SELECT parent_id,
-                       SUM(COALESCE(original_estimate, 0)) AS iter_task_est
+                       SUM(COALESCE(remaining_work, original_estimate, 0)) AS iter_task_est
                 FROM work_items_main
                 WHERE work_item_type = 'Task'
                 AND state NOT IN (
@@ -237,6 +245,16 @@ def _panel_load(mk: str, team_filter: str,
                 AND iteration_path LIKE :pat
                 GROUP BY parent_id
             ) tk ON tk.parent_id = w.work_item_id
+            LEFT JOIN (
+                SELECT parent_id,
+                       SUM(COALESCE(remaining_work, original_estimate, 0)) AS active_remaining
+                FROM work_items_main
+                WHERE work_item_type = 'Task'
+                AND state NOT IN (
+                    'Closed','Dev Complete','Resolved','Not Required','Not an issue'
+                )
+                GROUP BY parent_id
+            ) ar ON ar.parent_id = w.work_item_id
             WHERE w.state NOT IN (
                 'Closed','Resolved','Not Required','Not an issue',
                 'No Customer Response','Not Specified','Userstory Update'
@@ -250,9 +268,10 @@ def _panel_load(mk: str, team_filter: str,
     for r in rows:
         is_issue    = r.work_item_type in ("Issue", "Bug")
         orig_h      = float(r.orig_est or 0)
-        iter_task_h = float(r.iter_task_est or 0)
-        # Use tasks scoped to THIS iteration month, not the all-time task_est_sum
-        est_h       = iter_task_h if iter_task_h > 0 else orig_h
+        iter_task_h  = float(r.iter_task_est or 0)
+        all_task_h   = float(r.task_est_total or 0)
+        # Prefer tasks scoped to this iteration; fall back to orig estimate; last resort all-time tasks
+        est_h = iter_task_h if iter_task_h > 0 else (orig_h if orig_h > 0 else all_task_h)
         team     = _TEAM_MAP.get(r.main_developer, "Other")
         if team_filter != "All" and team != team_filter:
             continue
@@ -277,9 +296,25 @@ def _panel_load(mk: str, team_filter: str,
     return result
 
 
+# ── Panel stub helper (hidden seed elements keep Dash callbacks registered) ───
+_SEL_CYAN = "rgb(6,182,212)"
+
+def _panel_stubs() -> list:
+    """Return fresh hidden stub components so Dash can resolve panel callback IDs
+    even before the panel has been opened for the first time."""
+    return [
+        html.Button(id="tp-sel-all",   n_clicks=0, style={"display": "none"}),
+        html.Button(id="tp-sel-clear", n_clicks=0, style={"display": "none"}),
+        html.Button(id="tp-move-btn",  n_clicks=0, style={"display": "none"}),
+        dcc.Dropdown(id="tp-move-month", options=[], style={"display": "none"}),
+    ]
+
+
 # ── Panel content builder ─────────────────────────────────────────────────────
+
 def _build_panel_content(panel_ctx: dict, team_filter: str,
-                         source_filter: str = "All", platform_filter: str = "All") -> html.Div:
+                         source_filter: str = "All", platform_filter: str = "All",
+                         selected_ids: list | None = None) -> html.Div:
     kind = panel_ctx["kind"]
     key  = panel_ctx["key"]
     mk   = panel_ctx["mk"]
@@ -309,6 +344,8 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
     else:
         return html.Div("Unknown context", style={"color": _DIM})
 
+    sel     = set(selected_ids or [])
+    n_sel   = len(sel)
     n_total = len(items)
     n_est   = sum(1 for x in items if x["estimated"])
     n_unest = n_total - n_est
@@ -340,30 +377,44 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
     def _item_row(x: dict, is_est: bool) -> html.Div:
         h_str   = f"{int(x['est_h'])}h" if x["est_h"] > 0 else "—"
         h_color = _FG if is_est else _AMBER
+        is_sel  = x["id"] in sel
+        row_bg  = (f"rgba({_rgb(_SEL_CYAN)},0.11)" if is_sel
+                   else (f"rgba({_rgb(_AMBER)},0.08)" if not is_est else "transparent"))
+        row_extra = ({"outline": f"rgba({_rgb(_SEL_CYAN)},0.4) solid 1px",
+                      "outlineOffset": "-1px"} if is_sel else {})
+        chk_style = {
+            "width": "16px", "height": "16px", "borderRadius": "4px", "flexShrink": "0",
+            "border": f"1.5px solid {_SEL_CYAN}",
+            "background": _SEL_CYAN if is_sel else "transparent",
+            "color": "rgb(11,17,32)", "fontSize": "11px", "fontWeight": "800",
+            "display": "flex", "alignItems": "center", "justifyContent": "center",
+        }
         return html.Div([
+            html.Div("✓" if is_sel else "", style=chk_style),
             html.Span(f"#{x['id']}", style={
-                "fontFamily": _MONO, "fontSize": "11px", "color": _DIM,
-                "flexShrink": "0", "width": "54px",
+                "fontFamily": _MONO, "fontSize": "11px", "color": _DIM, "flexShrink": "0",
             }),
             html.Div([
                 html.Div(x["title"], style={
-                    "overflow": "hidden", "textOverflow": "ellipsis",
-                    "whiteSpace": "nowrap", "color": _FG, "fontSize": "12px",
+                    "color": _FG, "fontSize": "12px",
+                    "lineHeight": "1.35", "wordBreak": "break-word",
                 }),
                 html.Div(x["dev"], style={
                     "fontSize": "10px", "color": _DIM, "marginTop": "1px",
                 }),
-            ], style={"overflow": "hidden", "flex": "1"}),
+            ], style={"minWidth": "0", "flex": "1"}),
             html.Span(h_str, style={
                 "fontFamily": _MONO, "fontWeight": "600", "color": h_color,
                 "minWidth": "42px", "textAlign": "right", "flexShrink": "0",
             }),
-        ], style={
-            "display": "grid", "gridTemplateColumns": "54px 1fr 55px",
+        ], id={"type": "tp-panel-item", "wid": x["id"]}, n_clicks=0, style={
+            "display": "grid", "gridTemplateColumns": "22px 54px 1fr 55px",
+            "gap": "0 6px",
             "padding": "7px 10px", "fontSize": "12px", "borderRadius": "6px",
-            "alignItems": "center",
-            "background": f"rgba({_rgb(_AMBER)},0.08)" if not is_est else "transparent",
+            "alignItems": "flex-start", "cursor": "pointer",
+            "background": row_bg,
             "borderBottom": f"1px solid rgba({_rgb(_BD_CELL)},0.5)",
+            **row_extra,
         })
 
     # ── Section content ───────────────────────────────────────────────────────
@@ -502,6 +553,60 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
 
         # Items
         html.Div(sections),
+
+        # Move items section
+        html.Div([
+            html.Div([
+                html.Span("Move items", style={"fontSize": "12px", "fontWeight": "700", "color": _FG}),
+                html.Span(f"{n_sel} selected", style={
+                    "fontSize": "11px", "fontFamily": _MONO, "color": _SEL_CYAN,
+                }),
+            ], style={"display": "flex", "alignItems": "center",
+                      "justifyContent": "space-between", "marginBottom": "10px"}),
+            html.Div([
+                html.Button("Select all", id="tp-sel-all", n_clicks=0, style={
+                    "fontSize": "11px", "fontWeight": "600", "color": _MT,
+                    "background": "none", "border": f"1px solid {_BD}",
+                    "borderRadius": "6px", "padding": "4px 9px", "cursor": "pointer",
+                }),
+                html.Button("Clear", id="tp-sel-clear", n_clicks=0, style={
+                    "fontSize": "11px", "fontWeight": "600", "color": _MT,
+                    "background": "none", "border": f"1px solid {_BD}",
+                    "borderRadius": "6px", "padding": "4px 9px", "cursor": "pointer",
+                }),
+            ], style={"display": "flex", "alignItems": "center", "gap": "6px", "marginBottom": "8px"}),
+            html.Div([
+                dcc.Dropdown(
+                    id="tp-move-month",
+                    options=[
+                        {
+                            "label": (_month_label(y2, m2) + (" (current)" if _month_key(y2, m2) == mk else "")),
+                            "value": str(i),
+                            "disabled": _month_key(y2, m2) == mk,
+                        }
+                        for i, (y2, m2) in enumerate(_rolling_months(12))
+                    ],
+                    placeholder="Move to month…",
+                    clearable=False,
+                    style={"flex": "1", "fontSize": "12.5px"},
+                    className="tp-move-dropdown",
+                ),
+                html.Button("Move", id="tp-move-btn", n_clicks=0,
+                            disabled=(n_sel == 0),
+                            style={
+                                "padding": "8px 16px", "borderRadius": "7px",
+                                "fontSize": "12.5px", "fontWeight": "700",
+                                "cursor": "pointer" if n_sel > 0 else "not-allowed",
+                                "background": _SEL_CYAN if n_sel > 0 else _BG_PAGE,
+                                "color": "rgb(11,17,32)" if n_sel > 0 else _DIM,
+                                "border": f"1px solid {_BD}",
+                                "whiteSpace": "nowrap",
+                            }),
+            ], style={"display": "flex", "alignItems": "center", "gap": "8px"}),
+        ], style={
+            "marginTop": "20px", "padding": "14px", "borderRadius": "10px",
+            "background": _BG_HEAD, "border": f"1px solid rgba({_rgb(_BD)},0.314)",
+        }),
 
         # Customer / Internal pills
         html.Div(pills, style={"display": "flex", "flexWrap": "wrap",
@@ -726,6 +831,14 @@ def _build_grid(items: list[dict], team_filter: str, horizon_d: int,
             if x["estimated"]: cell["enh_e"] += 1
             else:              cell["enh_u"] += 1
 
+    # Track which parent enhancement IDs have been counted per (dev, mk) from the items loop.
+    # Task-hours below may introduce enhancements in months other than the parent's own iteration.
+    counted_enh: dict[tuple, set] = {}
+    for x in filtered:
+        if x["type"] == "enh":
+            k = (x["dev"], x["mk"])
+            counted_enh.setdefault(k, set()).add(x["wid"])
+
     # ── Task-level hours: overlay onto dev_data ───────────────────────────────
     # For enhancements with child tasks, use each task's own iteration month
     # so hours land in the month the developer is actually doing the work.
@@ -753,6 +866,18 @@ def _build_grid(items: list[dict], team_filter: str, horizon_d: int,
                                   "enh_e": 0, "enh_u": 0}
         dev_data[dev][mk]["orig_h"]    += th["est_h"]
         dev_data[dev][mk]["has_tasks"] = True
+
+        # If the parent enhancement wasn't already counted for this (dev, mk), add it now.
+        # This surfaces enhancements whose tasks land in a different month than the parent.
+        pid = th.get("parent_id")
+        if pid:
+            k = (dev, mk)
+            if pid not in counted_enh.get(k, set()):
+                if th.get("parent_est") in ("estimated", "estimated_via_tasks"):
+                    dev_data[dev][mk]["enh_e"] += 1
+                else:
+                    dev_data[dev][mk]["enh_u"] += 1
+                counted_enh.setdefault(k, set()).add(pid)
 
     # ── Active cell check (for highlight) ────────────────────────────────────
     def _is_active(kind: str, key: str, mk: str) -> bool:
@@ -1038,11 +1163,12 @@ def layout(**_):
         ))
 
     return html.Div([
-        dcc.Store(id="tp-team-store",     data="All"),
-        dcc.Store(id="tp-horizon-store",  data=365),
-        dcc.Store(id="tp-source-store",   data="All"),
-        dcc.Store(id="tp-platform-store", data="All"),
-        dcc.Store(id="tp-panel-ctx",      data=None),
+        dcc.Store(id="tp-team-store",       data="All"),
+        dcc.Store(id="tp-horizon-store",   data=365),
+        dcc.Store(id="tp-source-store",    data="All"),
+        dcc.Store(id="tp-platform-store",  data="All"),
+        dcc.Store(id="tp-panel-ctx",       data=None),
+        dcc.Store(id="tp-panel-selection", data=[]),
 
         # ── Drill-down panel (fixed right overlay) ────────────────────────────
         html.Div(
@@ -1052,13 +1178,14 @@ def layout(**_):
                 id="tp-panel-body",
                 style={
                     "position": "fixed", "top": "0", "right": "0",
-                    "height": "100vh", "width": "400px",
+                    "height": "100vh", "width": "760px",
                     "background": "rgb(17,24,39)",
                     "borderLeft": f"1px solid {_BD}",
                     "overflowY": "auto", "padding": "24px 20px",
                     "zIndex": "100",
                     "boxShadow": "-8px 0 32px rgba(0,0,0,0.6)",
                 },
+                children=_panel_stubs(),
             ),
         ),
 
@@ -1355,15 +1482,16 @@ def _close_panel(n):
 @callback(
     Output("tp-panel-wrap", "style"),
     Output("tp-panel-body", "children"),
-    Input("tp-panel-ctx", "data"),
+    Input("tp-panel-ctx",       "data"),
+    Input("tp-panel-selection", "data"),
     State("tp-team-store",     "data"),
     State("tp-source-store",   "data"),
     State("tp-platform-store", "data"),
 )
-def _render_panel(panel_ctx, team_filter, source_filter, platform_filter):
+def _render_panel(panel_ctx, selection, team_filter, source_filter, platform_filter):
     _PANEL_STYLE = {
         "position": "fixed", "top": "0", "right": "0",
-        "height": "100vh", "width": "400px",
+        "height": "100vh", "width": "760px",
         "background": "rgb(17,24,39)",
         "borderLeft": f"1px solid {_BD}",
         "overflowY": "auto", "padding": "24px 20px",
@@ -1371,7 +1499,128 @@ def _render_panel(panel_ctx, team_filter, source_filter, platform_filter):
         "boxShadow": "-8px 0 32px rgba(0,0,0,0.6)",
     }
     if not panel_ctx:
-        return {"display": "none"}, []
+        return {"display": "none"}, _panel_stubs()
+    # When the panel context changes, treat as fresh open (ignore stale selection)
+    if ctx.triggered_id == "tp-panel-ctx":
+        effective_sel = []
+    else:
+        effective_sel = selection or []
     content = _build_panel_content(panel_ctx, team_filter or "All",
-                                   source_filter or "All", platform_filter or "All")
+                                   source_filter or "All", platform_filter or "All",
+                                   selected_ids=effective_sel)
     return {"display": "block"}, html.Div(content, style=_PANEL_STYLE)
+
+
+# ── Panel selection toggle ────────────────────────────────────────────────────
+@callback(
+    Output("tp-panel-selection", "data"),
+    Input("tp-panel-ctx",      "data"),
+    Input({"type": "tp-panel-item", "wid": ALL}, "n_clicks"),
+    Input("tp-sel-all",   "n_clicks"),
+    Input("tp-sel-clear", "n_clicks"),
+    State("tp-panel-selection", "data"),
+    State("tp-team-store",     "data"),
+    State("tp-source-store",   "data"),
+    State("tp-platform-store", "data"),
+    prevent_initial_call=True,
+)
+def _panel_selection(panel_ctx, _item_clicks, _sel_all, _sel_clear,
+                     current_sel, team, source, platform):
+    trigger = ctx.triggered_id
+
+    # New panel opened — reset selection
+    if trigger == "tp-panel-ctx":
+        return []
+
+    if trigger == "tp-sel-clear":
+        return []
+
+    if trigger == "tp-sel-all":
+        if not panel_ctx:
+            return []
+        all_items = _panel_load(panel_ctx["mk"], team or "All", source or "All", platform or "All")
+        kind, key = panel_ctx.get("kind"), panel_ctx.get("key")
+        if kind == "issue_pri":
+            visible = [x for x in all_items if x["type"] == "issue" and x["pri"] == key]
+        elif kind == "enh_size":
+            visible = [x for x in all_items if x["type"] == "enh" and x["size"] == key]
+        elif kind == "dev_hours":
+            visible = [x for x in all_items if x["dev"] == key]
+        elif kind == "dev_issues":
+            visible = [x for x in all_items if x["dev"] == key and x["type"] == "issue"]
+        elif kind == "dev_enhancements":
+            visible = [x for x in all_items if x["dev"] == key and x["type"] == "enh"]
+        else:
+            visible = all_items
+        return [x["id"] for x in visible]
+
+    # Item row click — toggle
+    if isinstance(trigger, dict) and trigger.get("type") == "tp-panel-item":
+        wid = trigger["wid"]
+        sel = set(current_sel or [])
+        if wid in sel:
+            sel.discard(wid)
+        else:
+            sel.add(wid)
+        return list(sel)
+
+    return no_update
+
+
+# ── Panel move items ──────────────────────────────────────────────────────────
+@callback(
+    Output("tp-panel-ctx",       "data",     allow_duplicate=True),
+    Output("tp-panel-selection", "data",     allow_duplicate=True),
+    Output("tp-grid",            "children", allow_duplicate=True),
+    Input("tp-move-btn", "n_clicks"),
+    State("tp-panel-selection", "data"),
+    State("tp-move-month",     "value"),
+    State("tp-panel-ctx",      "data"),
+    State("tp-team-store",     "data"),
+    State("tp-horizon-store",  "data"),
+    State("tp-source-store",   "data"),
+    State("tp-platform-store", "data"),
+    prevent_initial_call=True,
+)
+def _panel_move(n_clicks, selected_ids, month_idx, panel_ctx,
+                team, horizon, source, platform):
+    if not n_clicks or not selected_ids or month_idx is None:
+        raise PreventUpdate
+
+    # Resolve target iteration month
+    all_months = _rolling_months(12)
+    y2, m2 = all_months[int(month_idx)]
+
+    # Look up canonical iteration_path for that month from existing DB rows
+    iter_pat = f"%{y2} {m2:02d}-%"
+    with engine.connect() as conn:
+        row = conn.execute(text("""
+            SELECT TOP 1 iteration_path FROM work_items_main
+            WHERE iteration_path LIKE :pat AND iteration_path IS NOT NULL
+        """), {"pat": iter_pat}).fetchone()
+
+    if row:
+        new_iter = row.iteration_path
+    else:
+        from datetime import date as _date
+        mn = _date(y2, m2, 1).strftime("%B")
+        new_iter = f"Solo Expenses\\{y2}\\Iteration {y2} {m2:02d}-{mn}"
+
+    # Write to ADO (fire-and-forget) and update local DB optimistically
+    from sync.ado_write import write_iteration
+    ids = [int(i) for i in selected_ids]
+    for wid in ids:
+        write_iteration(wid, new_iter)
+
+    with engine.begin() as conn:
+        for wid in ids:
+            conn.execute(text("""
+                UPDATE work_items_main SET iteration_path = :path
+                WHERE work_item_id = :wid
+            """), {"path": new_iter, "wid": wid})
+
+    # Refresh grid, close panel, clear selection
+    items = _load_items()
+    grid  = _build_grid(items, team or "All", horizon or 365,
+                        source or "All", platform or "All")
+    return None, [], grid

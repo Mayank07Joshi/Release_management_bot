@@ -73,15 +73,29 @@ def bulk_upsert_sprint_history(records: list[dict]) -> None:
         VALUES (:wid, :path, :added_at, :now)
         ON CONFLICT (work_item_id, iteration_path) DO UPDATE
         SET added_to_iteration_at =
-                COALESCE(:added_at, p_sprint_item_history.added_to_iteration_at),
+                CASE
+                    WHEN :added_at IS NOT NULL
+                    THEN :added_at
+                    WHEN EXTRACT(YEAR FROM p_sprint_item_history.added_to_iteration_at) < 9000
+                    THEN p_sprint_item_history.added_to_iteration_at
+                    ELSE NULL
+                END,
             synced_at = :now
     """
     now = datetime.now(timezone.utc)
     with engine.begin() as conn:
         for rec in records:
+            raw_dt = rec.get("added_at")
+            # Reject far-future sentinel dates (ADO uses 9999-01-01 for open items)
+            if raw_dt is not None:
+                try:
+                    if datetime.fromisoformat(str(raw_dt)[:10]).year >= 9000:
+                        raw_dt = None
+                except Exception:
+                    pass
             conn.execute(text(sql), {
                 "wid":      rec["work_item_id"],
                 "path":     rec["iteration_path"],
-                "added_at": rec.get("added_at"),
+                "added_at": raw_dt,
                 "now":      now,
             })

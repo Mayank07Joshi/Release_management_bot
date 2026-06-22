@@ -145,20 +145,21 @@ def layout(**_):
     in_pipe  = int((open_enh["release_date"].str.strip() != "").sum())
 
     # Capacity
-    total_cap_h = len(DEVELOPERS) * _CAP_H
+    known_devs   = {d["name"] for d in DEVELOPERS}
+    total_cap_h  = len(DEVELOPERS) * _CAP_H
     try:
         with engine.connect() as conn:
-            gantt_rows = conn.execute(text("""
-                SELECT main_developer, SUM(COALESCE(original_estimate, 0)) AS total_h
-                FROM agg_gantt_items
-                WHERE '2026-' || LPAD(month_num::TEXT, 2, '0') = :ym
+            cap_rows = conn.execute(text("""
+                SELECT main_developer, SUM(estimated_hours) AS total_h
+                FROM agg_dev_monthly_capacity
+                WHERE ym_str = :ym
                   AND main_developer IS NOT NULL
                 GROUP BY main_developer
             """), {"ym": ym_str}).fetchall()
     except Exception:
-        gantt_rows = []
+        cap_rows = []
 
-    dev_assigned     = {dev: float(h or 0) for dev, h in gantt_rows}
+    dev_assigned     = {dev: float(h or 0) for dev, h in cap_rows if dev in known_devs}
     total_assigned_h = sum(dev_assigned.values())
     cap_pct          = round(total_assigned_h / total_cap_h * 100) if total_cap_h else 0
     over_cap         = sum(1 for h in dev_assigned.values() if h > _CAP_H)

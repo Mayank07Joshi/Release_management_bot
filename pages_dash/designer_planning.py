@@ -9,7 +9,7 @@ from dash import html, dcc, callback, Input, Output, State, ctx, ALL
 from dash.exceptions import PreventUpdate
 from sqlalchemy import text
 
-from config.dev_capacity import DEV_NAMES
+from config.dev_capacity import DEV_NAMES, DESIGNER_NAMES, STORY_OWNER_NAMES
 from data.loader import engine
 from sync.ado_write import write_fields
 
@@ -18,8 +18,8 @@ dash.register_page(__name__, path="/designer-planning", name="Designer Planning"
 # ── Constants ─────────────────────────────────────────────────────────────────
 _DEV_STATES = frozenset(["Active", "Dev InProgress", "Dev Review", "Dev Complete"])
 
-_DESIGNERS    = ["Furquan Nayyar", "Kaushik Awasthi", "Gagandeep Kaur"]
-_STORY_OWNERS = ["Geetika", "Chhavi", "Sunil", "Vineeta"]
+_DESIGNERS    = DESIGNER_NAMES
+_STORY_OWNERS = STORY_OWNER_NAMES
 _SIZES        = ["Big", "Medium", "Small", "Very Small"]
 _SIZE_PTS     = {"Big": 8, "Medium": 5, "Small": 3, "Very Small": 1}
 _SIZE_COLORS  = {
