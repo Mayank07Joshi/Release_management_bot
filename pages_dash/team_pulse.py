@@ -831,14 +831,6 @@ def _build_grid(items: list[dict], team_filter: str, horizon_d: int,
             if x["estimated"]: cell["enh_e"] += 1
             else:              cell["enh_u"] += 1
 
-    # Track which parent enhancement IDs have been counted per (dev, mk) from the items loop.
-    # Task-hours below may introduce enhancements in months other than the parent's own iteration.
-    counted_enh: dict[tuple, set] = {}
-    for x in filtered:
-        if x["type"] == "enh":
-            k = (x["dev"], x["mk"])
-            counted_enh.setdefault(k, set()).add(x["wid"])
-
     # ── Task-level hours: overlay onto dev_data ───────────────────────────────
     # For enhancements with child tasks, use each task's own iteration month
     # so hours land in the month the developer is actually doing the work.
@@ -866,18 +858,6 @@ def _build_grid(items: list[dict], team_filter: str, horizon_d: int,
                                   "enh_e": 0, "enh_u": 0}
         dev_data[dev][mk]["orig_h"]    += th["est_h"]
         dev_data[dev][mk]["has_tasks"] = True
-
-        # If the parent enhancement wasn't already counted for this (dev, mk), add it now.
-        # This surfaces enhancements whose tasks land in a different month than the parent.
-        pid = th.get("parent_id")
-        if pid:
-            k = (dev, mk)
-            if pid not in counted_enh.get(k, set()):
-                if th.get("parent_est") in ("estimated", "estimated_via_tasks"):
-                    dev_data[dev][mk]["enh_e"] += 1
-                else:
-                    dev_data[dev][mk]["enh_u"] += 1
-                counted_enh.setdefault(k, set()).add(pid)
 
     # ── Active cell check (for highlight) ────────────────────────────────────
     def _is_active(kind: str, key: str, mk: str) -> bool:

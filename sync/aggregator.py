@@ -342,12 +342,17 @@ def _build_story_estimation(df: pd.DataFrame, conn, m0: int) -> int:
 
     tasks = df[df["work_item_type"] == "Task"].copy()
     tasks["original_estimate"] = pd.to_numeric(tasks["original_estimate"], errors="coerce").fillna(0)
+    tasks["remaining_work"]    = pd.to_numeric(tasks.get("remaining_work", 0), errors="coerce").fillna(0)
+    # Use original_estimate when set; fall back to remaining_work (matches _panel_load COALESCE logic)
+    tasks["eff_est"] = tasks["original_estimate"].where(
+        tasks["original_estimate"] > 0, other=tasks["remaining_work"]
+    )
     task_groups = (
         tasks.groupby("parent_id")
         .agg(
-            task_count        =("work_item_id",      "count"),
-            task_missing_count=("original_estimate", lambda x: (x == 0).sum()),
-            task_est_sum      =("original_estimate", "sum"),
+            task_count        =("work_item_id", "count"),
+            task_missing_count=("eff_est",      lambda x: (x == 0).sum()),
+            task_est_sum      =("eff_est",      "sum"),
         )
         .reset_index()
     )
