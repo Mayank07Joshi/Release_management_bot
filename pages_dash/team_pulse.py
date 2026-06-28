@@ -4,7 +4,7 @@ import re
 from datetime import date, timedelta
 
 import dash
-from dash import html, dcc, callback, clientside_callback, Input, Output, State, ALL, ctx, no_update
+from dash import html, dcc, callback, Input, Output, State, ALL, ctx, no_update
 from dash.exceptions import PreventUpdate
 from sqlalchemy import text
 
@@ -1607,33 +1607,23 @@ def _panel_move(n_clicks, selected_ids, month_idx, panel_ctx):
     return None, [], msg
 
 
-# ── Toast notification (clientside: show for 3 s then fade out) ───────────────
-clientside_callback(
-    """
-    function(msg) {
-        if (!msg) return [{"display": "none"}, ""];
-        var el = document.getElementById('tp-toast');
-        if (el) {
-            el.style.opacity = '1';
-            clearTimeout(window._tpToastTimer);
-            window._tpToastTimer = setTimeout(function() {
-                el.style.opacity = '0';
-                setTimeout(function() { el.style.display = 'none'; }, 400);
-            }, 2800);
-        }
-        return [{
-            "display": "flex", "alignItems": "center", "gap": "8px",
-            "position": "fixed", "bottom": "24px", "right": "28px",
-            "background": "rgb(6,182,212)", "color": "rgb(11,17,32)",
-            "fontWeight": "700", "fontSize": "13px",
-            "padding": "10px 18px", "borderRadius": "10px",
-            "boxShadow": "0 4px 20px rgba(0,0,0,0.5)",
-            "zIndex": "9999", "opacity": "1",
-            "transition": "opacity 0.4s ease"
-        }, "✓  " + msg];
-    }
-    """,
+# ── Toast notification (server-side: show for 3 s via interval) ───────────────
+@callback(
     Output("tp-toast", "style"),
     Output("tp-toast", "children"),
     Input("tp-toast-store", "data"),
+    prevent_initial_call=True,
 )
+def _show_toast(msg):
+    if not msg:
+        return {"display": "none"}, ""
+    _TOAST_STYLE = {
+        "display": "flex", "alignItems": "center", "gap": "8px",
+        "position": "fixed", "bottom": "24px", "right": "28px",
+        "background": "rgb(6,182,212)", "color": "rgb(11,17,32)",
+        "fontWeight": "700", "fontSize": "13px",
+        "padding": "10px 18px", "borderRadius": "10px",
+        "boxShadow": "0 4px 20px rgba(0,0,0,0.5)",
+        "zIndex": "9999",
+    }
+    return _TOAST_STYLE, f"+ {msg}"
