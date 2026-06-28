@@ -4,7 +4,7 @@ import re
 from datetime import date, timedelta
 
 import dash
-from dash import html, dcc, callback, Input, Output, State, ALL, ctx, no_update
+from dash import html, dcc, callback, clientside_callback, Input, Output, State, ALL, ctx, no_update
 from dash.exceptions import PreventUpdate
 from sqlalchemy import text
 
@@ -1149,6 +1149,12 @@ def layout(**_):
         dcc.Store(id="tp-platform-store",  data="All"),
         dcc.Store(id="tp-panel-ctx",       data=None),
         dcc.Store(id="tp-panel-selection", data=[]),
+        dcc.Store(id="tp-toast-store",     data=None),
+
+        # ── Toast notification ────────────────────────────────────────────────
+        html.Div(id="tp-toast", style={"display": "none"},
+                 children="",
+                 **{"data-toast": "1"}),
 
         # ── Drill-down panel (fixed right overlay) ────────────────────────────
         html.Div(
@@ -1549,21 +1555,16 @@ def _panel_selection(panel_ctx, _item_clicks, _sel_all, _sel_clear,
 
 # ── Panel move items ──────────────────────────────────────────────────────────
 @callback(
-    Output("tp-panel-ctx",       "data",     allow_duplicate=True),
-    Output("tp-panel-selection", "data",     allow_duplicate=True),
-    Output("tp-grid",            "children", allow_duplicate=True),
+    Output("tp-panel-ctx",       "data", allow_duplicate=True),
+    Output("tp-panel-selection", "data", allow_duplicate=True),
+    Output("tp-toast-store",     "data", allow_duplicate=True),
     Input("tp-move-btn", "n_clicks"),
     State("tp-panel-selection", "data"),
     State("tp-move-month",     "value"),
     State("tp-panel-ctx",      "data"),
-    State("tp-team-store",     "data"),
-    State("tp-horizon-store",  "data"),
-    State("tp-source-store",   "data"),
-    State("tp-platform-store", "data"),
     prevent_initial_call=True,
 )
-def _panel_move(n_clicks, selected_ids, month_idx, panel_ctx,
-                team, horizon, source, platform):
+def _panel_move(n_clicks, selected_ids, month_idx, panel_ctx):
     if not n_clicks or not selected_ids or month_idx is None:
         raise PreventUpdate
 
@@ -1599,8 +1600,40 @@ def _panel_move(n_clicks, selected_ids, month_idx, panel_ctx,
                 WHERE work_item_id = :wid
             """), {"path": new_iter, "wid": wid})
 
-    # Refresh grid, close panel, clear selection
-    items = _load_items()
-    grid  = _build_grid(items, team or "All", horizon or 365,
-                        source or "All", platform or "All")
-    return None, [], grid
+    from datetime import date as _d
+    label = _d(y2, m2, 1).strftime("%b-%y")
+    msg = f"Moved {len(ids)} item{'s' if len(ids) != 1 else ''} to {label}"
+    # Close panel and clear selection; _render_grid refreshes the matrix via panel-ctx change
+    return None, [], msg
+
+
+# ── Toast notification (clientside: show for 3 s then fade out) ───────────────
+clientside_callback(
+    """
+    function(msg) {
+        if (!msg) return [{"display": "none"}, ""];
+        var el = document.getElementById('tp-toast');
+        if (el) {
+            el.style.opacity = '1';
+            clearTimeout(window._tpToastTimer);
+            window._tpToastTimer = setTimeout(function() {
+                el.style.opacity = '0';
+                setTimeout(function() { el.style.display = 'none'; }, 400);
+            }, 2800);
+        }
+        return [{
+            "display": "flex", "alignItems": "center", "gap": "8px",
+            "position": "fixed", "bottom": "24px", "right": "28px",
+            "background": "rgb(6,182,212)", "color": "rgb(11,17,32)",
+            "fontWeight": "700", "fontSize": "13px",
+            "padding": "10px 18px", "borderRadius": "10px",
+            "boxShadow": "0 4px 20px rgba(0,0,0,0.5)",
+            "zIndex": "9999", "opacity": "1",
+            "transition": "opacity 0.4s ease"
+        }, "✓  " + msg];
+    }
+    """,
+    Output("tp-toast", "style"),
+    Output("tp-toast", "children"),
+    Input("tp-toast-store", "data"),
+)
