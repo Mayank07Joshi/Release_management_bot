@@ -314,7 +314,8 @@ def _panel_stubs() -> list:
 
 def _build_panel_content(panel_ctx: dict, team_filter: str,
                          source_filter: str = "All", platform_filter: str = "All",
-                         selected_ids: list | None = None) -> html.Div:
+                         selected_ids: list | None = None,
+                         moved_items: dict | None = None) -> html.Div:
     kind = panel_ctx["kind"]
     key  = panel_ctx["key"]
     mk   = panel_ctx["mk"]
@@ -402,6 +403,20 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
                 html.Div(x["dev"], style={
                     "fontSize": "10px", "color": _DIM, "marginTop": "1px",
                 }),
+                *(
+                    [html.Span(
+                        f"Moved → {(moved_items or {}).get(str(x['id']))}",
+                        style={
+                            "display": "inline-block", "marginTop": "4px",
+                            "background": "rgba(6,182,212,0.15)",
+                            "color": "rgb(6,182,212)",
+                            "border": "1px solid rgba(6,182,212,0.3)",
+                            "borderRadius": "4px", "padding": "1px 7px",
+                            "fontSize": "10px", "fontWeight": "600",
+                        }
+                    )]
+                    if (moved_items and str(x["id"]) in moved_items) else []
+                ),
             ], style={"minWidth": "0", "flex": "1"}),
             html.Span(h_str, style={
                 "fontFamily": _MONO, "fontWeight": "600", "color": h_color,
@@ -1150,6 +1165,7 @@ def layout(**_):
         dcc.Store(id="tp-panel-ctx",       data=None),
         dcc.Store(id="tp-panel-selection", data=[]),
         dcc.Store(id="tp-toast-store",     data=None),
+        dcc.Store(id="tp-moved-store",     data={}),
 
         # ── Toast notification ────────────────────────────────────────────────
         html.Div(id="tp-toast", style={"display": "none"},
@@ -1434,9 +1450,26 @@ def _select_platform(clicks):
     Input("tp-panel-ctx",      "data"),
 )
 def _render_grid(team, horizon, source, platform, panel_ctx):
+    # Skip rebuild when a panel just opened — avoids a visible matrix flash on cell click.
+    # Rebuild still runs on panel close (panel_ctx=None) so fresh data is shown after moves.
+    if ctx.triggered_id == "tp-panel-ctx" and panel_ctx is not None:
+        raise PreventUpdate
     items = _load_items()
     return _build_grid(items, team or "All", horizon or 365,
                        source or "All", platform or "All", panel_ctx)
+
+
+@callback(
+    Output("tp-moved-store", "data", allow_duplicate=True),
+    Input("tp-panel-ctx", "data"),
+    prevent_initial_call=True,
+)
+def _clear_moved_on_open(panel_ctx):
+    # Reset move tags when a new panel cell is opened (new session).
+    # Don't clear on close — panel disappears anyway.
+    if panel_ctx is not None:
+        return {}
+    raise PreventUpdate
 
 
 # ── Panel callbacks ───────────────────────────────────────────────────────────
@@ -1473,8 +1506,10 @@ def _close_panel(n):
     State("tp-team-store",     "data"),
     State("tp-source-store",   "data"),
     State("tp-platform-store", "data"),
+    State("tp-moved-store",    "data"),
 )
-def _render_panel(panel_ctx, selection, team_filter, source_filter, platform_filter):
+def _render_panel(panel_ctx, selection, team_filter, source_filter, platform_filter,
+                  moved_items):
     _PANEL_STYLE = {
         "position": "fixed", "top": "0", "right": "0",
         "height": "100vh", "width": "760px",
@@ -1493,7 +1528,8 @@ def _render_panel(panel_ctx, selection, team_filter, source_filter, platform_fil
         effective_sel = selection or []
     content = _build_panel_content(panel_ctx, team_filter or "All",
                                    source_filter or "All", platform_filter or "All",
-                                   selected_ids=effective_sel)
+                                   selected_ids=effective_sel,
+                                   moved_items=moved_items or {})
     return {"display": "block"}, html.Div(content, style=_PANEL_STYLE)
 
 
@@ -1555,16 +1591,16 @@ def _panel_selection(panel_ctx, _item_clicks, _sel_all, _sel_clear,
 
 # ── Panel move items ──────────────────────────────────────────────────────────
 @callback(
-    Output("tp-panel-ctx",       "data", allow_duplicate=True),
     Output("tp-panel-selection", "data", allow_duplicate=True),
-    Output("tp-toast-store",     "data", allow_duplicate=True),
+    Output("tp-moved-store",     "data", allow_duplicate=True),
     Input("tp-move-btn", "n_clicks"),
     State("tp-panel-selection", "data"),
     State("tp-move-month",     "value"),
     State("tp-panel-ctx",      "data"),
+    State("tp-moved-store",    "data"),
     prevent_initial_call=True,
 )
-def _panel_move(n_clicks, selected_ids, month_idx, panel_ctx):
+def _panel_move(n_clicks, selected_ids, month_idx, panel_ctx, moved_store):
     if not n_clicks or not selected_ids or month_idx is None:
         raise PreventUpdate
 
@@ -1603,9 +1639,12 @@ def _panel_move(n_clicks, selected_ids, month_idx, panel_ctx):
 
     from datetime import date as _d
     label = _d(y2, m2, 1).strftime("%b-%y")
-    msg = f"Moved {len(ids)} item{'s' if len(ids) != 1 else ''} to {label}"
-    # Close panel and clear selection; _render_grid refreshes the matrix via panel-ctx change
-    return None, [], msg
+    # Accumulate tags (user may move more items without closing the panel)
+    updated = dict(moved_store or {})
+    for wid in ids:
+        updated[str(wid)] = label
+    # Keep panel open — clear selection so user can pick more; tags appear inline
+    return [], updated
 
 
 # ── Toast notification (server-side: show for 3 s via interval) ───────────────
