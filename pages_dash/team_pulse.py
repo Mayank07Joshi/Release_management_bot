@@ -1576,8 +1576,9 @@ def _panel_move(n_clicks, selected_ids, month_idx, panel_ctx):
     iter_pat = f"%{y2} {m2:02d}-%"
     with engine.connect() as conn:
         row = conn.execute(text("""
-            SELECT TOP 1 iteration_path FROM work_items_main
+            SELECT iteration_path FROM work_items_main
             WHERE iteration_path LIKE :pat AND iteration_path IS NOT NULL
+            LIMIT 1
         """), {"pat": iter_pat}).fetchone()
 
     if row:
