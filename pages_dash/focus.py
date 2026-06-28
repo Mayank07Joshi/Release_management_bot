@@ -771,7 +771,7 @@ _ISSUE_TYPE_OPTS = [
     ("Task",     "Task",     "Tasks"),
 ]
 
-_ALL_ITEM_TYPES = frozenset({"Bug", "Bug_UI", "Bug_Text", "Task", "Enhancement", "User Story"})
+_ALL_ITEM_TYPES = frozenset({"Bug", "Bug_UI", "Bug_Text", "Enhancement", "User Story"})
 
 
 def _adl_chip(label, chip_type, val, active):
