@@ -1593,14 +1593,20 @@ def _panel_selection(panel_ctx, _item_clicks, _sel_all, _sel_clear,
 @callback(
     Output("tp-panel-selection", "data", allow_duplicate=True),
     Output("tp-moved-store",     "data", allow_duplicate=True),
+    Output("tp-grid",            "children", allow_duplicate=True),
     Input("tp-move-btn", "n_clicks"),
     State("tp-panel-selection", "data"),
     State("tp-move-month",     "value"),
     State("tp-panel-ctx",      "data"),
     State("tp-moved-store",    "data"),
+    State("tp-team-store",     "data"),
+    State("tp-horizon-store",  "data"),
+    State("tp-source-store",   "data"),
+    State("tp-platform-store", "data"),
     prevent_initial_call=True,
 )
-def _panel_move(n_clicks, selected_ids, month_idx, panel_ctx, moved_store):
+def _panel_move(n_clicks, selected_ids, month_idx, panel_ctx, moved_store,
+                team, horizon, source, platform):
     if not n_clicks or not selected_ids or month_idx is None:
         raise PreventUpdate
 
@@ -1639,12 +1645,16 @@ def _panel_move(n_clicks, selected_ids, month_idx, panel_ctx, moved_store):
 
     from datetime import date as _d
     label = _d(y2, m2, 1).strftime("%b-%y")
-    # Accumulate tags (user may move more items without closing the panel)
     updated = dict(moved_store or {})
     for wid in ids:
         updated[str(wid)] = label
-    # Keep panel open — clear selection so user can pick more; tags appear inline
-    return [], updated
+
+    # Rebuild matrix inline — no panel-ctx change, so _render_grid won't fire;
+    # this is the only callback touching tp-grid right now, no conflict.
+    items = _load_items()
+    grid  = _build_grid(items, team or "All", horizon or 365,
+                        source or "All", platform or "All")
+    return [], updated, grid
 
 
 # ── Toast notification (server-side: show for 3 s via interval) ───────────────
