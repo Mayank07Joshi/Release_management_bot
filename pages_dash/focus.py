@@ -352,7 +352,7 @@ def _adl_type_cb(n_clicks):
 
 
 @callback(Output("adl-team", "data"),
-          Input({"type": "adl-team-chip", "val": ALL}, "n_clicks"),
+          Input({"type": "adl-platform-chip", "val": ALL}, "n_clicks"),
           prevent_initial_call=True)
 def _adl_team(n_clicks):
     if not any(n_clicks):
@@ -754,14 +754,24 @@ _CLOSED_STATES = frozenset([
     "No Customer Response", "Userstory Update",
 ])
 
-_TEAM_LABEL = {
-    "Development": "Web Dev",
-    "Mobile":      "Mobile Dev",
-    "Design/Video":"Design",
-    "QA":          "QA",
-    "User Story":  "Story Writers",
-    "Management":  "Management",
+# Platform filter: maps display name → area value(s) predicate
+_PLATFORM_AREAS: dict[str, callable] = {
+    "Web":     lambda a: a in ("Web", "Web & Mobile"),
+    "Mobile":  lambda a: "Mobile" in str(a) or a == "Web & Mobile",
+    "iOS":     lambda a: a in ("iOS", "Mobile (iOS & Android)"),
+    "Android": lambda a: a in ("Android", "Mobile (iOS & Android)"),
+    "API":     lambda a: a == "API",
 }
+
+# Issue type filter: store key → work_item_type value, display label
+_ISSUE_TYPE_OPTS = [
+    ("Bug",      "Bug",      "Bugs"),
+    ("Bug_UI",   "Bug_UI",   "Bug-UI"),
+    ("Bug_Text", "Bug_Text", "Bug-Text"),
+    ("Task",     "Task",     "Tasks"),
+]
+
+_ALL_ITEM_TYPES = frozenset({"Bug", "Bug_UI", "Bug_Text", "Task", "Enhancement", "User Story"})
 
 
 def _adl_chip(label, chip_type, val, active):
@@ -778,7 +788,7 @@ def _adl_chip(label, chip_type, val, active):
 
 
 def _render_sprint_adl(horizon: str, source: str, adl_type: str, team: str):
-    from config.team_mapping import TEAM_MAPPING, TEAMS_LIST
+    pass  # team_mapping no longer needed here
 
     today         = date.today()
     n_days        = {"30d": 30, "90d": 90, "180d": 180, "365d": 365}.get(horizon, 365)
@@ -792,7 +802,7 @@ def _render_sprint_adl(horizon: str, source: str, adl_type: str, team: str):
             df = pd.read_sql(text("""
                 SELECT work_item_id, work_item_type, state,
                        type AS source_type, assigned_to,
-                       created_date, closed_date
+                       area, created_date, closed_date
                 FROM work_items_main
                 WHERE created_date IS NOT NULL
             """), conn)
@@ -811,35 +821,40 @@ def _render_sprint_adl(horizon: str, source: str, adl_type: str, team: str):
         s = pd.to_datetime(df[col], utc=True, errors="coerce")
         df[col] = s.dt.tz_localize(None) if s.dt.tz is None else s.dt.tz_convert(None)
 
-    # ── Derive team ────────────────────────────────────────────────────────
-    def _map_team(name):
-        clean = str(name).split(" <")[0].strip()
-        return TEAM_MAPPING.get(clean, "Unassigned")
-
-    df["team"]        = df["assigned_to"].apply(_map_team)
     df["source_type"] = df["source_type"].fillna("").astype(str).str.strip()
+    df["area"]        = df["area"].fillna("Unassigned").astype(str).str.strip()
 
-    # ── Apply type filter (All = Issues + Enhancements only) ──────────────
-    _all_types = ISSUE_TYPES | ENH_TYPES
-    if adl_type == "Issues":
-        df = df[df["work_item_type"].isin(ISSUE_TYPES)]
-    elif adl_type == "Enhancements":
-        df = df[df["work_item_type"].isin(ENH_TYPES)]
+    # ── Apply type filter ──────────────────────────────────────────────────
+    if adl_type != "All":
+        df = df[df["work_item_type"] == adl_type]
     else:
-        df = df[df["work_item_type"].isin(_all_types)]
+        df = df[df["work_item_type"].isin(_ALL_ITEM_TYPES)]
 
     # ── Apply source filter ───────────────────────────────────────────────
     if source != "All":
         df = df[df["source_type"] == source]
 
-    # Per-team counts for chip labels (before team filter)
-    team_counts: dict[str, int] = {"All": len(df)}
-    for t in TEAMS_LIST:
-        team_counts[t] = int((df["team"] == t).sum())
+    # ── Compute in-scope mask for chip counts (horizon window, pre-platform) ──
+    _is_closed_pre = df["state"].isin(_CLOSED_STATES)
+    _in_scope_mask = (
+        (df["created_date"] >= h_ts) |
+        (
+            (_is_closed_pre & df["closed_date"].notna() & (df["closed_date"] >= h_ts)) |
+            ~_is_closed_pre
+        )
+    )
+    df_scope = df[_in_scope_mask]
 
-    # ── Apply team filter ─────────────────────────────────────────────────
+    # Platform counts (from in-scope items, before platform filter)
+    plat_counts: dict[str, int] = {"All": len(df_scope)}
+    for plat, fn in _PLATFORM_AREAS.items():
+        plat_counts[plat] = int(df_scope["area"].apply(fn).sum())
+
+    # ── Apply platform filter ─────────────────────────────────────────────
     if team != "All":
-        df = df[df["team"] == team]
+        fn = _PLATFORM_AREAS.get(team)
+        if fn:
+            df = df[df["area"].apply(fn)]
 
     # ── Compute KPIs ──────────────────────────────────────────────────────
     is_closed    = df["state"].isin(_CLOSED_STATES)
@@ -976,41 +991,34 @@ def _render_sprint_adl(horizon: str, source: str, adl_type: str, team: str):
     )
 
     # ── Chip helpers ──────────────────────────────────────────────────────
-    # Team chips
-    team_chip_rows = [("All", "All")] + [(t, t) for t in TEAMS_LIST]
-    team_chips = []
-    for key, t_key in team_chip_rows:
-        display = _TEAM_LABEL.get(key, key)
-        cnt = team_counts.get(t_key, 0)
-        team_chips.append(_adl_chip(
-            f"{display}  {cnt}", "adl-team-chip", t_key, team == t_key,
-        ))
+    # Platform chips (from in-scope counts computed before platform filter)
+    plat_chip_rows = [("All", "All")] + [(p, p) for p in _PLATFORM_AREAS]
+    plat_chips = [
+        _adl_chip(f"{key}  {plat_counts.get(key, 0)}", "adl-platform-chip", key, team == key)
+        for key, _ in plat_chip_rows
+    ]
 
     # Horizon chips
     h_chips = [_adl_chip(h, "adl-horizon-chip", h, horizon == h)
                for h in ("30d", "90d", "180d", "365d")]
 
-    # Source chips
+    # Source chips (from in-scope df_scope, before platform filter)
     src_counts = {
-        "All":      len(df),
-        "Customer": int((df["source_type"] == "Customer").sum()),
-        "Internal": int((df["source_type"] == "Internal").sum()),
+        "All":      len(df_scope),
+        "Customer": int((df_scope["source_type"] == "Customer").sum()),
+        "Internal": int((df_scope["source_type"] == "Internal").sum()),
     }
     s_chips = [
         _adl_chip(f"{s}  {src_counts[s]}", "adl-source-chip", s, source == s)
         for s in ("All", "Customer", "Internal")
     ]
 
-    # Type chips
-    type_counts = {
-        "All":          len(df),
-        "Issues":       int(df["work_item_type"].isin(ISSUE_TYPES).sum()),
-        "Enhancements": int(df["work_item_type"].isin(ENH_TYPES).sum()),
-    }
-    t_chips = [
-        _adl_chip(f"{lbl}  {type_counts[lbl]}", "adl-type-chip", lbl, adl_type == lbl)
-        for lbl in ("All", "Issues", "Enhancements")
-    ]
+    # Issue type chips (from in-scope df_scope, before platform filter)
+    _scope_all = len(df_scope)
+    t_chips = [_adl_chip(f"All  {_scope_all}", "adl-type-chip", "All", adl_type == "All")]
+    for key, wt, lbl in _ISSUE_TYPE_OPTS:
+        cnt = int((df_scope["work_item_type"] == wt).sum())
+        t_chips.append(_adl_chip(f"{lbl}  {cnt}", "adl-type-chip", key, adl_type == key))
 
     subtitle = f"Rolling {horizon} from {horizon_start.strftime('%b-%y')}"
     running_dict = {label: val for label, val in zip(xlabels, running)}
@@ -1025,8 +1033,8 @@ def _render_sprint_adl(horizon: str, source: str, adl_type: str, team: str):
             html.Span(subtitle, style={"fontSize": "12px", "color": MT}),
         ], style={"marginBottom": "14px", "display": "flex", "alignItems": "baseline", "flexWrap": "wrap"}),
 
-        # Team chips row
-        html.Div(team_chips, style={
+        # Platform chips row
+        html.Div(plat_chips, style={
             "display": "flex", "gap": "8px", "flexWrap": "wrap", "marginBottom": "12px",
         }),
 
@@ -1047,7 +1055,7 @@ def _render_sprint_adl(horizon: str, source: str, adl_type: str, team: str):
                 *s_chips,
                 html.Div(style={"width": "1px", "background": "rgba(255,255,255,0.12)",
                                 "margin": "0 10px", "alignSelf": "stretch"}),
-                html.Span("TYPE", style={
+                html.Span("ISSUES", style={
                     "fontSize": "9px", "fontWeight": "700", "color": MT,
                     "letterSpacing": "0.07em", "whiteSpace": "nowrap",
                 }),
@@ -1515,7 +1523,7 @@ def _adl_panel_render(selected_month, adl_horizon, adl_source, adl_type, adl_tea
         with engine.connect() as conn:
             df = pd.read_sql(text("""
                 SELECT work_item_id, work_item_type, state, title,
-                       type AS source_type, assigned_to,
+                       type AS source_type, assigned_to, area,
                        created_date, closed_date, priority
                 FROM work_items_main
                 WHERE created_date IS NOT NULL
@@ -1535,25 +1543,21 @@ def _adl_panel_render(selected_month, adl_horizon, adl_source, adl_type, adl_tea
     df["priority"]    = pd.to_numeric(df["priority"], errors="coerce").fillna(4).astype(int)
     df["source_type"] = df["source_type"].fillna("").astype(str).str.strip()
 
-    from config.team_mapping import TEAM_MAPPING
-    def _map_team(name):
-        clean = str(name).split(" <")[0].strip()
-        return TEAM_MAPPING.get(clean, "Unassigned")
-    df["team"] = df["assigned_to"].apply(_map_team)
+    df["area"] = df["area"].fillna("Unassigned").astype(str).str.strip()
 
-    # Apply type filter (same logic as chart)
-    _all_types = ISSUE_TYPES | ENH_TYPES
-    if adl_type == "Issues":
-        df = df[df["work_item_type"].isin(ISSUE_TYPES)]
-    elif adl_type == "Enhancements":
-        df = df[df["work_item_type"].isin(ENH_TYPES)]
+    # Apply type filter
+    if adl_type != "All":
+        df = df[df["work_item_type"] == adl_type]
     else:
-        df = df[df["work_item_type"].isin(_all_types)]
+        df = df[df["work_item_type"].isin(_ALL_ITEM_TYPES)]
 
     if adl_source != "All":
         df = df[df["source_type"] == adl_source]
     if adl_team != "All":
-        df = df[df["team"] == adl_team]
+        fn = _PLATFORM_AREAS.get(adl_team)
+        if fn:
+            df["area"] = df.get("area", pd.Series([""] * len(df))).fillna("").astype(str).str.strip()
+            df = df[df["area"].apply(fn)]
 
     is_closed = df["state"].isin(_CLOSED_STATES)
 
