@@ -824,6 +824,29 @@ def _render_sprint_adl(horizon: str, source: str, adl_type: str, team: str):
     df["source_type"] = df["source_type"].fillna("").astype(str).str.strip()
     df["area"]        = df["area"].fillna("Unassigned").astype(str).str.strip()
 
+    # ── Compute chip counts from full df BEFORE user filters ──────────────
+    # Use the same added_mask | opening_mask logic as the KPIs so counts are
+    # consistent with what the chart covers.  Computing before type/source
+    # filters means each chip always shows a non-zero count regardless of
+    # the current selection (cross-filter pattern).
+    _fc      = df["state"].isin(_CLOSED_STATES)
+    _fc_added   = (
+        (df["created_date"] >= h_ts) & (df["created_date"] <= today_ts) &
+        (~_fc | df["closed_date"].notna())
+    )
+    _fc_opening = (
+        (df["created_date"] < h_ts) &
+        (~_fc | (_fc & df["closed_date"].notna() & (df["closed_date"] >= h_ts)))
+    )
+    df_scope_base = df[_fc_added | _fc_opening]
+    # KPI scope = no Tasks (preserve original analysis scope)
+    df_scope_kpi = df_scope_base[df_scope_base["work_item_type"].isin(_ALL_ITEM_TYPES)]
+
+    # Platform counts (KPI types only, cross-filter — independent of type/source/platform)
+    plat_counts: dict[str, int] = {"All": len(df_scope_kpi)}
+    for plat, fn in _PLATFORM_AREAS.items():
+        plat_counts[plat] = int(df_scope_kpi["area"].apply(fn).sum())
+
     # ── Apply type filter ──────────────────────────────────────────────────
     if adl_type != "All":
         df = df[df["work_item_type"] == adl_type]
@@ -833,22 +856,6 @@ def _render_sprint_adl(horizon: str, source: str, adl_type: str, team: str):
     # ── Apply source filter ───────────────────────────────────────────────
     if source != "All":
         df = df[df["source_type"] == source]
-
-    # ── Compute in-scope mask for chip counts (horizon window, pre-platform) ──
-    _is_closed_pre = df["state"].isin(_CLOSED_STATES)
-    _in_scope_mask = (
-        (df["created_date"] >= h_ts) |
-        (
-            (_is_closed_pre & df["closed_date"].notna() & (df["closed_date"] >= h_ts)) |
-            ~_is_closed_pre
-        )
-    )
-    df_scope = df[_in_scope_mask]
-
-    # Platform counts (from in-scope items, before platform filter)
-    plat_counts: dict[str, int] = {"All": len(df_scope)}
-    for plat, fn in _PLATFORM_AREAS.items():
-        plat_counts[plat] = int(df_scope["area"].apply(fn).sum())
 
     # ── Apply platform filter ─────────────────────────────────────────────
     if team != "All":
@@ -1002,22 +1009,24 @@ def _render_sprint_adl(horizon: str, source: str, adl_type: str, team: str):
     h_chips = [_adl_chip(h, "adl-horizon-chip", h, horizon == h)
                for h in ("30d", "90d", "180d", "365d")]
 
-    # Source chips (from in-scope df_scope, before platform filter)
+    # Source chips (cross-filter: use df_scope_kpi, independent of source selection)
     src_counts = {
-        "All":      len(df_scope),
-        "Customer": int((df_scope["source_type"] == "Customer").sum()),
-        "Internal": int((df_scope["source_type"] == "Internal").sum()),
+        "All":      len(df_scope_kpi),
+        "Customer": int((df_scope_kpi["source_type"] == "Customer").sum()),
+        "Internal": int((df_scope_kpi["source_type"] == "Internal").sum()),
     }
     s_chips = [
         _adl_chip(f"{s}  {src_counts[s]}", "adl-source-chip", s, source == s)
         for s in ("All", "Customer", "Internal")
     ]
 
-    # Issue type chips (from in-scope df_scope, before platform filter)
-    _scope_all = len(df_scope)
-    t_chips = [_adl_chip(f"All  {_scope_all}", "adl-type-chip", "All", adl_type == "All")]
+    # Issue type chips (cross-filter: use df_scope_kpi; Task uses df_scope_base)
+    t_chips = [_adl_chip(f"All  {len(df_scope_kpi)}", "adl-type-chip", "All", adl_type == "All")]
     for key, wt, lbl in _ISSUE_TYPE_OPTS:
-        cnt = int((df_scope["work_item_type"] == wt).sum())
+        if wt == "Task":
+            cnt = int((df_scope_base["work_item_type"] == "Task").sum())
+        else:
+            cnt = int((df_scope_kpi["work_item_type"] == wt).sum())
         t_chips.append(_adl_chip(f"{lbl}  {cnt}", "adl-type-chip", key, adl_type == key))
 
     subtitle = f"Rolling {horizon} from {horizon_start.strftime('%b-%y')}"

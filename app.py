@@ -89,10 +89,11 @@ _NAV_TREE = [
         ("Addition & Deletion", "/addition-deletion", "◉", True),
     ]),
     ("ENHANCEMENTS", "#818cf8", [
-        ("Estimation Status",  "/unestimated",       "⊙", True),
-        ("Story Readiness",    "/planning",           "✓", True),
-        ("Designer Planning",  "/designer-planning",  "∖", False),
-        ("Release Status",     "/release-status",     "▶", False),
+        ("Estimation Status",   "/unestimated",         "⊙", True),
+        ("Story Readiness",     "/planning",             "✓", True),
+        ("Delivery Timeline",   "/delivery-timeline",    "▦", True),
+        ("Designer Planning",   "/designer-planning",    "∖", False),
+        ("Release Status",      "/release-status",       "▶", False),
     ]),
     ("BUGS & ISSUES", "#f87171", [
         ("Estimation Status", "/bugs-unestimated", "⊙", True),

@@ -2984,21 +2984,19 @@ def _build_full_layout():
 
         # ── Main tab navigation ────────────────────────────────────────────────
         html.Div([
-            *[html.Button(
-                lbl, id={"type": "plan-main-tab-btn", "tab": tid}, n_clicks=0,
+            html.Button(
+                "Story Readiness",
+                id={"type": "plan-main-tab-btn", "tab": "readiness"}, n_clicks=0,
                 style={
-                    "background":   P_DIM if i == 0 else "transparent",
-                    "border":       f"1px solid {P}" if i == 0 else f"1px solid {BD}",
+                    "background":   P_DIM,
+                    "border":       f"1px solid {P}",
                     "borderRadius": "8px",
-                    "color":        TX if i == 0 else MT,
+                    "color":        TX,
                     "fontSize":     "13px",
-                    "fontWeight":   "600" if i == 0 else "400",
+                    "fontWeight":   "600",
                     "padding":      "7px 18px", "cursor": "pointer", "marginRight": "6px",
                 },
-            ) for i, (lbl, tid) in enumerate([
-                ("Story Readiness",   "readiness"),
-                ("Delivery Timeline", "gantt"),
-            ])],
+            ),
         ], style={"display": "flex", "alignItems": "center", "gap": "4px",
                   "marginBottom": "20px", "borderBottom": f"1px solid {BD}",
                   "paddingBottom": "12px"}),
@@ -5280,7 +5278,7 @@ clientside_callback(
     prevent_initial_call=True,
 )
 def _gantt_render(view, active_tab, type_filter, prio_filter, expanded):
-    if active_tab != "devcap":
+    if active_tab != "gantt":
         return no_update
     ws, we, _ = _gantt_window(view or "0-12")
     return _build_gantt_html(
