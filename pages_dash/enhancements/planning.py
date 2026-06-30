@@ -2943,8 +2943,8 @@ def _build_full_layout():
         f"{_today.strftime('%b %Y')} · Sprint 1 · "
         f"Day {_today.day} of {_ld} · Default: {_dch}h/person"
     )
-    _fm  = _sys.modules.get("pages_dash.focus")
-    _cm  = _sys.modules.get("pages_dash.capacity_planner")
+    _fm  = _sys.modules.get("pages_dash.trends.focus")
+    _cm  = _sys.modules.get("pages_dash.enhancements.capacity_planner")
     _focus_section  = _fm.focus_tab_content()  if _fm  else html.Div("VSTS Focus Area loading…",   style={"padding": "20px", "color": MT})
     _devcap_section = _cm.layout()  if _cm  else html.Div("Developer Capacity loading…", style={"padding": "20px", "color": MT})
 

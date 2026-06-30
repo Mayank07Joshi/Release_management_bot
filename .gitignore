@@ -36,3 +36,4 @@ Thumbs.db
 
 # Local test files — not ready to push
 tests/upload_test_cases.py
+docs/Enhancement*.docx

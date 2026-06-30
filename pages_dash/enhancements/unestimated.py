@@ -35,7 +35,7 @@ _BACKDROP_CLOSED = {
 
 def layout(**_):
     # Lazy import — planning.py is already in sys.modules when layout() is called
-    from pages_dash.planning import _load_unestimated_data, _build_unest_tab
+    from pages_dash.enhancements.planning import _load_unestimated_data, _build_unest_tab
 
     all_items   = _load_unestimated_data()
     unest_items = [s for s in all_items if s["type"] == "Enhancement"]

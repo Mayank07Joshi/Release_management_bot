@@ -690,7 +690,7 @@ def _render_gantt(view_tab, gantt_view, gantt_type):
     if view_tab != "gantt":
         return no_update
     try:
-        from pages_dash.planning import _build_gantt_html, _gantt_window
+        from pages_dash.enhancements.planning import _build_gantt_html, _gantt_window
         ws, we, _ = _gantt_window(gantt_view or "0-12")
         return _build_gantt_html(
             ws, we,

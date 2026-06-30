@@ -100,9 +100,10 @@ _NAV_TREE = [
         ("Issue Planning",   "/issue-planning",   "≡", True),
     ]),
     ("CAPACITY", "#60a5fa", [
-        ("Team Pulse",         "/team-pulse",   "⊡", True),
-        ("Developer Capacity", "/dev-capacity", "≡", True),
-        ("Admin Hours",        "/admin-hours",  "⊙", False),
+        ("Team Pulse",         "/team-pulse",       "⊡", True),
+        ("Developer Capacity", "/dev-capacity",     "≡", True),
+        ("Leave Management",   "/leave-management", "◑", True),
+        ("Admin Hours",        "/admin-hours",      "⊙", False),
     ]),
     ("REFERENCE", "#8892a4", [
         ("VSTS Focus Area", "/summary",  "◇", True),
@@ -443,6 +444,12 @@ if __name__ == "__main__":
         init_leave_tables()
     except Exception as _e:
         logging.getLogger(__name__).warning("Leave table init failed: %s", _e)
+
+    try:
+        from db.admin_hours import init_admin_hours_tables
+        init_admin_hours_tables()
+    except Exception as _e:
+        logging.getLogger(__name__).warning("Admin hours table init failed: %s", _e)
 
     try:
         from db.report_requests import init_table as _init_rq

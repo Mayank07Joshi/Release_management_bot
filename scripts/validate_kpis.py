@@ -9,7 +9,7 @@ Run from project root:
 Output: console report + validate_kpis_report.txt
 """
 
-import os, sys
+import os, sys; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from datetime import datetime, date, timedelta
 import pandas as pd
 import psycopg2

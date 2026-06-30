@@ -920,6 +920,20 @@ def _build_grid(items: list[dict], team_filter: str, horizon_d: int,
             ))
         tbody_rows.append(html.Tr(cells))
 
+    # Issues sub-total row
+    iss_sub_cells = [html.Td("Issues sub-total", style={
+        **_TD_S, "textAlign": "left", "paddingLeft": "16px",
+        "fontWeight": "700", "color": _RED, "fontSize": "11px",
+        "background": _BG_HEAD, "borderTop": f"1px solid {_BD}",
+    })]
+    for mk in mks:
+        n = sum(iss_by_pri[p][mk] for p in _PRI_LABELS)
+        iss_sub_cells.append(_num_cell(n, style={
+            "background": _BG_HEAD, "fontWeight": "700",
+            "color": _RED, "borderTop": f"1px solid {_BD}",
+        }))
+    tbody_rows.append(html.Tr(iss_sub_cells))
+
     # ── Enhancements section ──────────────────────────────────────────────────
     tbody_rows.append(_section_row("Enhancements", n_cols))
     for sz in _ENH_SIZES:
@@ -932,8 +946,22 @@ def _build_grid(items: list[dict], team_filter: str, horizon_d: int,
             ))
         tbody_rows.append(html.Tr(cells))
 
-    # Total row
-    total_cells = [html.Td("Total", style={
+    # Enhancements sub-total row
+    enh_sub_cells = [html.Td("Enhancements sub-total", style={
+        **_TD_S, "textAlign": "left", "paddingLeft": "16px",
+        "fontWeight": "700", "color": _GREEN, "fontSize": "11px",
+        "background": _BG_HEAD, "borderTop": f"1px solid {_BD}",
+    })]
+    for mk in mks:
+        n = sum(enh_by_sz[s][mk] for s in _ENH_SIZES)
+        enh_sub_cells.append(_num_cell(n, style={
+            "background": _BG_HEAD, "fontWeight": "700",
+            "color": _GREEN, "borderTop": f"1px solid {_BD}",
+        }))
+    tbody_rows.append(html.Tr(enh_sub_cells))
+
+    # Grand total row
+    total_cells = [html.Td("Grand Total", style={
         **_TD_S, "textAlign": "left", "paddingLeft": "16px",
         "fontWeight": "700", "color": _FG, "fontSize": "12px",
         "background": _BG_HEAD,
@@ -1450,10 +1478,6 @@ def _select_platform(clicks):
     Input("tp-panel-ctx",      "data"),
 )
 def _render_grid(team, horizon, source, platform, panel_ctx):
-    # Skip rebuild when a panel just opened — avoids a visible matrix flash on cell click.
-    # Rebuild still runs on panel close (panel_ctx=None) so fresh data is shown after moves.
-    if ctx.triggered_id == "tp-panel-ctx" and panel_ctx is not None:
-        raise PreventUpdate
     items = _load_items()
     return _build_grid(items, team or "All", horizon or 365,
                        source or "All", platform or "All", panel_ctx)

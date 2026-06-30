@@ -98,18 +98,27 @@ def _story_status_badge(wid: int):
                  bool(g.html_screens), bool(g.sn_signoff)]) if g else 0
     total = 5
     complete = done == total
-    c = _GREEN if complete else (_AMBER if done > 0 else _DIM)
-    r = _rgb(c)
+
+    def _pill(label, active, color):
+        r = _rgb(color)
+        return html.Span(label, style={
+            "fontSize": "12px", "fontWeight": "700" if active else "500",
+            "color": color if active else _MT,
+            "background": f"rgba({r},0.18)" if active else _BG_HEAD,
+            "border": f"1px solid rgba({r},0.5)" if active else f"1px solid {_BD}",
+            "borderRadius": "7px", "padding": "6px 13px", "cursor": "default",
+        })
+
     return html.Div([
-        html.Span("Complete" if complete else "Incomplete",
-                  style={"fontSize": "12px", "fontWeight": "700", "color": c}),
-        html.Span(f"  {done}/{total} gates",
-                  style={"fontSize": "10.5px", "color": _DIM, "marginLeft": "6px"}),
-    ], style={
-        "padding": "6px 10px", "borderRadius": "7px",
-        "background": f"rgba({r},0.1)", "border": f"1px solid rgba({r},0.25)",
-        "display": "inline-flex", "alignItems": "center",
-    })
+        html.Div([
+            _pill("Complete",   complete,      _GREEN),
+            _pill("Incomplete", not complete,  _AMBER),
+        ], style={"display": "flex", "gap": "6px", "marginBottom": "6px"}),
+        html.Div(
+            f"{done}/{total} gates · Complete = design added to the story (Story Planning done).",
+            style={"fontSize": "11px", "color": _DIM},
+        ),
+    ])
 
 
 def _cell_status(story: dict, today: date) -> str:
@@ -806,20 +815,24 @@ def _build_table(stories: list, plan_months: list, today: date):
 # ── Panel helpers ─────────────────────────────────────────────────────────────
 
 def _tog(label: str, btn_id: dict, active: bool, color: str = _INDIGO):
+    r = _rgb(color)
     return html.Button(label, id=btn_id, n_clicks=0, style={
-        "padding": "6px 12px", "borderRadius": "7px", "cursor": "pointer",
-        "fontSize": "12px", "fontWeight": "600",
-        "background": f"rgba({_rgb(color)},0.133)" if active else "transparent",
-        "border": f"1px solid rgba({_rgb(color)},0.5)" if active else f"1px solid {_BD}",
-        "color": color if active else _MT,
+        "padding": "6px 13px", "borderRadius": "7px", "cursor": "pointer",
+        "fontSize": "12px",
+        "fontWeight": "700" if active else "500",
+        "background": f"rgba({r},0.20)" if active else _BG_HEAD,
+        "border": f"1px solid rgba({r},0.55)" if active else f"1px solid {_BD}",
+        "color": color if active else "rgb(160,167,185)",
     })
 
 
 def _sec(label: str):
     return html.Div(label, style={
-        "fontSize": "9.5px", "fontWeight": "700", "color": _DIM,
-        "textTransform": "uppercase", "letterSpacing": "0.6px",
-        "marginBottom": "8px", "marginTop": "14px",
+        "fontSize": "9px", "fontWeight": "700", "color": _DIM,
+        "textTransform": "uppercase", "letterSpacing": "0.9px",
+        "marginBottom": "9px", "marginTop": "20px",
+        "borderBottom": f"1px solid {_BD}",
+        "paddingBottom": "6px",
     })
 
 
@@ -1027,41 +1040,67 @@ def _render_panel(story_id):
     cur_size          = (row.story_size or "").strip().title()
     cur_story_status  = row.story_status   or ""
 
+    # Extract platform prefix from title for a badge
+    _title_raw = row.title or ""
+    _plt_label = None
+    _plt_color = _INDIGO
+    for _pfx, _col in [("WEB | ", _INDIGO), ("Web | ", _INDIGO),
+                        ("iOS | ", _CYAN), ("Android | ", _GREEN),
+                        ("Mobile | ", _CYAN)]:
+        if _title_raw.upper().startswith(_pfx.upper()):
+            _plt_label = _pfx.strip(" |")
+            _plt_color = _col
+            break
+
     return html.Div([
         # Title bar
         html.Div([
             html.Div([
-                html.Div(f"DESIGN PLAN · #{story_id}", style={
-                    "fontSize": "9.5px", "fontWeight": "700", "color": _INDIGO,
-                    "textTransform": "uppercase", "letterSpacing": "0.6px",
-                }),
-                html.Div(row.title or "", style={
+                html.Div([
+                    html.Span(f"DESIGN PLAN · #{story_id}", style={
+                        "fontSize": "9.5px", "fontWeight": "700", "color": _INDIGO,
+                        "textTransform": "uppercase", "letterSpacing": "0.6px",
+                    }),
+                    *([html.Span(_plt_label, style={
+                        "fontSize": "9px", "fontWeight": "700",
+                        "color": _plt_color,
+                        "background": f"rgba({_rgb(_plt_color)},0.15)",
+                        "border": f"1px solid rgba({_rgb(_plt_color)},0.3)",
+                        "borderRadius": "4px", "padding": "1px 7px",
+                        "marginLeft": "9px", "verticalAlign": "middle",
+                    })] if _plt_label else []),
+                ], style={"display": "flex", "alignItems": "center"}),
+                html.Div(_title_raw, style={
                     "fontSize": "13px", "fontWeight": "600", "color": _FG,
-                    "marginTop": "5px", "lineHeight": "1.4",
+                    "marginTop": "6px", "lineHeight": "1.4",
                 }),
             ], style={"flex": "1"}),
             html.Button("✕", id="dp-panel-close", n_clicks=0, style={
-                "background": "none", "border": "none", "color": _DIM,
-                "fontSize": "16px", "cursor": "pointer", "padding": "0 0 0 10px",
+                "background": f"rgba({_rgb(_DIM)},0.1)", "border": f"1px solid {_BD}",
+                "borderRadius": "6px", "color": _MT,
+                "fontSize": "14px", "cursor": "pointer", "padding": "4px 8px",
+                "lineHeight": "1", "flexShrink": "0",
             }),
         ], style={"display": "flex", "alignItems": "flex-start",
-                  "padding": "16px 16px 12px", "borderBottom": f"1px solid {_BD}"}),
+                  "padding": "16px 16px 14px", "borderBottom": f"1px solid {_BD}"}),
 
         # Status banner
         html.Div([
-            html.Span([
-                html.Span("● ", style={"marginRight": "2px"}),
-                label,
+            html.Div([
+                html.Span("●", style={"marginRight": "6px", "fontSize": "10px"}),
+                html.Span(label, style={"fontSize": "11px", "fontWeight": "700",
+                                        "textTransform": "uppercase", "letterSpacing": "0.5px"}),
             ], style={
-                "display": "block", "fontSize": "10.5px", "fontWeight": "700",
-                "color": color, "marginBottom": "4px",
+                "color": color, "marginBottom": "5px",
+                "display": "flex", "alignItems": "center",
             }),
             html.Div(texts.get(sk, ""),
                      style={"fontSize": "12px", "color": _MT, "lineHeight": "1.5"}),
         ], style={
-            "margin": "12px 16px", "padding": "10px 12px",
+            "margin": "14px 16px 0", "padding": "11px 14px",
             "background": f"rgba({_rgb(color)},0.07)",
             "border": f"1px solid rgba({_rgb(color)},0.25)",
+            "borderLeft": f"3px solid {color}",
             "borderRadius": "8px",
         }),
 
@@ -1103,8 +1142,9 @@ def _render_panel(story_id):
             html.Div(
                 _fmt_release(row.release_date) or "—",
                 style={
-                    "fontSize": "13px", "color": _MT, "fontFamily": _MONO,
-                    "padding": "7px 10px", "borderRadius": "6px",
+                    "fontSize": "13px", "color": _FG, "fontFamily": _MONO,
+                    "fontWeight": "600",
+                    "padding": "7px 12px", "borderRadius": "7px",
                     "background": _BG_HEAD, "border": f"1px solid {_BD}",
                     "display": "inline-block",
                 },
@@ -1113,7 +1153,7 @@ def _render_panel(story_id):
             _sec("Story Size"),
             html.Div([
                 _tog(sz, {"type": "dp-size-btn", "key": sz},
-                     active=(sz == cur_size), color=_INDIGO)
+                     active=(sz == cur_size), color=_SIZE_COLORS.get(sz, _INDIGO))
                 for sz in _SIZES
             ], style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
 
@@ -1131,7 +1171,7 @@ def _render_panel(story_id):
                 for o in _STORY_OWNERS
             ], style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
 
-        ], style={"padding": "0 16px 24px"}),
+        ], style={"padding": "4px 16px 32px"}),
     ])
 
 

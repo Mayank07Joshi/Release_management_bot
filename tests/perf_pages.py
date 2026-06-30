@@ -108,7 +108,7 @@ def layer1_python():
             external_stylesheets=[dbc.themes.DARKLY],
             suppress_callback_exceptions=True,
         )
-        from pages_dash.planning import _build_gantt_html, _gantt_window, _GANTT_CACHE
+        from pages_dash.enhancements.planning import _build_gantt_html, _gantt_window, _GANTT_CACHE
 
         _GANTT_CACHE["ts"] = 0.0
         ws, we, _ = _gantt_window("0-12")
@@ -128,7 +128,7 @@ def layer1_python():
     # ── Capacity render ────────────────────────────────────────────────────────
     print("\n  capacity_planner helpers :")
     try:
-        from pages_dash.capacity_planner import (
+        from pages_dash.enhancements.capacity_planner import (
             _load_cap_agg, _load_top_items,
             _load_standalone_data, _months012, _ym,
         )

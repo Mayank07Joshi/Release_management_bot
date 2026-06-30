@@ -142,7 +142,7 @@ def layer2_build():
             external_stylesheets=[dbc.themes.DARKLY],
             suppress_callback_exceptions=True,
         )
-        from pages_dash.planning import _build_gantt_html, _gantt_window, _GANTT_CACHE, _GANTT_TTL
+        from pages_dash.enhancements.planning import _build_gantt_html, _gantt_window, _GANTT_CACHE, _GANTT_TTL
     except Exception as e:
         print(f"{FAIL}  Could not import planning.py: {e}")
         traceback.print_exc()
