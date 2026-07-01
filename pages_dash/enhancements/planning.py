@@ -3056,7 +3056,7 @@ def _build_full_layout():
                 "position": "sticky", "top": "0", "zIndex": "22",
                 "background": C3,
                 "paddingTop": "8px", "paddingBottom": "8px",
-                "marginBottom": "0",
+                "marginBottom": "0", "marginTop": "0",
                 "borderBottom": f"1px solid {BD}",
             }),
 
@@ -3065,9 +3065,9 @@ def _build_full_layout():
                 # Frozen iteration filter — sticks below the sub-tab nav
                 html.Div(id="month-tabs-container", children=_month_tabs(active_month),
                          style={
-                             "position": "sticky", "top": "108px", "zIndex": "20",
+                             "position": "sticky", "top": "50px", "zIndex": "20",
                              "background": C3,
-                             "paddingTop": "10px", "paddingBottom": "10px",
+                             "paddingTop": "8px", "paddingBottom": "10px",
                              "marginBottom": "4px",
                          }),
                 dcc.Loading(
@@ -3767,9 +3767,9 @@ def _toggle_dashboard(n, collapsed):
 )
 def _apply_dashboard_collapse(collapsed):
     _sticky_base = {
-        "position": "sticky", "top": "108px", "zIndex": "20",
+        "position": "sticky", "top": "50px", "zIndex": "20",
         "background": C3,
-        "paddingTop": "10px", "paddingBottom": "10px",
+        "paddingTop": "8px", "paddingBottom": "10px",
         "marginBottom": "4px",
     }
     if collapsed:

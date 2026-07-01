@@ -106,6 +106,18 @@ except Exception:
 
 
 # ── Data loaders ──────────────────────────────────────────────────────────────
+_MONTH_NUM = {
+    'january':1,'february':2,'march':3,'april':4,'may':5,'june':6,
+    'july':7,'august':8,'september':9,'october':10,'november':11,'december':12,
+}
+
+def _release_sort_key(r: str) -> tuple:
+    parts = r.split()
+    year   = int(parts[0]) if parts and parts[0].isdigit() else 9999
+    month  = _MONTH_NUM.get(parts[1].lower(), 0) if len(parts) > 1 else 0
+    suffix = parts[2].lower() if len(parts) > 2 else ''  # '' sorts before 'hotfix'
+    return (year, month, suffix)
+
 def _get_releases():
     with engine.connect() as conn:
         rows = conn.execute(text("""
@@ -114,9 +126,9 @@ def _get_releases():
               AND work_item_type IN ('Enhancement','User Story')
               AND state NOT IN ('Closed','Not an issue','Not Required',
                                 'No Customer Response','Resolved','Userstory Update')
-            ORDER BY release_date
         """)).fetchall()
-    return [r[0] for r in rows if r[0]]
+    releases = [r[0] for r in rows if r[0]]
+    return sorted(releases, key=_release_sort_key)
 
 
 def _load_stories(release: str) -> list:
