@@ -9,6 +9,7 @@ ALL_STAFF = [
     {"name": "Rajesh K",        "role": "Senior Dev",      "team": "Development",  "capacity_h": 180},
     {"name": "Pranjal Jindal",  "role": "Web Dev",         "team": "Development",  "capacity_h": 180},
     {"name": "Shivi Prajapati", "role": "Web Dev",         "team": "Development",  "capacity_h": 180},
+    {"name": "Mansi Mishra",   "role": "Web Dev",         "team": "Development",  "capacity_h": 180},
     # ── Mobile ────────────────────────────────────────────────────────────────
     {"name": "Dolly Munjal",    "role": "Mobile Dev",      "team": "Mobile",       "capacity_h": 180},
     {"name": "Suraj Gupta",     "role": "Mobile Dev",      "team": "Mobile",       "capacity_h": 180},

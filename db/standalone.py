@@ -87,6 +87,7 @@ SELECT sc.task_id,
 FROM standalone_task_classifications sc
 JOIN work_items_main t ON t.work_item_id = sc.task_id
 WHERE t.work_item_type = 'Task'
+  AND t.parent_id IS NULL
   AND t.state NOT IN (
       'Closed', 'Dev Complete', 'Resolved', 'Not Required', 'Not an issue'
   );

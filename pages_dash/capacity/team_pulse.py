@@ -163,26 +163,28 @@ def _load_items() -> list[dict]:
 
 # ── Task-level hours loader ───────────────────────────────────────────────────
 def _load_task_hours() -> list[dict]:
-    """One record per active Task that is a child of an Enhancement/User Story.
-    Used to put developer hours in the correct iteration month (the task's own
-    iteration_path, not the parent story's)."""
+    """One record per ACTIVE Task (not Closed/Dev Complete/Resolved) under an Enhancement/Issue/Bug.
+    Hours = remaining_work; fallback = original_estimate - completed_work (floor 0).
+    Used to build both the hours row and issue/enh count rows for each developer."""
     with engine.connect() as conn:
         rows = conn.execute(text("""
             SELECT
                 COALESCE(t.main_developer, '') AS main_developer,
-                COALESCE(t.remaining_work, t.original_estimate, 0) AS task_est,
-                t.iteration_path                 AS task_iter,
-                COALESCE(w.type, 'Internal')     AS cust_type,
-                t.parent_id                      AS parent_id,
-                COALESCE(a.est_status, 'unestimated') AS parent_est_status
+                COALESCE(
+                    t.remaining_work,
+                    GREATEST(COALESCE(t.original_estimate, 0) - COALESCE(t.completed_work, 0), 0)
+                )                            AS task_est,
+                t.iteration_path             AS task_iter,
+                COALESCE(w.type, 'Internal') AS cust_type,
+                t.parent_id                  AS parent_id,
+                w.work_item_type             AS parent_type
             FROM work_items_main t
             INNER JOIN work_items_main w ON w.work_item_id = t.parent_id
-            LEFT JOIN agg_story_estimation a ON a.work_item_id = t.parent_id
             WHERE t.work_item_type = 'Task'
             AND t.state NOT IN (
-                'Closed','Dev Complete','Resolved','Not Required','Not an issue'
+                'Closed','Resolved','Not Required','Not an issue'
             )
-            AND w.work_item_type IN ('Enhancement','User Story')
+            AND w.work_item_type IN ('Enhancement','User Story','Issue','Bug')
             AND w.state NOT IN (
                 'Closed','Resolved','Not Required','Not an issue',
                 'No Customer Response','Not Specified','Userstory Update'
@@ -201,14 +203,100 @@ def _load_task_hours() -> list[dict]:
         team     = _TEAM_MAP.get(dev, "Other")
         platform = "Mobile" if team == "Mobile Dev" else ("Web" if team == "Web Dev" else None)
         result.append({
-            "dev":        dev,
-            "team":       team,
-            "mk":         _month_key(*ym),
-            "est_h":      float(r.task_est or 0),
-            "cust_type":  str(r.cust_type or "Internal"),
-            "platform":   platform,
-            "parent_id":  int(r.parent_id) if r.parent_id else None,
-            "parent_est": str(r.parent_est_status or "unestimated"),
+            "dev":         dev,
+            "team":        team,
+            "mk":          _month_key(*ym),
+            "est_h":       float(r.task_est or 0),
+            "cust_type":   str(r.cust_type or "Internal"),
+            "platform":    platform,
+            "parent_id":   int(r.parent_id) if r.parent_id else None,
+            "parent_type": "issue" if str(r.parent_type or "") in ("Issue", "Bug") else "enh",
+        })
+    return result
+
+
+# ── Dev-cell panel loader (task-based, matches grid logic) ────────────────────
+def _dev_panel_load(mk: str, dev: str,
+                    source_filter: str = "All",
+                    platform_filter: str = "All") -> list[dict]:
+    """Load parent stories for a developer by querying their TASKS in this month.
+    Matches the grid: hours come from task.original_estimate, keyed by task iteration."""
+    year, month = int(mk[:4]), int(mk[5:7])
+    iter_pat = f"%{year} {month:02d}-%"
+    team     = _TEAM_MAP.get(dev, "Other")
+    platform = "Mobile" if team == "Mobile Dev" else ("Web" if team == "Web Dev" else None)
+
+    with engine.connect() as conn:
+        rows = conn.execute(text("""
+            SELECT
+                w.work_item_id,
+                COALESCE(w.title, '')        AS title,
+                w.work_item_type,
+                COALESCE(w.type, 'Internal') AS cust_type,
+                COALESCE(w.priority, '')     AS priority,
+                CASE
+                    WHEN ta.task_h IS NOT NULL THEN ta.task_h
+                    ELSE COALESCE(
+                        w.remaining_work,
+                        GREATEST(COALESCE(w.original_estimate,0) - COALESCE(w.completed_work,0), 0)
+                    )
+                END AS task_h
+            FROM work_items_main w
+            LEFT JOIN (
+                SELECT parent_id,
+                       SUM(COALESCE(
+                           remaining_work,
+                           GREATEST(COALESCE(original_estimate,0) - COALESCE(completed_work,0), 0)
+                       )) AS task_h
+                FROM work_items_main
+                WHERE work_item_type = 'Task'
+                  AND main_developer  = :dev
+                  AND iteration_path  LIKE :pat
+                  AND state NOT IN ('Closed','Resolved','Not Required','Not an issue')
+                GROUP BY parent_id
+            ) ta ON ta.parent_id = w.work_item_id
+            WHERE w.work_item_type IN ('Enhancement','User Story','Issue','Bug')
+              AND w.state NOT IN (
+                  'Closed','Resolved','Not Required','Not an issue',
+                  'No Customer Response','Not Specified','Userstory Update'
+              )
+              AND (
+                  -- Dev has active tasks for this item in this month
+                  ta.parent_id IS NOT NULL
+                  OR
+                  -- Item is directly assigned to this dev in this month AND has no child tasks at all
+                  (w.main_developer = :dev
+                   AND w.iteration_path LIKE :pat
+                   AND NOT EXISTS (
+                       SELECT 1 FROM work_items_main tx
+                       WHERE tx.parent_id = w.work_item_id AND tx.work_item_type = 'Task'
+                   ))
+              )
+            GROUP BY w.work_item_id, w.title, w.work_item_type, w.type, w.priority,
+                     w.remaining_work, w.original_estimate, w.completed_work, ta.task_h
+        """), {"dev": dev, "pat": iter_pat}).fetchall()
+
+    result = []
+    for r in rows:
+        cust = str(r.cust_type or "Internal")
+        if source_filter != "All" and cust != source_filter:
+            continue
+        if platform_filter != "All" and platform != platform_filter:
+            continue
+        is_issue = r.work_item_type in ("Issue", "Bug")
+        est_h    = float(r.task_h or 0)
+        result.append({
+            "id":        r.work_item_id,
+            "title":     r.title,
+            "type":      "issue" if is_issue else "enh",
+            "dev":       dev,
+            "team":      team,
+            "pri":       _classify_pri(r.priority),
+            "size":      _classify_size(est_h) if not is_issue else None,
+            "est_h":     est_h,
+            "estimated": est_h > 0,
+            "cust_type": cust,
+            "platform":  platform,
         })
     return result
 
@@ -320,7 +408,12 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
     key  = panel_ctx["key"]
     mk   = panel_ctx["mk"]
 
-    all_items = _panel_load(mk, team_filter, source_filter, platform_filter)
+    # Developer cells: load by task assignee (matches grid logic).
+    # Non-dev cells: load by story owner filtered to the month.
+    if kind in ("dev_hours", "dev_issues", "dev_enhancements"):
+        all_items = _dev_panel_load(mk, key, source_filter, platform_filter)
+    else:
+        all_items = _panel_load(mk, team_filter, source_filter, platform_filter)
 
     if kind == "issue_pri":
         items      = [x for x in all_items if x["type"] == "issue" and x["pri"] == key]
@@ -833,22 +926,21 @@ def _build_grid(items: list[dict], team_filter: str, horizon_d: int,
                                   "enh_e": 0, "enh_u": 0}
         cell = dev_data[dev][mk]
         if x["task_h"] > 0:
-            # This enhancement has child tasks; hours are spread across task iterations.
-            # Do NOT add the all-time task_est_sum here — task hours are added below
-            # via _load_task_hours() which uses each task's own iteration_path.
+            # Has child tasks — hours and issue/enh counts come from task_hours below.
             cell["has_tasks"] = True
         else:
+            # Taskless story: hours from story estimate, count from story iteration.
             cell["orig_h"] += x["est_h"]
-        if x["type"] == "issue":
-            if x["estimated"]: cell["iss_e"] += 1
-            else:              cell["iss_u"] += 1
-        else:
-            if x["estimated"]: cell["enh_e"] += 1
-            else:              cell["enh_u"] += 1
+            if x["type"] == "issue":
+                if x["estimated"]: cell["iss_e"] += 1
+                else:              cell["iss_u"] += 1
+            else:
+                if x["estimated"]: cell["enh_e"] += 1
+                else:              cell["enh_u"] += 1
 
-    # ── Task-level hours: overlay onto dev_data ───────────────────────────────
-    # For enhancements with child tasks, use each task's own iteration month
-    # so hours land in the month the developer is actually doing the work.
+    # ── Task-level hours + counts: overlay onto dev_data ─────────────────────
+    # Hours and issue/enh counts for task-having items use each task's own
+    # iteration_path so they land in the month the developer is actually working.
     task_hours = _load_task_hours()
     if team_filter != "All":
         task_hours = [t for t in task_hours if t["team"] == team_filter]
@@ -858,10 +950,11 @@ def _build_grid(items: list[dict], team_filter: str, horizon_d: int,
     if platform_filter != "All":
         task_hours = [t for t in task_hours if t.get("platform") == platform_filter]
 
+    mks_set = set(mks)
     for th in task_hours:
         dev = th["dev"]
         mk  = th["mk"]
-        if mk not in set(mks):
+        if mk not in mks_set:
             continue
         if dev not in dev_data:
             dev_data[dev] = {m: {"orig_h": 0.0, "has_tasks": False,
@@ -873,6 +966,30 @@ def _build_grid(items: list[dict], team_filter: str, horizon_d: int,
                                   "enh_e": 0, "enh_u": 0}
         dev_data[dev][mk]["orig_h"]    += th["est_h"]
         dev_data[dev][mk]["has_tasks"] = True
+
+    # Rebuild issue/enh counts for task-based items (dedup by parent per dev×month).
+    # This makes counts consistent with the panel, which also queries by task iteration.
+    _counted_parents: set = set()
+    for th in task_hours:
+        dev = th["dev"]
+        mk  = th["mk"]
+        pid = th.get("parent_id")
+        if not pid or mk not in mks_set:
+            continue
+        key3 = (dev, mk, pid)
+        if key3 in _counted_parents:
+            continue
+        _counted_parents.add(key3)
+        if dev not in dev_data or mk not in dev_data[dev]:
+            continue
+        cell = dev_data[dev][mk]
+        est  = th["est_h"] > 0
+        if th["parent_type"] == "issue":
+            if est: cell["iss_e"] += 1
+            else:   cell["iss_u"] += 1
+        else:
+            if est: cell["enh_e"] += 1
+            else:   cell["enh_u"] += 1
 
     # ── Active cell check (for highlight) ────────────────────────────────────
     def _is_active(kind: str, key: str, mk: str) -> bool:
@@ -1584,20 +1701,24 @@ def _panel_selection(panel_ctx, _item_clicks, _sel_all, _sel_clear,
     if trigger == "tp-sel-all":
         if not panel_ctx:
             return []
-        all_items = _panel_load(panel_ctx["mk"], team or "All", source or "All", platform or "All")
         kind, key = panel_ctx.get("kind"), panel_ctx.get("key")
-        if kind == "issue_pri":
-            visible = [x for x in all_items if x["type"] == "issue" and x["pri"] == key]
-        elif kind == "enh_size":
-            visible = [x for x in all_items if x["type"] == "enh" and x["size"] == key]
-        elif kind == "dev_hours":
-            visible = [x for x in all_items if x["dev"] == key]
-        elif kind == "dev_issues":
-            visible = [x for x in all_items if x["dev"] == key and x["type"] == "issue"]
-        elif kind == "dev_enhancements":
-            visible = [x for x in all_items if x["dev"] == key and x["type"] == "enh"]
+        mk = panel_ctx.get("mk", "")
+        if kind in ("dev_hours", "dev_issues", "dev_enhancements"):
+            all_items = _dev_panel_load(mk, key, source or "All", platform or "All")
+            if kind == "dev_issues":
+                visible = [x for x in all_items if x["type"] == "issue"]
+            elif kind == "dev_enhancements":
+                visible = [x for x in all_items if x["type"] == "enh"]
+            else:
+                visible = all_items
         else:
-            visible = all_items
+            all_items = _panel_load(mk, team or "All", source or "All", platform or "All")
+            if kind == "issue_pri":
+                visible = [x for x in all_items if x["type"] == "issue" and x["pri"] == key]
+            elif kind == "enh_size":
+                visible = [x for x in all_items if x["type"] == "enh" and x["size"] == key]
+            else:
+                visible = all_items
         return [x["id"] for x in visible]
 
     # Item row click — toggle

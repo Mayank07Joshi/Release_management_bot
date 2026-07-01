@@ -334,6 +334,116 @@ def _load_top_items(yms: list[str]) -> dict:
     return result
 
 
+def _load_task_dev_data(yms: list[str], cust_filter: str = "All") -> tuple[dict, dict]:
+    """Task-based drop-in for _load_cap_agg + _load_top_items.
+
+    Uses task assignments (not story main_developer) to attribute hours:
+      – Part 1: task dev × task iteration → parent enhancement/bug
+      – Part 2: directly assigned, no child tasks at all (bugs, standalone enhs)
+
+    Returns
+    -------
+    cap_data  : {(dev, ym_str, item_type): {"item_count": int, "estimated_hours": float}}
+    top_items : {(dev, ym_str): [{"title": str, "type": str, "dev_h": float}, ...]}
+    item_type = "enhancement" | "bug"
+    """
+    from data.loader import engine as _eng
+    from sqlalchemy import text as _t
+    import logging
+    if not yms:
+        return {}, {}
+
+    ym_set = set(yms)
+    cust_clause = f"AND w.type = '{cust_filter}'" if cust_filter in ("Customer", "Internal") else ""
+
+    try:
+        with _eng.connect() as conn:
+            rows = conn.execute(_t(f"""
+                SELECT
+                    t.main_developer  AS dev,
+                    t.iteration_path  AS iter_path,
+                    w.work_item_id,
+                    w.title,
+                    w.work_item_type,
+                    SUM(COALESCE(
+                        t.remaining_work,
+                        GREATEST(COALESCE(t.original_estimate,0) - COALESCE(t.completed_work,0), 0)
+                    )) AS dev_h
+                FROM work_items_main t
+                JOIN work_items_main w ON w.work_item_id = t.parent_id
+                WHERE t.work_item_type = 'Task'
+                  AND t.state NOT IN ('Closed','Resolved','Not Required','Not an issue')
+                  AND w.work_item_type IN ('Enhancement','User Story','Issue','Bug')
+                  AND w.state NOT IN (
+                      'Closed','Resolved','Not Required','Not an issue',
+                      'No Customer Response','Not Specified','Userstory Update'
+                  )
+                  AND COALESCE(t.main_developer,'') NOT IN ('','Unassigned','Not Specified')
+                  AND t.iteration_path LIKE '%Iteration 2026 %'
+                  {cust_clause}
+                GROUP BY t.main_developer, t.iteration_path, w.work_item_id, w.title, w.work_item_type
+
+                UNION ALL
+
+                SELECT
+                    w.main_developer  AS dev,
+                    w.iteration_path  AS iter_path,
+                    w.work_item_id,
+                    w.title,
+                    w.work_item_type,
+                    COALESCE(
+                        w.remaining_work,
+                        GREATEST(COALESCE(w.original_estimate,0) - COALESCE(w.completed_work,0), 0)
+                    ) AS dev_h
+                FROM work_items_main w
+                WHERE w.work_item_type IN ('Enhancement','User Story','Issue','Bug')
+                  AND w.state NOT IN (
+                      'Closed','Resolved','Not Required','Not an issue',
+                      'No Customer Response','Not Specified','Userstory Update'
+                  )
+                  AND COALESCE(w.main_developer,'') NOT IN ('','Unassigned','Not Specified')
+                  AND w.iteration_path LIKE '%Iteration 2026 %'
+                  {cust_clause}
+                  AND NOT EXISTS (
+                      SELECT 1 FROM work_items_main tx
+                      WHERE tx.parent_id = w.work_item_id AND tx.work_item_type = 'Task'
+                  )
+            """)).fetchall()
+    except Exception as exc:
+        logging.getLogger(__name__).error("_load_task_dev_data failed: %s", exc)
+        return {}, {}
+
+    _BUG_WTYPES = {"Bug", "Bug_UI", "Bug_Text", "Issue"}
+    cap_data:  dict = {}
+    top_items: dict = {}
+
+    for r in rows:
+        dev = str(r.dev or "").strip().split(" <")[0].strip()
+        if not dev or dev in ("Unassigned", "Not Specified"):
+            continue
+        ym = _iter_ym(str(r.iter_path or ""))
+        if not ym or ym not in ym_set:
+            continue
+
+        wtype = str(r.work_item_type or "")
+        itype = "bug" if wtype in _BUG_WTYPES else "enhancement"
+        dev_h = float(r.dev_h or 0)
+
+        key = (dev, ym, itype)
+        if key not in cap_data:
+            cap_data[key] = {"item_count": 0, "estimated_hours": 0.0}
+        cap_data[key]["item_count"]      += 1
+        cap_data[key]["estimated_hours"] += dev_h
+
+        top_items.setdefault((dev, ym), []).append({
+            "title": str(r.title or ""),
+            "type":  "Bug" if itype == "bug" else "Enhancement",
+            "dev_h": dev_h,
+        })
+
+    return cap_data, top_items
+
+
 _CAT_CLR = {
     "Meetings & Calls":  "#60a5fa",
     "Dev Overhead":      "#a78bfa",
@@ -1414,9 +1524,8 @@ def _render(view, tab, show_all, cust_filter):
     fy_months = [f"2026-{m:02d}" for m in range(4, 13)]
     all_yms   = list(dict.fromkeys([*yms, *fy_months]))  # M012 first, then rest, deduped
 
-    # Pre-computed capacity + top items (replaces per-cell _dev_month_items calls)
-    cap_data  = _load_cap_agg(all_yms, cust_key)
-    top_items = _load_top_items(yms)
+    # Task-based capacity + item lists (replaces story-level pre-computed tables)
+    cap_data, top_items = _load_task_dev_data(all_yms, cust_key)
 
     # Load standalone overhead + leave data
     standalone_data = _load_standalone_data(yms)
@@ -1588,31 +1697,69 @@ def _panel_body(dev_name, ym_str, view):
     is_m0 = (mo_idx == 0)
     mn    = int(ym_str[5:7]) if len(ym_str) >= 7 else None
 
-    # Load open items from agg_gantt_items (pct < 100 by definition)
+    # Load open items via task assignments (task-based — matches who actually has work)
     open_items: list[dict] = []
     if mn:
         try:
+            iter_pat = f"%Iteration 2026 {mn:02d}-%"
             with _engine.connect() as _conn:
-                _agg_rows = _conn.execute(_text(
-                    "SELECT work_item_id, title, work_item_type, item_type, "
-                    "       original_estimate, t_done, t_rem, has_tasks, priority "
-                    "FROM agg_gantt_items "
-                    "WHERE main_developer = :dev AND month_num = :mn"
-                ), {"dev": dev_name, "mn": mn}).fetchall()
-            for r in _agg_rows:
-                dev_h = float((r.t_done or 0) + (r.t_rem or 0)) if r.has_tasks else float(r.original_estimate or 0)
-                wtype = str(r.work_item_type or "")
-                if not wtype:
-                    wtype = "Enhancement" if r.item_type == "enh" else "Bug"
+                _rows = _conn.execute(_text("""
+                    SELECT
+                        w.work_item_id,
+                        w.title,
+                        w.work_item_type,
+                        w.priority,
+                        CASE
+                            WHEN ta.task_h IS NOT NULL THEN ta.task_h
+                            ELSE COALESCE(
+                                w.remaining_work,
+                                GREATEST(COALESCE(w.original_estimate,0) - COALESCE(w.completed_work,0), 0)
+                            )
+                        END AS dev_h
+                    FROM work_items_main w
+                    LEFT JOIN (
+                        SELECT parent_id,
+                               SUM(COALESCE(
+                                   remaining_work,
+                                   GREATEST(COALESCE(original_estimate,0) - COALESCE(completed_work,0), 0)
+                               )) AS task_h
+                        FROM work_items_main
+                        WHERE work_item_type = 'Task'
+                          AND main_developer  = :dev
+                          AND iteration_path  LIKE :pat
+                          AND state NOT IN ('Closed','Resolved','Not Required','Not an issue')
+                        GROUP BY parent_id
+                    ) ta ON ta.parent_id = w.work_item_id
+                    WHERE w.work_item_type IN ('Enhancement','User Story','Issue','Bug')
+                      AND w.state NOT IN (
+                          'Closed','Resolved','Not Required','Not an issue',
+                          'No Customer Response','Not Specified','Userstory Update'
+                      )
+                      AND (
+                          ta.parent_id IS NOT NULL
+                          OR (
+                              w.main_developer = :dev
+                              AND w.iteration_path LIKE :pat
+                              AND NOT EXISTS (
+                                  SELECT 1 FROM work_items_main tx
+                                  WHERE tx.parent_id = w.work_item_id AND tx.work_item_type = 'Task'
+                              )
+                          )
+                      )
+                    GROUP BY w.work_item_id, w.title, w.work_item_type, w.priority,
+                             w.remaining_work, w.original_estimate, w.completed_work, ta.task_h
+                """), {"dev": dev_name, "pat": iter_pat}).fetchall()
+            for r in _rows:
                 open_items.append({
                     "id":       int(r.work_item_id),
                     "title":    str(r.title or ""),
-                    "type":     wtype,
-                    "dev_h":    dev_h,
-                    "priority": int(r.priority or 4),
+                    "type":     str(r.work_item_type or "Enhancement"),
+                    "dev_h":    float(r.dev_h or 0),
+                    "priority": int(float(r.priority)) if r.priority else 4,
                 })
-        except Exception:
-            pass
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).error("panel items query failed: %s", exc)
 
     done_items: list[dict] = []  # done items not tracked in agg_gantt_items
 

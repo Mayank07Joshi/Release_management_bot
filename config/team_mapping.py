@@ -19,6 +19,7 @@ TEAM_MAPPING = {
     'Dhananjai Kalra': 'Development',
     'Pranjal Jindal': 'Development',
     'Shivi Prajapati': 'Development',
+    'Mansi Mishra': 'Development',
 
     # Mobile Team
     'Dolly Munjal': 'Mobile',

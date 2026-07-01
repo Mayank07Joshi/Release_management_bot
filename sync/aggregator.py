@@ -587,6 +587,7 @@ def _build_standalone_overhead(conn) -> int:
                 FROM standalone_task_classifications stc
                 JOIN work_items_main wi ON wi.work_item_id = stc.task_id
                 WHERE wi.iteration_path IS NOT NULL
+                  AND wi.parent_id IS NULL
             """),
             rc,
         )
