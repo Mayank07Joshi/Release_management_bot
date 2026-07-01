@@ -76,7 +76,7 @@ def _parse_release_ym(rd: str) -> str | None:
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 _TERMINAL_STATES = {"Closed", "Dev Complete", "Resolved", "Not Required", "Not an issue"}
-_HOURS_PER_DAY   = 9.0
+_HOURS_PER_DAY   = 10.0
 
 
 def _remaining_workday_hours(ym_str: str) -> float:
