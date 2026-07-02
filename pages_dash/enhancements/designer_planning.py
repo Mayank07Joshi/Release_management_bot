@@ -64,6 +64,16 @@ _STATUS_LABELS = {
 }
 
 _ITER_RE  = re.compile(r'\\(\d{4})\\Iteration \d{4} (\d{2})-')
+
+_MONTH_OPTIONS = [
+    "Jan 2026","Feb 2026","Mar 2026","Apr 2026","May 2026","Jun 2026",
+    "Jul 2026","Aug 2026","Sep 2026","Oct 2026","Nov 2026","Dec 2026",
+    "Jan 2027","Feb 2027","Mar 2027","Apr 2027","May 2027","Jun 2027",
+]
+_PRIORITIES = ["P1", "P2", "P3", "P4"]
+_PRI_MAP    = {"P1": "1", "P2": "2", "P3": "3", "P4": "4"}
+_PRI_COLORS = {"P1": "rgb(239,110,99)", "P2": "rgb(224,162,60)",
+               "P3": "rgb(110,118,241)", "P4": "rgb(91,98,118)"}
 _MON_ABBR = {1:"Jan",2:"Feb",3:"Mar",4:"Apr",5:"May",6:"Jun",
              7:"Jul",8:"Aug",9:"Sep",10:"Oct",11:"Nov",12:"Dec"}
 
@@ -967,10 +977,11 @@ def _open_panel(clicks):
 
 @callback(
     Output("dp-panel-content", "children"),
-    Input("dp-panel-store", "data"),
+    Input("dp-panel-store",  "data"),
+    State("dp-iter-map",     "data"),
     prevent_initial_call=True,
 )
-def _render_panel(story_id):
+def _render_panel(story_id, iter_map_store):
     if story_id is None:
         raise PreventUpdate
     if story_id == "__balance__":
@@ -988,6 +999,8 @@ def _render_panel(story_id):
                    w.release_date,
                    COALESCE(w.story_size,   '') AS story_size,
                    COALESCE(w.story_status, '') AS story_status,
+                   COALESCE(w.priority,     '') AS priority,
+                   COALESCE(w.type, 'Internal') AS cust_type,
                    COALESCE(g.our_screens,  FALSE) AS our_screens,
                    COALESCE(g.html_screens, FALSE) AS html_screens
             FROM work_items_main w
@@ -1039,6 +1052,23 @@ def _render_panel(story_id):
     cur_owner         = (row.story_owner   or "").strip()
     cur_size          = (row.story_size or "").strip().title()
     cur_story_status  = row.story_status   or ""
+    cur_priority      = str(row.priority or "").strip()
+    cur_cust_type     = (row.cust_type or "Internal").strip()
+    cur_release       = str(row.release_date or "").strip()
+
+    # Build iteration dropdown options from iter_map store
+    _iter_opts = []
+    if iter_map_store:
+        for k in sorted(iter_map_store.keys()):
+            try:
+                y_s, m_s = k.split("_")
+                _iter_opts.append({
+                    "label": f"{_MON_ABBR[int(m_s)]} {y_s}",
+                    "value": k,
+                })
+            except Exception:
+                pass
+    cur_iter_key = f"{dev_year}_{dev_month}"
 
     # Extract platform prefix from title for a badge
     _title_raw = row.title or ""
@@ -1112,42 +1142,42 @@ def _render_panel(story_id):
                 for d in _DESIGNERS
             ], style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
 
-            _sec("Story Status"),
-            _story_status_badge(row.work_item_id),
-            html.Div("Driven by Story Readiness gates. Set gates there to update.",
-                     style={"fontSize": "11px", "color": _DIM, "marginTop": "5px"}),
-
-            _sec("Dev Month"),
+            _sec("Priority"),
             html.Div([
-                html.Button("−", id="dp-devmon-minus", n_clicks=0, style={
-                    "width": "30px", "height": "30px", "borderRadius": "6px",
-                    "background": "transparent", "border": f"1px solid {_BD}",
-                    "color": _MT, "cursor": "pointer", "fontSize": "16px",
-                }),
-                html.Span(
-                    f"{_MON_ABBR[dev_month]} ({dev_month:02d})",
-                    id="dp-devmon-display",
-                    style={"fontFamily": _MONO, "fontSize": "13px", "color": _FG,
-                           "padding": "0 12px", "minWidth": "80px", "textAlign": "center"},
-                ),
-                html.Button("+", id="dp-devmon-plus", n_clicks=0, style={
-                    "width": "30px", "height": "30px", "borderRadius": "6px",
-                    "background": "transparent", "border": f"1px solid {_BD}",
-                    "color": _MT, "cursor": "pointer", "fontSize": "16px",
-                }),
-                dcc.Store(id="dp-devmon-value", data={"year": dev_year, "month": dev_month}),
-            ], style={"display": "flex", "alignItems": "center"}),
+                _tog(p, {"type": "dp-prio-btn", "key": _PRI_MAP[p]},
+                     active=(cur_priority == _PRI_MAP[p]),
+                     color=_PRI_COLORS[p])
+                for p in _PRIORITIES
+            ], style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
+
+            _sec("Type"),
+            html.Div([
+                _tog(t, {"type": "dp-type-btn", "key": t},
+                     active=(cur_cust_type == t), color=_AMBER)
+                for t in ("Customer", "Internal")
+            ], style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
+
+            _sec("Iteration"),
+            dcc.Dropdown(
+                id="dp-iter-dropdown",
+                options=_iter_opts,
+                value=cur_iter_key if cur_iter_key in {o["value"] for o in _iter_opts} else None,
+                placeholder="Select iteration month…",
+                clearable=False,
+                className="dark-dropdown",
+                style={"fontSize": "13px"},
+            ),
+            dcc.Store(id="dp-devmon-value", data={"year": dev_year, "month": dev_month}),
 
             _sec("Release Date"),
-            html.Div(
-                _fmt_release(row.release_date) or "—",
-                style={
-                    "fontSize": "13px", "color": _FG, "fontFamily": _MONO,
-                    "fontWeight": "600",
-                    "padding": "7px 12px", "borderRadius": "7px",
-                    "background": _BG_HEAD, "border": f"1px solid {_BD}",
-                    "display": "inline-block",
-                },
+            dcc.Dropdown(
+                id="dp-release-dd",
+                options=[{"label": m, "value": m} for m in _MONTH_OPTIONS],
+                value=cur_release if cur_release in _MONTH_OPTIONS else None,
+                placeholder="Select release month…",
+                clearable=True,
+                className="dark-dropdown",
+                style={"fontSize": "13px"},
             ),
 
             _sec("Story Size"),
@@ -1170,6 +1200,11 @@ def _render_panel(story_id):
                      active=(o == cur_owner), color=_INDIGO)
                 for o in _STORY_OWNERS
             ], style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
+
+            _sec("Design Progress"),
+            _story_status_badge(row.work_item_id),
+            html.Div("Driven by Story Readiness gates. Set gates there to update.",
+                     style={"fontSize": "11px", "color": _DIM, "marginTop": "5px"}),
 
         ], style={"padding": "4px 16px 32px"}),
     ])
@@ -1292,6 +1327,84 @@ def _save_owner(clicks, story_id):
         conn.execute(text(
             "UPDATE work_items_main SET story_owner=:o WHERE work_item_id=:id"
         ), {"o": tid["key"], "id": story_id})
+    return story_id
+
+
+@callback(
+    Output("dp-panel-store", "data", allow_duplicate=True),
+    Input("dp-release-dd",   "value"),
+    State("dp-panel-store",  "data"),
+    prevent_initial_call=True,
+)
+def _save_release(rd, story_id):
+    if not story_id or story_id == "__balance__":
+        raise PreventUpdate
+    write_fields(int(story_id), {"release_date": rd or ""})
+    with engine.begin() as conn:
+        conn.execute(text(
+            "UPDATE work_items_main SET release_date=:r WHERE work_item_id=:id"
+        ), {"r": rd or None, "id": int(story_id)})
+    return story_id
+
+
+@callback(
+    Output("dp-panel-store", "data", allow_duplicate=True),
+    Input("dp-iter-dropdown", "value"),
+    State("dp-panel-store",   "data"),
+    State("dp-iter-map",      "data"),
+    prevent_initial_call=True,
+)
+def _save_iteration_dd(iter_key, story_id, iter_map_store):
+    if not story_id or story_id == "__balance__" or not iter_key:
+        raise PreventUpdate
+    full_path = (iter_map_store or {}).get(iter_key)
+    if not full_path:
+        raise PreventUpdate
+    write_fields(int(story_id), {"iteration": full_path})
+    with engine.begin() as conn:
+        conn.execute(text(
+            "UPDATE work_items_main SET iteration_path=:p WHERE work_item_id=:id"
+        ), {"p": full_path, "id": int(story_id)})
+    return story_id
+
+
+@callback(
+    Output("dp-panel-store", "data", allow_duplicate=True),
+    Input({"type": "dp-prio-btn", "key": ALL}, "n_clicks"),
+    State("dp-panel-store", "data"),
+    prevent_initial_call=True,
+)
+def _save_priority(clicks, story_id):
+    if not story_id or story_id == "__balance__" or not any(clicks):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid:
+        raise PreventUpdate
+    prio_val = int(tid["key"])
+    write_fields(int(story_id), {"priority": prio_val})
+    with engine.begin() as conn:
+        conn.execute(text(
+            "UPDATE work_items_main SET priority=:p WHERE work_item_id=:id"
+        ), {"p": prio_val, "id": int(story_id)})
+    return story_id
+
+
+@callback(
+    Output("dp-panel-store", "data", allow_duplicate=True),
+    Input({"type": "dp-type-btn", "key": ALL}, "n_clicks"),
+    State("dp-panel-store", "data"),
+    prevent_initial_call=True,
+)
+def _save_type(clicks, story_id):
+    if not story_id or story_id == "__balance__" or not any(clicks):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid:
+        raise PreventUpdate
+    with engine.begin() as conn:
+        conn.execute(text(
+            "UPDATE work_items_main SET type=:t WHERE work_item_id=:id"
+        ), {"t": tid["key"], "id": int(story_id)})
     return story_id
 
 

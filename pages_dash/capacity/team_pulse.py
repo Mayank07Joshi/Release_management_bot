@@ -416,10 +416,12 @@ def _panel_stubs() -> list:
     """Return fresh hidden stub components so Dash can resolve panel callback IDs
     even before the panel has been opened for the first time."""
     return [
-        html.Button(id="tp-sel-all",   n_clicks=0, style={"display": "none"}),
-        html.Button(id="tp-sel-clear", n_clicks=0, style={"display": "none"}),
-        html.Button(id="tp-move-btn",  n_clicks=0, style={"display": "none"}),
-        dcc.Dropdown(id="tp-move-month", options=[], style={"display": "none"}),
+        html.Button(id="tp-sel-all",      n_clicks=0, style={"display": "none"}),
+        html.Button(id="tp-sel-clear",    n_clicks=0, style={"display": "none"}),
+        html.Button(id="tp-move-btn",     n_clicks=0, style={"display": "none"}),
+        html.Button(id="tp-move-rel-btn", n_clicks=0, style={"display": "none"}),
+        dcc.Dropdown(id="tp-move-month",     options=[], style={"display": "none"}),
+        dcc.Dropdown(id="tp-move-rel-month", options=[], style={"display": "none"}),
     ]
 
 
@@ -541,7 +543,7 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
                                 placeholder="Set release month…",
                                 clearable=False,
                                 style={"flex": "1", "fontSize": "11px", "minWidth": "0"},
-                                className="tp-rd-dropdown",
+                                className="dark-dropdown",
                             ),
                             html.Button("Set", id={"type": "tp-rd-save", "wid": x["id"]},
                                         n_clicks=0,
@@ -729,7 +731,7 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
         # Move items section
         html.Div([
             html.Div([
-                html.Span("Move items", style={"fontSize": "12px", "fontWeight": "700", "color": _FG}),
+                html.Span("Move Items", style={"fontSize": "12px", "fontWeight": "700", "color": _FG}),
                 html.Span(f"{n_sel} selected", style={
                     "fontSize": "11px", "fontFamily": _MONO, "color": _SEL_CYAN,
                 }),
@@ -746,7 +748,13 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
                     "background": "none", "border": f"1px solid {_BD}",
                     "borderRadius": "6px", "padding": "4px 9px", "cursor": "pointer",
                 }),
-            ], style={"display": "flex", "alignItems": "center", "gap": "6px", "marginBottom": "8px"}),
+            ], style={"display": "flex", "alignItems": "center", "gap": "6px", "marginBottom": "10px"}),
+
+            # ── Move Iteration ────────────────────────────────────────────────
+            html.Div("MOVE ITERATION", style={
+                "fontSize": "9.5px", "fontWeight": "700", "color": _DIM,
+                "letterSpacing": "0.5px", "marginBottom": "5px",
+            }),
             html.Div([
                 dcc.Dropdown(
                     id="tp-move-month",
@@ -758,10 +766,10 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
                         }
                         for i, (y2, m2) in enumerate(_rolling_months(12))
                     ],
-                    placeholder="Move to month…",
+                    placeholder="Select iteration month…",
                     clearable=False,
                     style={"flex": "1", "fontSize": "12.5px"},
-                    className="tp-move-dropdown",
+                    className="dark-dropdown",
                 ),
                 html.Button("Move", id="tp-move-btn", n_clicks=0,
                             disabled=(n_sel == 0),
@@ -770,6 +778,34 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
                                 "fontSize": "12.5px", "fontWeight": "700",
                                 "cursor": "pointer" if n_sel > 0 else "not-allowed",
                                 "background": _SEL_CYAN if n_sel > 0 else _BG_PAGE,
+                                "color": "rgb(11,17,32)" if n_sel > 0 else _DIM,
+                                "border": f"1px solid {_BD}",
+                                "whiteSpace": "nowrap",
+                            }),
+            ], style={"display": "flex", "alignItems": "center", "gap": "8px",
+                      "marginBottom": "12px"}),
+
+            # ── Move Release Date ─────────────────────────────────────────────
+            html.Div("MOVE RELEASE DATE", style={
+                "fontSize": "9.5px", "fontWeight": "700", "color": _DIM,
+                "letterSpacing": "0.5px", "marginBottom": "5px",
+            }),
+            html.Div([
+                dcc.Dropdown(
+                    id="tp-move-rel-month",
+                    options=[{"label": m, "value": m} for m in _MONTH_OPTIONS],
+                    placeholder="Select release month…",
+                    clearable=False,
+                    style={"flex": "1", "fontSize": "12.5px"},
+                    className="dark-dropdown",
+                ),
+                html.Button("Set", id="tp-move-rel-btn", n_clicks=0,
+                            disabled=(n_sel == 0),
+                            style={
+                                "padding": "8px 16px", "borderRadius": "7px",
+                                "fontSize": "12.5px", "fontWeight": "700",
+                                "cursor": "pointer" if n_sel > 0 else "not-allowed",
+                                "background": _AMBER if n_sel > 0 else _BG_PAGE,
                                 "color": "rgb(11,17,32)" if n_sel > 0 else _DIM,
                                 "border": f"1px solid {_BD}",
                                 "whiteSpace": "nowrap",
@@ -1897,6 +1933,31 @@ def _set_release_date(n_clicks_list, rd_vals):
     _aw(wid, {"release_date": rd})
     import time as _t
     return _t.time(), f"Release date set: #{wid} → {rd}"
+
+
+# ── Bulk release date set (Move Release Date button) ─────────────────────────
+@callback(
+    Output("tp-rd-refresh",  "data", allow_duplicate=True),
+    Output("tp-toast-store", "data", allow_duplicate=True),
+    Input("tp-move-rel-btn", "n_clicks"),
+    State("tp-panel-selection", "data"),
+    State("tp-move-rel-month",  "value"),
+    prevent_initial_call=True,
+)
+def _bulk_set_release_date(n_clicks, selected_ids, rd):
+    if not n_clicks or not selected_ids or not rd:
+        raise PreventUpdate
+    ids = [int(i) for i in selected_ids]
+    with engine.begin() as conn:
+        for wid in ids:
+            conn.execute(text(
+                "UPDATE work_items_main SET release_date = :rd WHERE work_item_id = :wid"
+            ), {"rd": rd, "wid": wid})
+    from sync.ado_write import write_fields as _aw
+    for wid in ids:
+        _aw(wid, {"release_date": rd})
+    import time as _t
+    return _t.time(), f"Release date set for {len(ids)} item(s) → {rd}"
 
 
 # ── Toast notification (server-side: show for 3 s via interval) ───────────────
