@@ -413,6 +413,7 @@ def layout(**_):
         dcc.Store(id="dt-view-tab",  data="grid"),      # "grid" | "gantt"
         dcc.Store(id="dt-gantt-view", data="0-12"),     # for gantt window
         dcc.Store(id="dt-gantt-type", data="all"),      # for gantt type filter
+        dcc.Store(id="gantt-expanded", data={"s": [], "t": []}),  # shared with gantt_toggle.js
 
         # Page header
         html.Div([
@@ -684,9 +685,10 @@ def _render_panel_only(panel_wid, rolling, sizes, owner, platform, search):
     Input("dt-view-tab",            "data"),
     Input("dt-gantt-view-select",   "value"),
     Input("dt-gantt-type-select",   "value"),
+    State("gantt-expanded",         "data"),
     prevent_initial_call=True,
 )
-def _render_gantt(view_tab, gantt_view, gantt_type):
+def _render_gantt(view_tab, gantt_view, gantt_type, expanded):
     if view_tab != "gantt":
         return no_update
     try:
@@ -694,8 +696,8 @@ def _render_gantt(view_tab, gantt_view, gantt_type):
         ws, we, _ = _gantt_window(gantt_view or "0-12")
         return _build_gantt_html(
             ws, we,
-            expanded_sprints=set(),
-            expanded_items=set(),
+            expanded_sprints=set((expanded or {}).get("s", [])),
+            expanded_items=set((expanded or {}).get("t", [])),
             dev_filter=None,
             type_filter=gantt_type or "all",
             prio_filter=None,
