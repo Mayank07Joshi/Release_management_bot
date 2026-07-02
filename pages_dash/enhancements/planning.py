@@ -1263,7 +1263,7 @@ tracker_modal = dbc.Modal([
 # ── Capacity matrix panel styles (needed before matrix_panel definition) ──────
 _CAP_PANEL_BASE   = {
     "position": "fixed", "top": "0", "right": "0",
-    "height": "100vh", "width": "560px",
+    "height": "100vh", "width": "760px",
     "background": C2,
     "borderLeft": "1px solid rgba(255,255,255,0.10)",
     "zIndex": "1050",
@@ -1372,7 +1372,7 @@ def _kcard_style(color: str, active: bool) -> dict:
 # ── Side panel style constants ────────────────────────────────────────────────
 _PANEL_BASE = {
     "position": "fixed", "top": "0", "right": "0",
-    "height": "100vh", "width": "500px",
+    "height": "100vh", "width": "760px",
     "background": C2,
     "borderLeft": f"1px solid rgba(255,255,255,0.10)",
     "zIndex": "1050",

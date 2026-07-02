@@ -35,7 +35,7 @@ _ALL_MONTH_OPTIONS = [
 ]
 
 _PANEL_BASE = {
-    "position": "fixed", "top": "0", "right": "0", "height": "100vh", "width": "520px",
+    "position": "fixed", "top": "0", "right": "0", "height": "100vh", "width": "760px",
     "background": _C2, "borderLeft": "1px solid rgba(255,255,255,0.10)", "zIndex": "1060",
     "display": "flex", "flexDirection": "column", "boxShadow": "-16px 0 60px rgba(0,0,0,0.80)",
     "transition": "transform 0.28s cubic-bezier(.4,0,.2,1)",
@@ -44,7 +44,7 @@ _PANEL_OPEN   = dict(_PANEL_BASE, transform="translateX(0%)")
 _PANEL_CLOSED = dict(_PANEL_BASE, transform="translateX(110%)")
 
 _DEV_PANEL_BASE = {
-    "position": "fixed", "top": "0", "right": "0", "height": "100vh", "width": "560px",
+    "position": "fixed", "top": "0", "right": "0", "height": "100vh", "width": "760px",
     "background": _C2, "borderLeft": "1px solid rgba(255,255,255,0.10)", "zIndex": "1070",
     "display": "flex", "flexDirection": "column", "boxShadow": "-16px 0 60px rgba(0,0,0,0.80)",
     "transition": "transform 0.28s cubic-bezier(.4,0,.2,1)",

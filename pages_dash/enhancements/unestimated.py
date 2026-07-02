@@ -14,7 +14,7 @@ _C2 = "var(--bg-hover)"
 
 _PANEL_CLOSED = {
     "position": "fixed", "top": "0", "right": "0",
-    "height": "100vh", "width": "500px",
+    "height": "100vh", "width": "760px",
     "background": _C2,
     "borderLeft": "1px solid rgba(255,255,255,0.10)",
     "zIndex": "1050",

@@ -76,6 +76,12 @@ def _classify_size(h: float) -> str:
 
 _BUG_TYPES = ("Issue", "Bug", "Bug_UI", "Bug_Text")
 
+_MONTH_OPTIONS = [
+    "Jan 2026","Feb 2026","Mar 2026","Apr 2026","May 2026","Jun 2026",
+    "Jul 2026","Aug 2026","Sep 2026","Oct 2026","Nov 2026","Dec 2026",
+    "Jan 2027","Feb 2027","Mar 2027","Apr 2027","May 2027","Jun 2027",
+]
+
 def _classify_pri(priority) -> str:
     p = str(priority or "").strip()
     if p in ("1", "P1"):   return "P1"
@@ -516,17 +522,42 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
                     "fontSize": "10px", "color": _DIM, "marginTop": "1px",
                 }),
                 *(
-                    [html.Span(
-                        "No release date",
-                        style={
-                            "display": "inline-block", "marginTop": "4px",
-                            "background": "rgba(251,191,36,0.12)",
-                            "color": "rgb(251,191,36)",
-                            "border": "1px solid rgba(251,191,36,0.3)",
-                            "borderRadius": "4px", "padding": "1px 7px",
-                            "fontSize": "10px", "fontWeight": "600",
-                        }
-                    )]
+                    [
+                        html.Span(
+                            "No release date",
+                            style={
+                                "display": "inline-block", "marginTop": "4px",
+                                "background": "rgba(251,191,36,0.12)",
+                                "color": "rgb(251,191,36)",
+                                "border": "1px solid rgba(251,191,36,0.3)",
+                                "borderRadius": "4px", "padding": "1px 7px",
+                                "fontSize": "10px", "fontWeight": "600",
+                            }
+                        ),
+                        html.Div([
+                            dcc.Dropdown(
+                                id={"type": "tp-rd-sel", "wid": x["id"]},
+                                options=[{"label": m, "value": m} for m in _MONTH_OPTIONS],
+                                placeholder="Set release month…",
+                                clearable=False,
+                                style={"flex": "1", "fontSize": "11px", "minWidth": "0"},
+                                className="tp-rd-dropdown",
+                            ),
+                            html.Button("Set", id={"type": "tp-rd-save", "wid": x["id"]},
+                                        n_clicks=0,
+                                        style={
+                                            "flexShrink": "0", "padding": "3px 10px",
+                                            "borderRadius": "5px", "fontSize": "11px",
+                                            "fontWeight": "600", "cursor": "pointer",
+                                            "background": "rgba(251,191,36,0.15)",
+                                            "color": "rgb(251,191,36)",
+                                            "border": "1px solid rgba(251,191,36,0.4)",
+                                        }),
+                        ], style={
+                            "display": "flex", "gap": "4px", "marginTop": "5px",
+                            "alignItems": "center",
+                        }),
+                    ]
                     if x.get("type") == "issue" and not x.get("release_date") else []
                 ),
                 *(
@@ -1344,6 +1375,7 @@ def layout(**_):
         dcc.Store(id="tp-panel-selection", data=[]),
         dcc.Store(id="tp-toast-store",     data=None),
         dcc.Store(id="tp-moved-store",     data={}),
+        dcc.Store(id="tp-rd-refresh",      data=0),
 
         # ── Toast notification ────────────────────────────────────────────────
         html.Div(id="tp-toast", style={"display": "none"},
@@ -1677,12 +1709,13 @@ def _close_panel(n):
     Output("tp-panel-body", "children"),
     Input("tp-panel-ctx",       "data"),
     Input("tp-panel-selection", "data"),
+    Input("tp-rd-refresh",      "data"),
     State("tp-team-store",     "data"),
     State("tp-source-store",   "data"),
     State("tp-platform-store", "data"),
     State("tp-moved-store",    "data"),
 )
-def _render_panel(panel_ctx, selection, team_filter, source_filter, platform_filter,
+def _render_panel(panel_ctx, selection, _rd_refresh, team_filter, source_filter, platform_filter,
                   moved_items):
     _PANEL_STYLE = {
         "position": "fixed", "top": "0", "right": "0",
@@ -1833,6 +1866,37 @@ def _panel_move(n_clicks, selected_ids, month_idx, panel_ctx, moved_store,
     grid  = _build_grid(items, team or "All", horizon or 365,
                         source or "All", platform or "All")
     return [], updated, grid
+
+
+# ── Release date set ──────────────────────────────────────────────────────────
+@callback(
+    Output("tp-rd-refresh",  "data", allow_duplicate=True),
+    Output("tp-toast-store", "data", allow_duplicate=True),
+    Input({"type": "tp-rd-save", "wid": ALL}, "n_clicks"),
+    State({"type": "tp-rd-sel",  "wid": ALL}, "value"),
+    prevent_initial_call=True,
+)
+def _set_release_date(n_clicks_list, rd_vals):
+    triggered = ctx.triggered_id
+    if not triggered or not isinstance(triggered, dict):
+        raise PreventUpdate
+    wid = int(triggered["wid"])
+    # Find corresponding dropdown value
+    idx = next(
+        (i for i, inp in enumerate(ctx.inputs_list[0]) if inp["id"]["wid"] == wid),
+        None,
+    )
+    rd = (rd_vals[idx] or "").strip() if idx is not None and idx < len(rd_vals) else ""
+    if not rd:
+        raise PreventUpdate
+    with engine.begin() as conn:
+        conn.execute(text(
+            "UPDATE work_items_main SET release_date = :rd WHERE work_item_id = :wid"
+        ), {"rd": rd, "wid": wid})
+    from sync.ado_write import write_fields as _aw
+    _aw(wid, {"release_date": rd})
+    import time as _t
+    return _t.time(), f"Release date set: #{wid} → {rd}"
 
 
 # ── Toast notification (server-side: show for 3 s via interval) ───────────────
