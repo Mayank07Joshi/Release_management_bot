@@ -524,42 +524,17 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
                     "fontSize": "10px", "color": _DIM, "marginTop": "1px",
                 }),
                 *(
-                    [
-                        html.Span(
-                            "No release date",
-                            style={
-                                "display": "inline-block", "marginTop": "4px",
-                                "background": "rgba(251,191,36,0.12)",
-                                "color": "rgb(251,191,36)",
-                                "border": "1px solid rgba(251,191,36,0.3)",
-                                "borderRadius": "4px", "padding": "1px 7px",
-                                "fontSize": "10px", "fontWeight": "600",
-                            }
-                        ),
-                        html.Div([
-                            dcc.Dropdown(
-                                id={"type": "tp-rd-sel", "wid": x["id"]},
-                                options=[{"label": m, "value": m} for m in _MONTH_OPTIONS],
-                                placeholder="Set release month…",
-                                clearable=False,
-                                style={"flex": "1", "fontSize": "11px", "minWidth": "0"},
-                                className="dark-dropdown",
-                            ),
-                            html.Button("Set", id={"type": "tp-rd-save", "wid": x["id"]},
-                                        n_clicks=0,
-                                        style={
-                                            "flexShrink": "0", "padding": "3px 10px",
-                                            "borderRadius": "5px", "fontSize": "11px",
-                                            "fontWeight": "600", "cursor": "pointer",
-                                            "background": "rgba(251,191,36,0.15)",
-                                            "color": "rgb(251,191,36)",
-                                            "border": "1px solid rgba(251,191,36,0.4)",
-                                        }),
-                        ], style={
-                            "display": "flex", "gap": "4px", "marginTop": "5px",
-                            "alignItems": "center",
-                        }),
-                    ]
+                    [html.Span(
+                        "No release date",
+                        style={
+                            "display": "inline-block", "marginTop": "4px",
+                            "background": "rgba(251,191,36,0.12)",
+                            "color": "rgb(251,191,36)",
+                            "border": "1px solid rgba(251,191,36,0.3)",
+                            "borderRadius": "4px", "padding": "1px 7px",
+                            "fontSize": "10px", "fontWeight": "600",
+                        },
+                    )]
                     if x.get("type") == "issue" and not x.get("release_date") else []
                 ),
                 *(
@@ -1902,37 +1877,6 @@ def _panel_move(n_clicks, selected_ids, month_idx, panel_ctx, moved_store,
     grid  = _build_grid(items, team or "All", horizon or 365,
                         source or "All", platform or "All")
     return [], updated, grid
-
-
-# ── Release date set ──────────────────────────────────────────────────────────
-@callback(
-    Output("tp-rd-refresh",  "data", allow_duplicate=True),
-    Output("tp-toast-store", "data", allow_duplicate=True),
-    Input({"type": "tp-rd-save", "wid": ALL}, "n_clicks"),
-    State({"type": "tp-rd-sel",  "wid": ALL}, "value"),
-    prevent_initial_call=True,
-)
-def _set_release_date(n_clicks_list, rd_vals):
-    triggered = ctx.triggered_id
-    if not triggered or not isinstance(triggered, dict):
-        raise PreventUpdate
-    wid = int(triggered["wid"])
-    # Find corresponding dropdown value
-    idx = next(
-        (i for i, inp in enumerate(ctx.inputs_list[0]) if inp["id"]["wid"] == wid),
-        None,
-    )
-    rd = (rd_vals[idx] or "").strip() if idx is not None and idx < len(rd_vals) else ""
-    if not rd:
-        raise PreventUpdate
-    with engine.begin() as conn:
-        conn.execute(text(
-            "UPDATE work_items_main SET release_date = :rd WHERE work_item_id = :wid"
-        ), {"rd": rd, "wid": wid})
-    from sync.ado_write import write_fields as _aw
-    _aw(wid, {"release_date": rd})
-    import time as _t
-    return _t.time(), f"Release date set: #{wid} → {rd}"
 
 
 # ── Bulk release date set (Move Release Date button) ─────────────────────────
