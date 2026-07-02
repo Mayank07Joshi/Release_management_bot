@@ -59,12 +59,22 @@ _TEAM_COLORS = {
 _ENH_SIZES   = ["Big", "Medium", "Small", "Very small", "Unsized"]
 _PRI_LABELS  = ["P1", "P2", "P3", "Others"]
 
+_STORY_SIZE_MAP = {
+    "big": "Big", "medium": "Medium", "small": "Small",
+    "very small": "Very small", "very_small": "Very small",
+}
+
+def _map_story_size(raw: str) -> str:
+    return _STORY_SIZE_MAP.get(str(raw or "").strip().lower(), "Unsized")
+
 def _classify_size(h: float) -> str:
     if h >= 40:   return "Big"
     if h >= 16:   return "Medium"
     if h >= 8:    return "Small"
     if h >= 1:    return "Very small"
     return "Unsized"
+
+_BUG_TYPES = ("Issue", "Bug", "Bug_UI", "Bug_Text")
 
 def _classify_pri(priority) -> str:
     p = str(priority or "").strip()
@@ -111,14 +121,15 @@ def _load_items() -> list[dict]:
             SELECT
                 w.work_item_id,
                 w.work_item_type,
-                COALESCE(w.priority, '') AS priority,
-                w.work_item_id,
+                COALESCE(w.priority, '')      AS priority,
                 COALESCE(w.main_developer, '') AS main_developer,
                 COALESCE(w.original_estimate, 0) AS orig_est,
                 COALESCE(a.task_est_sum, 0)       AS task_est,
                 w.iteration_path,
                 COALESCE(a.est_status, 'unestimated') AS est_status,
-                COALESCE(w.type, 'Internal')      AS cust_type
+                COALESCE(w.type, 'Internal')      AS cust_type,
+                COALESCE(w.story_size, '')        AS story_size,
+                COALESCE(w.release_date, '')      AS release_date
             FROM work_items_main w
             LEFT JOIN agg_story_estimation a ON a.work_item_id = w.work_item_id
             WHERE w.state NOT IN (
@@ -127,7 +138,7 @@ def _load_items() -> list[dict]:
             )
             AND w.main_developer IS NOT NULL
             AND w.main_developer NOT IN ('', 'Unassigned', 'Not Specified')
-            AND w.work_item_type IN ('Enhancement','User Story','Issue','Bug')
+            AND w.work_item_type IN ('Enhancement','User Story','Issue','Bug','Bug_UI','Bug_Text')
         """)).fetchall()
 
     items = []
@@ -135,7 +146,7 @@ def _load_items() -> list[dict]:
         ym = _parse_iter_ym(r.iteration_path)
         if not ym:
             continue
-        is_issue  = r.work_item_type in ("Issue", "Bug")
+        is_issue  = r.work_item_type in _BUG_TYPES
         orig_h    = float(r.orig_est or 0)
         task_h    = float(r.task_est or 0)
         est_h     = task_h if task_h > 0 else orig_h
@@ -143,20 +154,21 @@ def _load_items() -> list[dict]:
         team      = _TEAM_MAP.get(r.main_developer, "Other")
         platform  = "Mobile" if team == "Mobile Dev" else ("Web" if team == "Web Dev" else None)
         items.append({
-            "wid":       int(r.work_item_id),
-            "type":      "issue" if is_issue else "enh",
-            "pri":       _classify_pri(r.priority),
-            "dev":       r.main_developer,
-            "team":      team,
-            "orig_h":    orig_h,
-            "task_h":    task_h,
-            "est_h":     est_h,
-            "size":      _classify_size(est_h) if not is_issue else None,
-            "ym":        ym,
-            "mk":        _month_key(*ym),
-            "estimated": estimated,
-            "cust_type": str(r.cust_type or "Internal"),
-            "platform":  platform,
+            "wid":          int(r.work_item_id),
+            "type":         "issue" if is_issue else "enh",
+            "pri":          _classify_pri(r.priority),
+            "dev":          r.main_developer,
+            "team":         team,
+            "orig_h":       orig_h,
+            "task_h":       task_h,
+            "est_h":        est_h,
+            "size":         _map_story_size(r.story_size) if not is_issue else None,
+            "ym":           ym,
+            "mk":           _month_key(*ym),
+            "estimated":    estimated,
+            "cust_type":    str(r.cust_type or "Internal"),
+            "platform":     platform,
+            "release_date": str(r.release_date or ""),
         })
     return items
 
@@ -184,7 +196,7 @@ def _load_task_hours() -> list[dict]:
             AND t.state NOT IN (
                 'Closed','Resolved','Not Required','Not an issue'
             )
-            AND w.work_item_type IN ('Enhancement','User Story','Issue','Bug')
+            AND w.work_item_type IN ('Enhancement','User Story','Issue','Bug','Bug_UI','Bug_Text')
             AND w.state NOT IN (
                 'Closed','Resolved','Not Required','Not an issue',
                 'No Customer Response','Not Specified','Userstory Update'
@@ -210,7 +222,7 @@ def _load_task_hours() -> list[dict]:
             "cust_type":   str(r.cust_type or "Internal"),
             "platform":    platform,
             "parent_id":   int(r.parent_id) if r.parent_id else None,
-            "parent_type": "issue" if str(r.parent_type or "") in ("Issue", "Bug") else "enh",
+            "parent_type": "issue" if str(r.parent_type or "") in _BUG_TYPES else "enh",
         })
     return result
 
@@ -234,6 +246,8 @@ def _dev_panel_load(mk: str, dev: str,
                 w.work_item_type,
                 COALESCE(w.type, 'Internal') AS cust_type,
                 COALESCE(w.priority, '')     AS priority,
+                COALESCE(w.story_size, '')   AS story_size,
+                COALESCE(w.release_date, '') AS release_date,
                 CASE
                     WHEN ta.task_h IS NOT NULL THEN ta.task_h
                     ELSE COALESCE(
@@ -255,7 +269,7 @@ def _dev_panel_load(mk: str, dev: str,
                   AND state NOT IN ('Closed','Resolved','Not Required','Not an issue')
                 GROUP BY parent_id
             ) ta ON ta.parent_id = w.work_item_id
-            WHERE w.work_item_type IN ('Enhancement','User Story','Issue','Bug')
+            WHERE w.work_item_type IN ('Enhancement','User Story','Issue','Bug','Bug_UI','Bug_Text')
               AND w.state NOT IN (
                   'Closed','Resolved','Not Required','Not an issue',
                   'No Customer Response','Not Specified','Userstory Update'
@@ -273,6 +287,7 @@ def _dev_panel_load(mk: str, dev: str,
                    ))
               )
             GROUP BY w.work_item_id, w.title, w.work_item_type, w.type, w.priority,
+                     w.story_size, w.release_date,
                      w.remaining_work, w.original_estimate, w.completed_work, ta.task_h
         """), {"dev": dev, "pat": iter_pat}).fetchall()
 
@@ -283,20 +298,21 @@ def _dev_panel_load(mk: str, dev: str,
             continue
         if platform_filter != "All" and platform != platform_filter:
             continue
-        is_issue = r.work_item_type in ("Issue", "Bug")
+        is_issue = r.work_item_type in _BUG_TYPES
         est_h    = float(r.task_h or 0)
         result.append({
-            "id":        r.work_item_id,
-            "title":     r.title,
-            "type":      "issue" if is_issue else "enh",
-            "dev":       dev,
-            "team":      team,
-            "pri":       _classify_pri(r.priority),
-            "size":      _classify_size(est_h) if not is_issue else None,
-            "est_h":     est_h,
-            "estimated": est_h > 0,
-            "cust_type": cust,
-            "platform":  platform,
+            "id":           r.work_item_id,
+            "title":        r.title,
+            "type":         "issue" if is_issue else "enh",
+            "dev":          dev,
+            "team":         team,
+            "pri":          _classify_pri(r.priority),
+            "size":         _map_story_size(r.story_size) if not is_issue else None,
+            "est_h":        est_h,
+            "estimated":    est_h > 0,
+            "cust_type":    cust,
+            "platform":     platform,
+            "release_date": str(r.release_date or ""),
         })
     return result
 
@@ -319,7 +335,9 @@ def _panel_load(mk: str, team_filter: str,
                 COALESCE(w.type, 'Internal')      AS cust_type,
                 COALESCE(w.priority, '')           AS priority,
                 COALESCE(tk.iter_task_est, 0)     AS iter_task_est,
-                COALESCE(ar.active_remaining, 0)  AS task_est_total
+                COALESCE(ar.active_remaining, 0)  AS task_est_total,
+                COALESCE(w.story_size, '')         AS story_size,
+                COALESCE(w.release_date, '')       AS release_date
             FROM work_items_main w
             LEFT JOIN agg_story_estimation a ON a.work_item_id = w.work_item_id
             LEFT JOIN (
@@ -349,12 +367,12 @@ def _panel_load(mk: str, team_filter: str,
             )
             AND w.main_developer IS NOT NULL
             AND w.main_developer NOT IN ('', 'Unassigned', 'Not Specified')
-            AND w.work_item_type IN ('Enhancement','User Story','Issue','Bug')
+            AND w.work_item_type IN ('Enhancement','User Story','Issue','Bug','Bug_UI','Bug_Text')
             AND w.iteration_path LIKE :pat
         """), {"pat": iter_pat}).fetchall()
     result = []
     for r in rows:
-        is_issue    = r.work_item_type in ("Issue", "Bug")
+        is_issue    = r.work_item_type in _BUG_TYPES
         orig_h      = float(r.orig_est or 0)
         iter_task_h  = float(r.iter_task_est or 0)
         all_task_h   = float(r.task_est_total or 0)
@@ -370,16 +388,17 @@ def _panel_load(mk: str, team_filter: str,
             if plat != platform_filter:
                 continue
         result.append({
-            "id":        int(r.work_item_id),
-            "title":     str(r.title),
-            "type":      "issue" if is_issue else "enh",
-            "dev":       str(r.main_developer),
-            "team":      team,
-            "pri":       _classify_pri(r.priority),
-            "size":      _classify_size(est_h) if not is_issue else None,
-            "est_h":     est_h,
-            "estimated": r.est_status in ("estimated", "estimated_via_tasks"),
-            "cust_type": str(r.cust_type or "Internal"),
+            "id":           int(r.work_item_id),
+            "title":        str(r.title),
+            "type":         "issue" if is_issue else "enh",
+            "dev":          str(r.main_developer),
+            "team":         team,
+            "pri":          _classify_pri(r.priority),
+            "size":         _map_story_size(r.story_size) if not is_issue else None,
+            "est_h":        est_h,
+            "estimated":    r.est_status in ("estimated", "estimated_via_tasks"),
+            "cust_type":    str(r.cust_type or "Internal"),
+            "release_date": str(r.release_date or ""),
         })
     return result
 
@@ -496,6 +515,20 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
                 html.Div(x["dev"], style={
                     "fontSize": "10px", "color": _DIM, "marginTop": "1px",
                 }),
+                *(
+                    [html.Span(
+                        "No release date",
+                        style={
+                            "display": "inline-block", "marginTop": "4px",
+                            "background": "rgba(251,191,36,0.12)",
+                            "color": "rgb(251,191,36)",
+                            "border": "1px solid rgba(251,191,36,0.3)",
+                            "borderRadius": "4px", "padding": "1px 7px",
+                            "fontSize": "10px", "fontWeight": "600",
+                        }
+                    )]
+                    if x.get("type") == "issue" and not x.get("release_date") else []
+                ),
                 *(
                     [html.Span(
                         f"Moved → {(moved_items or {}).get(str(x['id']))}",
