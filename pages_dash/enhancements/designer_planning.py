@@ -927,6 +927,7 @@ def layout(**_):
         html.Div([
             dcc.Store(id="dp-panel-store"),
             dcc.Store(id="dp-panel-visible", data=False),
+            dcc.Store(id="dp-pending",       data={}),
             html.Div(id="dp-panel-content"),
         ], id="dp-panel-wrapper", style={
             "position": "fixed", "top": "0", "right": "0",
@@ -943,6 +944,14 @@ def layout(**_):
 
 
 # ── Callbacks ─────────────────────────────────────────────────────────────────
+
+_PENDING_LABELS = {
+    "main_designer": "designer", "story_size": "size",
+    "main_developer": "developer", "story_owner": "owner",
+    "release_date": "release", "iteration_key": "iteration",
+    "priority": "priority", "type": "type",
+}
+
 
 @callback(
     Output("dp-panel-wrapper",  "style"),
@@ -962,6 +971,7 @@ def _panel_visibility(visible):
 @callback(
     Output("dp-panel-store",   "data"),
     Output("dp-panel-visible", "data"),
+    Output("dp-pending",       "data"),
     Input({"type": "dp-row", "key": ALL}, "n_clicks"),
     prevent_initial_call=True,
 )
@@ -972,16 +982,17 @@ def _open_panel(clicks):
     if not tid:
         raise PreventUpdate
     story_id = int(tid["key"])
-    return story_id, True
+    return story_id, True, {}
 
 
 @callback(
     Output("dp-panel-content", "children"),
-    Input("dp-panel-store",  "data"),
-    State("dp-iter-map",     "data"),
+    Input("dp-panel-store",    "data"),
+    Input("dp-pending",        "data"),
+    State("dp-iter-map",       "data"),
     prevent_initial_call=True,
 )
-def _render_panel(story_id, iter_map_store):
+def _render_panel(story_id, pending, iter_map_store):
     if story_id is None:
         raise PreventUpdate
     if story_id == "__balance__":
@@ -1047,14 +1058,14 @@ def _render_panel(story_id, iter_map_store):
         s = (v or "").strip()
         return s if s not in ("Unassigned", "") else None
 
-    cur_designer      = _clean(row.main_designer)
-    cur_developer     = _clean(row.main_developer)
-    cur_owner         = (row.story_owner   or "").strip()
-    cur_size          = (row.story_size or "").strip().title()
-    cur_story_status  = row.story_status   or ""
-    cur_priority      = str(row.priority or "").strip()
-    cur_cust_type     = (row.cust_type or "Internal").strip()
-    cur_release       = str(row.release_date or "").strip()
+    cur_designer     = _clean(row.main_designer)
+    cur_developer    = _clean(row.main_developer)
+    cur_owner        = (row.story_owner   or "").strip()
+    cur_size         = (row.story_size or "").strip().title()
+    cur_story_status = row.story_status   or ""
+    cur_priority     = str(row.priority or "").strip()
+    cur_cust_type    = (row.cust_type or "Internal").strip()
+    cur_release      = str(row.release_date or "").strip()
 
     # Build iteration dropdown options from iter_map store
     _iter_opts = []
@@ -1070,6 +1081,19 @@ def _render_panel(story_id, iter_map_store):
                 pass
     cur_iter_key = f"{dev_year}_{dev_month}"
 
+    # Merge pending over DB values
+    pending = pending or {}
+    eff_designer  = pending.get("main_designer",  cur_designer)
+    eff_size      = pending.get("story_size",      cur_size)
+    eff_developer = pending.get("main_developer",  cur_developer)
+    eff_owner     = pending.get("story_owner",     cur_owner)
+    eff_release   = pending.get("release_date",
+                                cur_release if cur_release in _MONTH_OPTIONS else None)
+    eff_iter_key  = pending.get("iteration_key",   cur_iter_key)
+    eff_priority  = pending.get("priority",        cur_priority)
+    eff_type      = pending.get("type",            cur_cust_type)
+    n_pending     = len(pending)
+
     # Extract platform prefix from title for a badge
     _title_raw = row.title or ""
     _plt_label = None
@@ -1081,6 +1105,8 @@ def _render_panel(story_id, iter_map_store):
             _plt_label = _pfx.strip(" |")
             _plt_color = _col
             break
+
+    btn_label = "Save Changes"
 
     return html.Div([
         # Title bar
@@ -1138,22 +1164,22 @@ def _render_panel(story_id, iter_map_store):
             _sec("Designer"),
             html.Div([
                 _tog(d.split()[0], {"type": "dp-designer-btn", "key": d},
-                     active=(d == cur_designer), color=_CYAN)
+                     active=(d == eff_designer), color=_CYAN)
                 for d in _DESIGNERS
             ], style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
 
             _sec("Priority"),
             html.Div([
-                _tog(p, {"type": "dp-prio-btn", "key": _PRI_MAP[p]},
-                     active=(cur_priority == _PRI_MAP[p]),
-                     color=_PRI_COLORS[p])
-                for p in _PRIORITIES
+                _tog(pr, {"type": "dp-prio-btn", "key": _PRI_MAP[pr]},
+                     active=(eff_priority == _PRI_MAP[pr]),
+                     color=_PRI_COLORS[pr])
+                for pr in _PRIORITIES
             ], style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
 
             _sec("Type"),
             html.Div([
                 _tog(t, {"type": "dp-type-btn", "key": t},
-                     active=(cur_cust_type == t), color=_AMBER)
+                     active=(eff_type == t), color=_AMBER)
                 for t in ("Customer", "Internal")
             ], style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
 
@@ -1161,7 +1187,7 @@ def _render_panel(story_id, iter_map_store):
             dcc.Dropdown(
                 id="dp-iter-dropdown",
                 options=_iter_opts,
-                value=cur_iter_key if cur_iter_key in {o["value"] for o in _iter_opts} else None,
+                value=eff_iter_key if eff_iter_key in {o["value"] for o in _iter_opts} else None,
                 placeholder="Select iteration month…",
                 clearable=False,
                 className="dark-dropdown",
@@ -1173,7 +1199,7 @@ def _render_panel(story_id, iter_map_store):
             dcc.Dropdown(
                 id="dp-release-dd",
                 options=[{"label": m, "value": m} for m in _MONTH_OPTIONS],
-                value=cur_release if cur_release in _MONTH_OPTIONS else None,
+                value=eff_release,
                 placeholder="Select release month…",
                 clearable=True,
                 className="dark-dropdown",
@@ -1183,21 +1209,21 @@ def _render_panel(story_id, iter_map_store):
             _sec("Story Size"),
             html.Div([
                 _tog(sz, {"type": "dp-size-btn", "key": sz},
-                     active=(sz == cur_size), color=_SIZE_COLORS.get(sz, _INDIGO))
+                     active=(sz == eff_size), color=_SIZE_COLORS.get(sz, _INDIGO))
                 for sz in _SIZES
             ], style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
 
             _sec("Developer"),
             html.Div([
                 _tog(d.split()[0], {"type": "dp-dev-btn", "key": d},
-                     active=(d == cur_developer), color=_INDIGO)
+                     active=(d == eff_developer), color=_INDIGO)
                 for d in DEV_NAMES
             ], style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
 
             _sec("User Story Owner"),
             html.Div([
                 _tog(o, {"type": "dp-owner-btn", "key": o},
-                     active=(o == cur_owner), color=_INDIGO)
+                     active=(o == eff_owner), color=_INDIGO)
                 for o in _STORY_OWNERS
             ], style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
 
@@ -1206,40 +1232,74 @@ def _render_panel(story_id, iter_map_store):
             html.Div("Driven by Story Readiness gates. Set gates there to update.",
                      style={"fontSize": "11px", "color": _DIM, "marginTop": "5px"}),
 
+            # ── Move / Clear buttons ───────────────────────────────────────────
+            html.Div([
+                html.Button(
+                    btn_label,
+                    id="dp-move-btn",
+                    n_clicks=0,
+                    disabled=(n_pending == 0),
+                    style={
+                        "padding": "10px 20px", "borderRadius": "8px", "flex": "1",
+                        "background": f"rgba({_rgb(_GREEN)},0.15)" if n_pending else _BG_HEAD,
+                        "border": (f"1px solid rgba({_rgb(_GREEN)},0.5)" if n_pending
+                                   else f"1px solid {_BD}"),
+                        "color": _GREEN if n_pending else _DIM,
+                        "cursor": "pointer" if n_pending else "default",
+                        "fontSize": "13px", "fontWeight": "700",
+                    },
+                ),
+                html.Button(
+                    "Clear",
+                    id="dp-clear-btn",
+                    n_clicks=0,
+                    disabled=(n_pending == 0),
+                    style={
+                        "padding": "10px 16px", "borderRadius": "8px",
+                        "background": "transparent",
+                        "border": f"1px solid rgba({_rgb(_RED)},0.4)" if n_pending else f"1px solid {_BD}",
+                        "color": _RED if n_pending else _DIM,
+                        "cursor": "pointer" if n_pending else "default",
+                        "fontSize": "13px", "fontWeight": "600",
+                    },
+                ),
+            ], style={
+                "display": "flex", "gap": "8px",
+                "marginTop": "28px", "paddingTop": "16px",
+                "borderTop": f"1px solid {_BD}",
+            }),
+
         ], style={"padding": "4px 16px 32px"}),
     ])
 
 
 @callback(
     Output("dp-panel-visible", "data", allow_duplicate=True),
+    Output("dp-pending",       "data", allow_duplicate=True),
     Input("dp-panel-close", "n_clicks"),
     prevent_initial_call=True,
 )
 def _close_panel(n):
     if not n:
         raise PreventUpdate
-    return False
+    return False, {}
 
 
 @callback(
-    Output("dp-panel-store", "data", allow_duplicate=True),
+    Output("dp-pending", "data", allow_duplicate=True),
     Input({"type": "dp-designer-btn", "key": ALL}, "n_clicks"),
-    State("dp-panel-store", "data"),
+    State("dp-pending", "data"),
     prevent_initial_call=True,
 )
-def _save_designer(clicks, story_id):
-    if not story_id or not any(clicks):
+def _select_designer(clicks, pending):
+    if not any(clicks):
         raise PreventUpdate
     tid = ctx.triggered_id
     if not tid:
         raise PreventUpdate
-    write_fields(story_id, {"main_designer": tid["key"]})
-    with engine.begin() as conn:
-        conn.execute(text(
-            "UPDATE work_items_main SET main_designer=:d WHERE work_item_id=:id"
-        ), {"d": tid["key"], "id": story_id})
-    return story_id
-
+    p = dict(pending or {})
+    p["main_designer"] = tid["key"]
+    return p
 
 
 @callback(
@@ -1258,7 +1318,7 @@ def _change_dev_month(_, __, cur, story_id, iter_map):
     y, m = cur["year"], cur["month"]
     delta = -1 if ctx.triggered_id == "dp-devmon-minus" else 1
     m += delta
-    if m < 1:   y -= 1; m = 12
+    if m < 1:    y -= 1; m = 12
     elif m > 12: y += 1; m = 1
     key = f"{y}_{m}"
     if iter_map and key in iter_map:
@@ -1271,141 +1331,201 @@ def _change_dev_month(_, __, cur, story_id, iter_map):
 
 
 @callback(
-    Output("dp-panel-store", "data", allow_duplicate=True),
+    Output("dp-pending", "data", allow_duplicate=True),
     Input({"type": "dp-size-btn", "key": ALL}, "n_clicks"),
-    State("dp-panel-store", "data"),
+    State("dp-pending", "data"),
     prevent_initial_call=True,
 )
-def _save_size(clicks, story_id):
-    if not story_id or not any(clicks):
+def _select_size(clicks, pending):
+    if not any(clicks):
         raise PreventUpdate
     tid = ctx.triggered_id
     if not tid:
         raise PreventUpdate
-    write_fields(story_id, {"story_size": tid["key"]})
-    with engine.begin() as conn:
-        conn.execute(text(
-            "UPDATE work_items_main SET story_size=:s WHERE work_item_id=:id"
-        ), {"s": tid["key"], "id": story_id})
-    return story_id
+    p = dict(pending or {})
+    p["story_size"] = tid["key"]
+    return p
 
 
 @callback(
-    Output("dp-panel-store", "data", allow_duplicate=True),
+    Output("dp-pending", "data", allow_duplicate=True),
     Input({"type": "dp-dev-btn", "key": ALL}, "n_clicks"),
-    State("dp-panel-store", "data"),
+    State("dp-pending", "data"),
     prevent_initial_call=True,
 )
-def _save_developer(clicks, story_id):
-    if not story_id or not any(clicks):
+def _select_developer(clicks, pending):
+    if not any(clicks):
         raise PreventUpdate
     tid = ctx.triggered_id
     if not tid:
         raise PreventUpdate
-    write_fields(story_id, {"main_developer": tid["key"]})
-    with engine.begin() as conn:
-        conn.execute(text(
-            "UPDATE work_items_main SET main_developer=:d WHERE work_item_id=:id"
-        ), {"d": tid["key"], "id": story_id})
-    return story_id
+    p = dict(pending or {})
+    p["main_developer"] = tid["key"]
+    return p
 
 
 @callback(
-    Output("dp-panel-store", "data", allow_duplicate=True),
+    Output("dp-pending", "data", allow_duplicate=True),
     Input({"type": "dp-owner-btn", "key": ALL}, "n_clicks"),
-    State("dp-panel-store", "data"),
+    State("dp-pending", "data"),
     prevent_initial_call=True,
 )
-def _save_owner(clicks, story_id):
-    if not story_id or not any(clicks):
+def _select_owner(clicks, pending):
+    if not any(clicks):
         raise PreventUpdate
     tid = ctx.triggered_id
     if not tid:
         raise PreventUpdate
-    write_fields(story_id, {"story_owner": tid["key"]})
-    with engine.begin() as conn:
-        conn.execute(text(
-            "UPDATE work_items_main SET story_owner=:o WHERE work_item_id=:id"
-        ), {"o": tid["key"], "id": story_id})
-    return story_id
+    p = dict(pending or {})
+    p["story_owner"] = tid["key"]
+    return p
 
 
 @callback(
-    Output("dp-panel-store", "data", allow_duplicate=True),
-    Input("dp-release-dd",   "value"),
-    State("dp-panel-store",  "data"),
+    Output("dp-pending", "data", allow_duplicate=True),
+    Input("dp-release-dd",  "value"),
+    State("dp-pending",     "data"),
     prevent_initial_call=True,
 )
-def _save_release(rd, story_id):
-    if not story_id or story_id == "__balance__":
+def _select_release(rd, pending):
+    p = dict(pending or {})
+    if p.get("release_date") == rd:
         raise PreventUpdate
-    write_fields(int(story_id), {"release_date": rd or ""})
-    with engine.begin() as conn:
-        conn.execute(text(
-            "UPDATE work_items_main SET release_date=:r WHERE work_item_id=:id"
-        ), {"r": rd or None, "id": int(story_id)})
-    return story_id
+    p["release_date"] = rd
+    return p
 
 
 @callback(
-    Output("dp-panel-store", "data", allow_duplicate=True),
+    Output("dp-pending", "data", allow_duplicate=True),
     Input("dp-iter-dropdown", "value"),
-    State("dp-panel-store",   "data"),
-    State("dp-iter-map",      "data"),
+    State("dp-pending",       "data"),
     prevent_initial_call=True,
 )
-def _save_iteration_dd(iter_key, story_id, iter_map_store):
-    if not story_id or story_id == "__balance__" or not iter_key:
+def _select_iteration_dd(iter_key, pending):
+    if not iter_key:
         raise PreventUpdate
-    full_path = (iter_map_store or {}).get(iter_key)
-    if not full_path:
+    p = dict(pending or {})
+    if p.get("iteration_key") == iter_key:
         raise PreventUpdate
-    write_fields(int(story_id), {"iteration": full_path})
-    with engine.begin() as conn:
-        conn.execute(text(
-            "UPDATE work_items_main SET iteration_path=:p WHERE work_item_id=:id"
-        ), {"p": full_path, "id": int(story_id)})
-    return story_id
+    p["iteration_key"] = iter_key
+    return p
 
 
 @callback(
-    Output("dp-panel-store", "data", allow_duplicate=True),
+    Output("dp-pending", "data", allow_duplicate=True),
     Input({"type": "dp-prio-btn", "key": ALL}, "n_clicks"),
-    State("dp-panel-store", "data"),
+    State("dp-pending", "data"),
     prevent_initial_call=True,
 )
-def _save_priority(clicks, story_id):
-    if not story_id or story_id == "__balance__" or not any(clicks):
+def _select_priority(clicks, pending):
+    if not any(clicks):
         raise PreventUpdate
     tid = ctx.triggered_id
     if not tid:
         raise PreventUpdate
-    prio_val = int(tid["key"])
-    write_fields(int(story_id), {"priority": prio_val})
-    with engine.begin() as conn:
-        conn.execute(text(
-            "UPDATE work_items_main SET priority=:p WHERE work_item_id=:id"
-        ), {"p": prio_val, "id": int(story_id)})
-    return story_id
+    p = dict(pending or {})
+    p["priority"] = tid["key"]
+    return p
 
 
 @callback(
-    Output("dp-panel-store", "data", allow_duplicate=True),
+    Output("dp-pending", "data", allow_duplicate=True),
     Input({"type": "dp-type-btn", "key": ALL}, "n_clicks"),
-    State("dp-panel-store", "data"),
+    State("dp-pending", "data"),
     prevent_initial_call=True,
 )
-def _save_type(clicks, story_id):
-    if not story_id or story_id == "__balance__" or not any(clicks):
+def _select_type(clicks, pending):
+    if not any(clicks):
         raise PreventUpdate
     tid = ctx.triggered_id
     if not tid:
         raise PreventUpdate
-    with engine.begin() as conn:
-        conn.execute(text(
-            "UPDATE work_items_main SET type=:t WHERE work_item_id=:id"
-        ), {"t": tid["key"], "id": int(story_id)})
-    return story_id
+    p = dict(pending or {})
+    p["type"] = tid["key"]
+    return p
+
+
+@callback(
+    Output("dp-pending", "data", allow_duplicate=True),
+    Input("dp-clear-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def _clear_pending(n):
+    if not n:
+        raise PreventUpdate
+    return {}
+
+
+@callback(
+    Output("dp-pending",     "data",  allow_duplicate=True),
+    Output("dp-panel-store", "data",  allow_duplicate=True),
+    Input("dp-move-btn",     "n_clicks"),
+    State("dp-pending",      "data"),
+    State("dp-panel-store",  "data"),
+    State("dp-iter-map",     "data"),
+    prevent_initial_call=True,
+)
+def _commit_all_changes(n, pending, story_id, iter_map_store):
+    if not n or not pending or not story_id or story_id == "__balance__":
+        raise PreventUpdate
+    sid        = int(story_id)
+    ado_fields: dict = {}
+    db_sets:    list = []
+    db_params:  dict = {"id": sid}
+
+    def _db(col, val):
+        db_sets.append(f"{col}=:{col}")
+        db_params[col] = val
+
+    if "main_designer" in pending:
+        v = pending["main_designer"]
+        ado_fields["main_designer"] = v
+        _db("main_designer", v)
+
+    if "story_size" in pending:
+        v = pending["story_size"]
+        ado_fields["story_size"] = v
+        _db("story_size", v)
+
+    if "main_developer" in pending:
+        v = pending["main_developer"]
+        ado_fields["main_developer"] = v
+        _db("main_developer", v)
+
+    if "story_owner" in pending:
+        v = pending["story_owner"]
+        ado_fields["story_owner"] = v
+        _db("story_owner", v)
+
+    if "release_date" in pending:
+        v = pending["release_date"]
+        ado_fields["release_date"] = v or ""
+        _db("release_date", v or None)
+
+    if "iteration_key" in pending:
+        full_path = (iter_map_store or {}).get(pending["iteration_key"])
+        if full_path:
+            ado_fields["iteration"] = full_path
+            _db("iteration_path", full_path)
+
+    if "priority" in pending:
+        prio_int = int(pending["priority"])
+        ado_fields["priority"] = prio_int
+        _db("priority", prio_int)
+
+    if "type" in pending:
+        _db("type", pending["type"])
+
+    if ado_fields:
+        write_fields(sid, ado_fields)
+
+    if db_sets:
+        with engine.begin() as conn:
+            conn.execute(text(
+                f"UPDATE work_items_main SET {', '.join(db_sets)} WHERE work_item_id=:id"
+            ), db_params)
+
+    return {}, sid
 
 
 @callback(
