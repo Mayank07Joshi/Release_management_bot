@@ -130,8 +130,8 @@ _PAGE_SIZE    = 4    # rows per page in BA Sign-Off table
 
 def _load_unestimated_data() -> list[dict]:
     """
-    Returns unestimated/partial 2026 Enhancements + Issues from agg_story_estimation.
-    Only items with est_status in ('unestimated', 'partial') are returned.
+    Returns all 2026 Enhancements + Issues/Bugs from agg_story_estimation with a known month.
+    Includes all est_status values so the dev×month matrix can show estimated counts too.
     """
     from data.loader import engine as _engine
     from sqlalchemy import text as _text
@@ -1372,7 +1372,7 @@ def _kcard_style(color: str, active: bool) -> dict:
 # ── Side panel style constants ────────────────────────────────────────────────
 _PANEL_BASE = {
     "position": "fixed", "top": "0", "right": "0",
-    "height": "100vh", "width": "760px",
+    "height": "100vh", "width": "500px",
     "background": C2,
     "borderLeft": f"1px solid rgba(255,255,255,0.10)",
     "zIndex": "1050",

@@ -29,12 +29,12 @@ log = logging.getLogger(__name__)
 
 # ── Shared constants ──────────────────────────────────────────────────────────
 
-_BUG_TYPES    = {"Bug", "Bug_UI", "Bug_Text"}
+_BUG_TYPES    = {"Issue", "Bug", "Bug_UI", "Bug_Text"}
 _ITEM_TYPES   = {"Enhancement"} | _BUG_TYPES
 
 _CLOSED_STATES = {
     "Closed", "Not an issue", "Not Required",
-    "Userstory Update", "No Customer Response", "Resolved",
+    "Userstory Update", "No Customer Response", "Resolved", "Not Specified",
 }
 # States that mean "done, nothing left to plan"
 _DONE_STATES = {"Done", "Watch List"} | _CLOSED_STATES
