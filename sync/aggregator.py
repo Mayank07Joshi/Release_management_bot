@@ -340,7 +340,11 @@ def _build_story_estimation(df: pd.DataFrame, conn, m0: int) -> int:
         df["iteration_path"].str.contains(_ITER_RE.pattern, regex=True, na=False)
     ].copy()
 
-    tasks = df[df["work_item_type"] == "Task"].copy()
+    _TASK_CLOSED = _CLOSED_STATES | {"Done"}
+    tasks = df[
+        (df["work_item_type"] == "Task") &
+        (~df["state"].isin(_TASK_CLOSED))
+    ].copy()
     tasks["original_estimate"] = pd.to_numeric(tasks["original_estimate"], errors="coerce").fillna(0)
     tasks["remaining_work"]    = pd.to_numeric(tasks.get("remaining_work", 0), errors="coerce").fillna(0)
     # Use original_estimate when set; fall back to remaining_work (matches _panel_load COALESCE logic)
