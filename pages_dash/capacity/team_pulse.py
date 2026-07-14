@@ -8,8 +8,9 @@ from dash import html, dcc, callback, Input, Output, State, ALL, ctx, no_update
 from dash.exceptions import PreventUpdate
 from sqlalchemy import text
 
-from config.dev_capacity import DEVELOPERS
+from config.dev_capacity import DEVELOPERS, DEV_NAMES, DESIGNER_NAMES, STORY_OWNER_NAMES
 from data.loader import engine
+from sync.ado_write import write_fields as _ado_write
 
 dash.register_page(__name__, path="/team-pulse", name="Team Pulse")
 
@@ -416,13 +417,208 @@ def _panel_stubs() -> list:
     """Return fresh hidden stub components so Dash can resolve panel callback IDs
     even before the panel has been opened for the first time."""
     return [
-        html.Button(id="tp-sel-all",      n_clicks=0, style={"display": "none"}),
-        html.Button(id="tp-sel-clear",    n_clicks=0, style={"display": "none"}),
-        html.Button(id="tp-move-btn",     n_clicks=0, style={"display": "none"}),
-        html.Button(id="tp-move-rel-btn", n_clicks=0, style={"display": "none"}),
+        html.Button(id="tp-sel-all",        n_clicks=0, style={"display": "none"}),
+        html.Button(id="tp-sel-clear",      n_clicks=0, style={"display": "none"}),
+        html.Button(id="tp-move-btn",       n_clicks=0, style={"display": "none"}),
+        html.Button(id="tp-move-rel-btn",   n_clicks=0, style={"display": "none"}),
+        html.Button(id="tp-item-back-btn",  n_clicks=0, style={"display": "none"}),
+        html.Button(id="tp-item-move-btn",  n_clicks=0, style={"display": "none"}),
+        html.Button(id="tp-item-clear-btn", n_clicks=0, style={"display": "none"}),
         dcc.Dropdown(id="tp-move-month",     options=[], style={"display": "none"}),
         dcc.Dropdown(id="tp-move-rel-month", options=[], style={"display": "none"}),
+        dcc.Dropdown(id="tp-item-iter-dd",   options=[], style={"display": "none"}),
+        dcc.Dropdown(id="tp-item-rel-dd",    options=[], style={"display": "none"}),
     ]
+
+
+def _pri_label_to_int(label: str) -> int:
+    return {"P1": 1, "P2": 2, "P3": 3}.get(label, 4)
+
+
+_ITEM_SIZES   = ["Big", "Medium", "Small", "Very Small"]
+_ITEM_SIZE_CL = {"Big": _AMBER, "Medium": "rgb(181,194,74)",
+                 "Small": _GREEN, "Very Small": _CYAN}
+_ITEM_PRI_CL  = {"P1": "rgb(239,110,99)", "P2": _AMBER,
+                 "P3": _INDIGO, "Others": _DIM}
+_ITEM_SRC_CL  = {"Customer": "rgb(240,137,122)", "Internal": _CYAN}
+
+
+def _build_item_detail_content(item_id: int, pending: dict) -> html.Div:
+    """Single-item detail panel — Designer Planning-style field editing."""
+    with engine.connect() as conn:
+        row = conn.execute(text("""
+            SELECT work_item_id, title, work_item_type,
+                   COALESCE(priority, 4) AS priority,
+                   COALESCE(assigned_to, '') AS assigned_to,
+                   COALESCE(main_developer, '') AS main_developer,
+                   COALESCE(main_designer, '') AS main_designer,
+                   COALESCE(story_owner, '') AS story_owner,
+                   COALESCE(story_size, '') AS story_size,
+                   COALESCE(type, 'Internal') AS cust_type,
+                   COALESCE(iteration_path, '') AS iteration_path,
+                   COALESCE(release_date, '') AS release_date
+            FROM work_items_main WHERE work_item_id = :id
+        """), {"id": item_id}).fetchone()
+        iter_rows = conn.execute(text(
+            "SELECT DISTINCT iteration_path FROM work_items_main"
+            " WHERE iteration_path IS NOT NULL AND iteration_path != ''"
+            " ORDER BY iteration_path"
+        )).fetchall()
+
+    if not row:
+        return html.Div("Item not found.", style={"color": _MT})
+
+    _BUG_TYPES = ("Issue", "Bug", "Bug_UI", "Bug_Text")
+    is_bug = row.work_item_type in _BUG_TYPES
+
+    cur_pri      = _classify_pri(row.priority)
+    cur_source   = (row.cust_type or "Internal").strip()
+    cur_dev      = (row.assigned_to if is_bug else row.main_developer or "").strip()
+    cur_size     = (row.story_size or "").strip().title()
+    cur_owner    = (row.story_owner or "").strip()
+    cur_designer = (row.main_designer or "").strip()
+    cur_iter     = (row.iteration_path or "").strip()
+    cur_rel      = (row.release_date or "").strip()
+
+    pending = pending or {}
+    eff_pri      = pending.get("priority",     cur_pri)
+    eff_source   = pending.get("source",       cur_source)
+    eff_dev      = pending.get("developer",    cur_dev)
+    eff_size     = pending.get("story_size",   cur_size)
+    eff_owner    = pending.get("story_owner",  cur_owner)
+    eff_designer = pending.get("main_designer", cur_designer)
+    eff_iter     = pending.get("iteration",    cur_iter)
+    eff_rel      = pending.get("release_date",
+                               cur_rel if cur_rel in _MONTH_OPTIONS else "")
+    n_pending    = len(pending)
+
+    def _sec(label):
+        return html.Div(label, style={
+            "fontSize": "10px", "fontWeight": "700", "color": _MT,
+            "letterSpacing": "0.08em", "marginBottom": "6px", "marginTop": "14px",
+        })
+
+    def _tog(label, id_dict, active, color=_INDIGO):
+        r = _rgb(color)
+        return html.Button(label, id=id_dict, n_clicks=0, style={
+            "background": f"rgba({r},0.15)" if active else "rgba(255,255,255,0.04)",
+            "border": f"1px solid rgba({r},0.5)" if active else f"1px solid {_BD}",
+            "color": color if active else _MT,
+            "cursor": "pointer", "borderRadius": "6px",
+            "fontSize": "12px", "fontWeight": "600",
+            "padding": "5px 14px", "letterSpacing": "0.04em",
+            "transition": "background 0.15s",
+        })
+
+    wid = int(item_id)
+    pri_btns = [
+        _tog(p, {"type": "tp-item-pri", "wid": wid, "opt": p},
+             active=(p == eff_pri), color=_ITEM_PRI_CL.get(p, _DIM))
+        for p in ["P1", "P2", "P3", "Others"]
+    ]
+    src_btns = [
+        _tog(s, {"type": "tp-item-src", "wid": wid, "opt": s},
+             active=(s == eff_source), color=_ITEM_SRC_CL.get(s, _CYAN))
+        for s in ["Customer", "Internal"]
+    ]
+    size_btns = [
+        _tog(sz, {"type": "tp-item-size", "wid": wid, "opt": sz},
+             active=(sz == eff_size), color=_ITEM_SIZE_CL.get(sz, _INDIGO))
+        for sz in _ITEM_SIZES
+    ]
+    dev_btns = [
+        _tog(d.split()[0], {"type": "tp-item-dev", "wid": wid, "opt": d},
+             active=(d == eff_dev), color=_INDIGO)
+        for d in DEV_NAMES
+    ]
+    designer_btns = [
+        _tog(d.split()[0], {"type": "tp-item-designer", "wid": wid, "opt": d},
+             active=(d == eff_designer), color=_CYAN)
+        for d in DESIGNER_NAMES
+    ]
+    owner_btns = [
+        _tog(o, {"type": "tp-item-owner", "wid": wid, "opt": o},
+             active=(o == eff_owner), color=_INDIGO)
+        for o in STORY_OWNER_NAMES
+    ]
+
+    iter_opts = [
+        {"label": r.iteration_path.split("\\")[-1], "value": r.iteration_path}
+        for r in iter_rows
+    ]
+    month_opts = [{"label": m, "value": m} for m in _MONTH_OPTIONS]
+
+    rg = _rgb(_GREEN)
+    rr = _rgb(_RED)
+    save_style = {
+        "padding": "10px 20px", "borderRadius": "8px", "flex": "1",
+        "background": f"rgba({rg},0.15)" if n_pending else _BG_HEAD,
+        "border": f"1px solid rgba({rg},0.5)" if n_pending else f"1px solid {_BD}",
+        "color": _GREEN if n_pending else _DIM,
+        "cursor": "pointer" if n_pending else "default",
+        "fontSize": "13px", "fontWeight": "700",
+    }
+    clear_style = {
+        "padding": "10px 16px", "borderRadius": "8px", "background": "transparent",
+        "border": f"1px solid rgba({rr},0.4)" if n_pending else f"1px solid {_BD}",
+        "color": _RED if n_pending else _DIM,
+        "cursor": "pointer" if n_pending else "default",
+        "fontSize": "13px", "fontWeight": "600",
+    }
+
+    return html.Div([
+        # Back + item header
+        html.Div([
+            html.Button("← Back", id="tp-item-back-btn", n_clicks=0, style={
+                "background": "none", "border": "none", "color": _MT,
+                "cursor": "pointer", "fontSize": "12px", "padding": "0",
+                "fontWeight": "600",
+            }),
+            html.Span(f"#{wid}  {row.work_item_type}", style={
+                "fontFamily": _MONO, "fontSize": "11px", "color": _DIM,
+            }),
+        ], style={
+            "display": "flex", "justifyContent": "space-between",
+            "alignItems": "center", "marginBottom": "10px",
+        }),
+        html.Div(row.title or "(No title)", style={
+            "fontSize": "14px", "fontWeight": "600", "color": _FG,
+            "paddingBottom": "14px", "borderBottom": f"1px solid {_BD}",
+            "marginBottom": "4px", "lineHeight": "1.4",
+        }),
+        _sec("PRIORITY"),
+        html.Div(pri_btns, style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
+        _sec("SOURCE"),
+        html.Div(src_btns, style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
+        _sec("STORY SIZE"),
+        html.Div(size_btns, style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
+        _sec("DEVELOPER"),
+        html.Div(dev_btns, style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
+        _sec("MAIN DESIGNER"),
+        html.Div(designer_btns, style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
+        _sec("USER STORY OWNER"),
+        html.Div(owner_btns, style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
+        _sec("ITERATION"),
+        dcc.Dropdown(id="tp-item-iter-dd", options=iter_opts,
+                     value=eff_iter if eff_iter else None,
+                     placeholder="Select iteration...", clearable=True,
+                     className="dark-dropdown", style={"fontSize": "12px"}),
+        _sec("RELEASE MONTH"),
+        dcc.Dropdown(id="tp-item-rel-dd", options=month_opts,
+                     value=eff_rel if eff_rel in _MONTH_OPTIONS else None,
+                     placeholder="Select release month...", clearable=True,
+                     className="dark-dropdown", style={"fontSize": "12px"}),
+        html.Div([
+            html.Button("Save Changes", id="tp-item-move-btn", n_clicks=0,
+                        disabled=(n_pending == 0), style=save_style),
+            html.Button("Clear", id="tp-item-clear-btn", n_clicks=0,
+                        disabled=(n_pending == 0), style=clear_style),
+        ], style={
+            "display": "flex", "gap": "8px",
+            "marginTop": "28px", "paddingTop": "16px",
+            "borderTop": f"1px solid {_BD}",
+        }),
+    ])
 
 
 # ── Panel content builder ─────────────────────────────────────────────────────
@@ -511,60 +707,72 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
             "display": "flex", "alignItems": "center", "justifyContent": "center",
         }
         return html.Div([
-            html.Div("✓" if is_sel else "", style=chk_style),
-            html.Span(f"#{x['id']}", style={
-                "fontFamily": _MONO, "fontSize": "11px", "color": _DIM, "flexShrink": "0",
-            }),
             html.Div([
-                html.Div(x["title"], style={
-                    "color": _FG, "fontSize": "12px",
-                    "lineHeight": "1.35", "wordBreak": "break-word",
+                html.Div("✓" if is_sel else "", style=chk_style),
+                html.Span(f"#{x['id']}", style={
+                    "fontFamily": _MONO, "fontSize": "11px", "color": _DIM, "flexShrink": "0",
                 }),
-                html.Div(x["dev"], style={
-                    "fontSize": "10px", "color": _DIM, "marginTop": "1px",
+                html.Div([
+                    html.Div(x["title"], style={
+                        "color": _FG, "fontSize": "12px",
+                        "lineHeight": "1.35", "wordBreak": "break-word",
+                    }),
+                    html.Div(x["dev"], style={
+                        "fontSize": "10px", "color": _DIM, "marginTop": "1px",
+                    }),
+                    *(
+                        [html.Span(
+                            "No release date",
+                            style={
+                                "display": "inline-block", "marginTop": "4px",
+                                "background": "rgba(251,191,36,0.12)",
+                                "color": "rgb(251,191,36)",
+                                "border": "1px solid rgba(251,191,36,0.3)",
+                                "borderRadius": "4px", "padding": "1px 7px",
+                                "fontSize": "10px", "fontWeight": "600",
+                            },
+                        )]
+                        if x.get("type") == "issue" and not x.get("release_date") else []
+                    ),
+                    *(
+                        [html.Span(
+                            f"Moved → {(moved_items or {}).get(str(x['id']))}",
+                            style={
+                                "display": "inline-block", "marginTop": "4px",
+                                "background": "rgba(6,182,212,0.15)",
+                                "color": "rgb(6,182,212)",
+                                "border": "1px solid rgba(6,182,212,0.3)",
+                                "borderRadius": "4px", "padding": "1px 7px",
+                                "fontSize": "10px", "fontWeight": "600",
+                            }
+                        )]
+                        if (moved_items and str(x["id"]) in moved_items) else []
+                    ),
+                ], style={"minWidth": "0", "flex": "1"}),
+                html.Span(h_str, style={
+                    "fontFamily": _MONO, "fontWeight": "600", "color": h_color,
+                    "minWidth": "42px", "textAlign": "right", "flexShrink": "0",
                 }),
-                *(
-                    [html.Span(
-                        "No release date",
-                        style={
-                            "display": "inline-block", "marginTop": "4px",
-                            "background": "rgba(251,191,36,0.12)",
-                            "color": "rgb(251,191,36)",
-                            "border": "1px solid rgba(251,191,36,0.3)",
-                            "borderRadius": "4px", "padding": "1px 7px",
-                            "fontSize": "10px", "fontWeight": "600",
-                        },
-                    )]
-                    if x.get("type") == "issue" and not x.get("release_date") else []
-                ),
-                *(
-                    [html.Span(
-                        f"Moved → {(moved_items or {}).get(str(x['id']))}",
-                        style={
-                            "display": "inline-block", "marginTop": "4px",
-                            "background": "rgba(6,182,212,0.15)",
-                            "color": "rgb(6,182,212)",
-                            "border": "1px solid rgba(6,182,212,0.3)",
-                            "borderRadius": "4px", "padding": "1px 7px",
-                            "fontSize": "10px", "fontWeight": "600",
-                        }
-                    )]
-                    if (moved_items and str(x["id"]) in moved_items) else []
-                ),
-            ], style={"minWidth": "0", "flex": "1"}),
-            html.Span(h_str, style={
-                "fontFamily": _MONO, "fontWeight": "600", "color": h_color,
-                "minWidth": "42px", "textAlign": "right", "flexShrink": "0",
+            ], id={"type": "tp-panel-item", "wid": x["id"]}, n_clicks=0, style={
+                "display": "grid", "gridTemplateColumns": "22px 54px 1fr 55px",
+                "gap": "0 6px",
+                "padding": "7px 10px", "fontSize": "12px", "borderRadius": "6px",
+                "alignItems": "flex-start", "cursor": "pointer",
+                "background": row_bg,
+                **row_extra,
             }),
-        ], id={"type": "tp-panel-item", "wid": x["id"]}, n_clicks=0, style={
-            "display": "grid", "gridTemplateColumns": "22px 54px 1fr 55px",
-            "gap": "0 6px",
-            "padding": "7px 10px", "fontSize": "12px", "borderRadius": "6px",
-            "alignItems": "flex-start", "cursor": "pointer",
-            "background": row_bg,
-            "borderBottom": f"1px solid rgba({_rgb(_BD_CELL)},0.5)",
-            **row_extra,
-        })
+            html.Div(
+                html.Button("✎ Edit", id={"type": "tp-edit-btn", "wid": x["id"]}, n_clicks=0,
+                            style={
+                                "background": "none", "border": f"1px solid {_BD}",
+                                "borderRadius": "5px", "color": _DIM,
+                                "cursor": "pointer", "fontSize": "10px",
+                                "fontWeight": "600", "padding": "2px 8px",
+                            }),
+                style={"display": "flex", "justifyContent": "flex-end",
+                       "padding": "2px 10px 5px"},
+            ),
+        ], style={"borderBottom": f"1px solid rgba({_rgb(_BD_CELL)},0.5)"})
 
     # ── Section content ───────────────────────────────────────────────────────
     def _section_header(label: str, color: str, count: int, total: int) -> html.Div:
@@ -1387,6 +1595,8 @@ def layout(**_):
         dcc.Store(id="tp-toast-store",     data=None),
         dcc.Store(id="tp-moved-store",     data={}),
         dcc.Store(id="tp-rd-refresh",      data=0),
+        dcc.Store(id="tp-item-detail",     data=None),
+        dcc.Store(id="tp-item-pending",    data={}),
 
         # ── Toast notification ────────────────────────────────────────────────
         html.Div(id="tp-toast", style={"display": "none"},
@@ -1721,13 +1931,15 @@ def _close_panel(n):
     Input("tp-panel-ctx",       "data"),
     Input("tp-panel-selection", "data"),
     Input("tp-rd-refresh",      "data"),
+    Input("tp-item-detail",     "data"),
+    Input("tp-item-pending",    "data"),
     State("tp-team-store",     "data"),
     State("tp-source-store",   "data"),
     State("tp-platform-store", "data"),
     State("tp-moved-store",    "data"),
 )
-def _render_panel(panel_ctx, selection, _rd_refresh, team_filter, source_filter, platform_filter,
-                  moved_items):
+def _render_panel(panel_ctx, selection, _rd_refresh, item_detail, item_pending,
+                  team_filter, source_filter, platform_filter, moved_items):
     _PANEL_STYLE = {
         "position": "fixed", "top": "0", "right": "0",
         "height": "100vh", "width": "760px",
@@ -1739,6 +1951,10 @@ def _render_panel(panel_ctx, selection, _rd_refresh, team_filter, source_filter,
     }
     if not panel_ctx:
         return {"display": "none"}, _panel_stubs()
+    # Show per-item detail view when an item has been opened for editing
+    if item_detail:
+        detail = _build_item_detail_content(int(item_detail), item_pending or {})
+        return {"display": "block"}, html.Div(detail, style=_PANEL_STYLE)
     # When the panel context changes, treat as fresh open (ignore stale selection)
     if ctx.triggered_id == "tp-panel-ctx":
         effective_sel = []
@@ -1924,3 +2140,262 @@ def _show_toast(msg):
         "zIndex": "9999",
     }
     return _TOAST_STYLE, f"+ {msg}"
+
+
+# ── Item detail panel — open / close ─────────────────────────────────────────
+@callback(
+    Output("tp-item-detail",  "data"),
+    Output("tp-item-pending", "data"),
+    Input({"type": "tp-edit-btn", "wid": ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def _open_item_detail(clicks):
+    if not any(n and n > 0 for n in (clicks or [])):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid or not isinstance(tid, dict):
+        raise PreventUpdate
+    return tid["wid"], {}
+
+
+@callback(
+    Output("tp-item-detail",  "data", allow_duplicate=True),
+    Output("tp-item-pending", "data", allow_duplicate=True),
+    Input("tp-item-back-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def _close_item_detail(n):
+    if not n:
+        raise PreventUpdate
+    return None, {}
+
+
+# ── Item detail — field select callbacks ──────────────────────────────────────
+@callback(
+    Output("tp-item-pending", "data", allow_duplicate=True),
+    Input({"type": "tp-item-pri", "wid": ALL, "opt": ALL}, "n_clicks"),
+    State("tp-item-pending", "data"),
+    prevent_initial_call=True,
+)
+def _select_tp_pri(clicks, pending):
+    if not any(n and n > 0 for n in (clicks or [])):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid or not isinstance(tid, dict):
+        raise PreventUpdate
+    p = dict(pending or {})
+    p["priority"] = tid["opt"]
+    return p
+
+
+@callback(
+    Output("tp-item-pending", "data", allow_duplicate=True),
+    Input({"type": "tp-item-src", "wid": ALL, "opt": ALL}, "n_clicks"),
+    State("tp-item-pending", "data"),
+    prevent_initial_call=True,
+)
+def _select_tp_src(clicks, pending):
+    if not any(n and n > 0 for n in (clicks or [])):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid or not isinstance(tid, dict):
+        raise PreventUpdate
+    p = dict(pending or {})
+    p["source"] = tid["opt"]
+    return p
+
+
+@callback(
+    Output("tp-item-pending", "data", allow_duplicate=True),
+    Input({"type": "tp-item-size", "wid": ALL, "opt": ALL}, "n_clicks"),
+    State("tp-item-pending", "data"),
+    prevent_initial_call=True,
+)
+def _select_tp_size(clicks, pending):
+    if not any(n and n > 0 for n in (clicks or [])):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid or not isinstance(tid, dict):
+        raise PreventUpdate
+    p = dict(pending or {})
+    p["story_size"] = tid["opt"]
+    return p
+
+
+@callback(
+    Output("tp-item-pending", "data", allow_duplicate=True),
+    Input({"type": "tp-item-dev", "wid": ALL, "opt": ALL}, "n_clicks"),
+    State("tp-item-pending", "data"),
+    prevent_initial_call=True,
+)
+def _select_tp_dev(clicks, pending):
+    if not any(n and n > 0 for n in (clicks or [])):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid or not isinstance(tid, dict):
+        raise PreventUpdate
+    p = dict(pending or {})
+    p["developer"] = tid["opt"]
+    return p
+
+
+@callback(
+    Output("tp-item-pending", "data", allow_duplicate=True),
+    Input({"type": "tp-item-designer", "wid": ALL, "opt": ALL}, "n_clicks"),
+    State("tp-item-pending", "data"),
+    prevent_initial_call=True,
+)
+def _select_tp_designer(clicks, pending):
+    if not any(n and n > 0 for n in (clicks or [])):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid or not isinstance(tid, dict):
+        raise PreventUpdate
+    p = dict(pending or {})
+    p["main_designer"] = tid["opt"]
+    return p
+
+
+@callback(
+    Output("tp-item-pending", "data", allow_duplicate=True),
+    Input({"type": "tp-item-owner", "wid": ALL, "opt": ALL}, "n_clicks"),
+    State("tp-item-pending", "data"),
+    prevent_initial_call=True,
+)
+def _select_tp_owner(clicks, pending):
+    if not any(n and n > 0 for n in (clicks or [])):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid or not isinstance(tid, dict):
+        raise PreventUpdate
+    p = dict(pending or {})
+    p["story_owner"] = tid["opt"]
+    return p
+
+
+@callback(
+    Output("tp-item-pending", "data", allow_duplicate=True),
+    Input("tp-item-iter-dd", "value"),
+    State("tp-item-pending", "data"),
+    prevent_initial_call=True,
+)
+def _select_tp_iter(val, pending):
+    p = dict(pending or {})
+    if p.get("iteration") == val:
+        raise PreventUpdate
+    p["iteration"] = val or ""
+    return p
+
+
+@callback(
+    Output("tp-item-pending", "data", allow_duplicate=True),
+    Input("tp-item-rel-dd", "value"),
+    State("tp-item-pending", "data"),
+    prevent_initial_call=True,
+)
+def _select_tp_rel(val, pending):
+    p = dict(pending or {})
+    if p.get("release_date") == val:
+        raise PreventUpdate
+    p["release_date"] = val or ""
+    return p
+
+
+@callback(
+    Output("tp-item-pending", "data", allow_duplicate=True),
+    Input("tp-item-clear-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def _clear_tp_pending(n):
+    if not n:
+        raise PreventUpdate
+    return {}
+
+
+@callback(
+    Output("tp-item-pending", "data",  allow_duplicate=True),
+    Output("tp-rd-refresh",   "data",  allow_duplicate=True),
+    Input("tp-item-move-btn", "n_clicks"),
+    State("tp-item-detail",   "data"),
+    State("tp-item-pending",  "data"),
+    prevent_initial_call=True,
+)
+def _commit_tp_changes(n, item_id, pending):
+    if not n or not pending or item_id is None:
+        raise PreventUpdate
+
+    wid = int(item_id)
+    pending = pending or {}
+
+    # Query item type to route developer field correctly
+    with engine.connect() as conn:
+        type_row = conn.execute(text(
+            "SELECT work_item_type FROM work_items_main WHERE work_item_id = :id"
+        ), {"id": wid}).fetchone()
+    _BUG_TYPES = ("Issue", "Bug", "Bug_UI", "Bug_Text")
+    is_bug = type_row and type_row.work_item_type in _BUG_TYPES
+
+    db_sets:   list = []
+    db_params: dict = {"id": wid}
+    ado_fields: dict = {}
+
+    def _db(col, val):
+        db_sets.append(f"{col} = :{col}")
+        db_params[col] = val
+
+    if "priority" in pending:
+        v = _pri_label_to_int(pending["priority"])
+        ado_fields["priority"] = v
+        _db("priority", v)
+
+    if "source" in pending:
+        _db("type", pending["source"])
+
+    if "developer" in pending:
+        v = pending["developer"]
+        if is_bug:
+            ado_fields["assigned_to"]  = v
+            _db("assigned_to", v)
+        else:
+            ado_fields["main_developer"] = v
+            _db("main_developer", v)
+
+    if "story_size" in pending:
+        v = pending["story_size"]
+        ado_fields["story_size"] = v
+        _db("story_size", v)
+
+    if "main_designer" in pending:
+        v = pending["main_designer"]
+        ado_fields["main_designer"] = v
+        _db("main_designer", v)
+
+    if "story_owner" in pending:
+        v = pending["story_owner"]
+        ado_fields["story_owner"] = v
+        _db("story_owner", v)
+
+    if "iteration" in pending:
+        v = pending["iteration"]
+        ado_fields["iteration"] = v
+        _db("iteration_path", v)
+
+    if "release_date" in pending:
+        v = pending["release_date"]
+        ado_fields["release_date"] = v
+        _db("release_date", v or None)
+
+    if ado_fields:
+        try:
+            _ado_write(wid, ado_fields)
+        except Exception:
+            pass
+
+    if db_sets:
+        with engine.begin() as conn:
+            conn.execute(text(
+                f"UPDATE work_items_main SET {', '.join(db_sets)} WHERE work_item_id = :id"
+            ), db_params)
+
+    import time as _t
+    return {}, _t.time()

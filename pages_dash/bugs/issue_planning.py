@@ -1,6 +1,7 @@
 """Bugs & Issues — Issue Planning"""
 from __future__ import annotations
 
+import re
 import dash
 from dash import dcc, html, Input, Output, State, callback, ALL, ctx, no_update
 from dash.exceptions import PreventUpdate
@@ -8,8 +9,9 @@ import pandas as pd
 from datetime import date
 from sqlalchemy import text
 
-from config.dev_capacity import DEV_NAMES
+from config.dev_capacity import DEV_NAMES, DESIGNER_NAMES, STORY_OWNER_NAMES
 from data.loader import engine
+from sync.ado_write import write_fields as _ado_write
 
 dash.register_page(__name__, path="/issue-planning", name="Issue Planning")
 
@@ -24,6 +26,14 @@ _PRI_COLORS = {"P1": "#ef6e63", "P2": "#e0a23c", "P3": "#6e76f1", "Other": "#8b9
 _PRI_RGB    = {"P1": "239,110,99", "P2": "224,162,60", "P3": "110,118,241", "Other": "139,146,164"}
 _SRC_COLORS = {"Customer": "rgb(240,137,122)", "Internal": "rgb(63,182,201)"}
 _CAP_OPTIONS = [2, 4, 6, 8]
+
+_SIZES = ["Big", "Medium", "Small", "Very Small"]
+_SIZE_COLORS = {
+    "Big":        "rgb(224,162,60)",
+    "Medium":     "rgb(181,194,74)",
+    "Small":      "rgb(70,194,142)",
+    "Very Small": "rgb(63,182,201)",
+}
 
 def _current_ym():
     return date.today().strftime("%Y-%m")
@@ -106,7 +116,10 @@ def _load_issues():
             SELECT work_item_id, title, work_item_type, state,
                    priority, assigned_to, COALESCE(type,'') AS source_type,
                    COALESCE(iteration_path,'') AS iteration,
-                   COALESCE(release_date,'') AS release_date
+                   COALESCE(release_date,'') AS release_date,
+                   COALESCE(story_size,'') AS story_size,
+                   COALESCE(story_owner,'') AS story_owner,
+                   COALESCE(main_designer,'') AS main_designer
             FROM work_items_main
             WHERE work_item_type IN ('Bug','Bug_UI','Bug_Text')
               AND state IN (
@@ -132,6 +145,9 @@ def _load_issues():
             "iteration":    str(r.iteration or ""),
             "release_date": rd,
             "release_ym":   _parse_release_ym(rd),
+            "story_size":    str(r.story_size or ""),
+            "story_owner":   str(r.story_owner or ""),
+            "main_designer": str(r.main_designer or ""),
         })
     return issues
 
@@ -146,8 +162,14 @@ def _get_iterations():
 
 def _update_issue_local(wid, fields):
     col_map = {
-        "priority": "priority", "developer": "assigned_to",
-        "iteration": "iteration_path", "release_date": "release_date", "source": "type",
+        "priority":     "priority",
+        "developer":    "assigned_to",
+        "iteration":    "iteration_path",
+        "release_date": "release_date",
+        "source":       "type",
+        "story_size":   "story_size",
+        "story_owner":  "story_owner",
+        "main_designer": "main_designer",
     }
     sets, params = [], {"wid": wid}
     for k, v in fields.items():
@@ -571,6 +593,7 @@ def layout(**_):
         dcc.Store(id="ip-devcfg-store", data=dev_cfg),
         dcc.Store(id="ip-iters-store",  data=iters),
         dcc.Store(id="ip-panel-id",     data=None),
+        dcc.Store(id="ip-pending",      data={}),
         dcc.Store(id="ip-kpi-filter",   data="all"),
         dcc.Download(id="ip-past-due-download"),
 
@@ -706,6 +729,7 @@ def _past_due_download(clicks, issues):
     Output("ip-panel-id",   "data"),
     Output("ip-side-panel", "style"),
     Output("ip-backdrop",   "style"),
+    Output("ip-pending",    "data"),
     Input({"type": "ip-row", "id": ALL}, "n_clicks"),
     Input("ip-panel-close", "n_clicks"),
     Input("ip-backdrop",    "n_clicks"),
@@ -715,12 +739,12 @@ def _past_due_download(clicks, issues):
 def _toggle_issue_panel(row_clicks, close_clk, bd_clk, panel_id):
     tid = ctx.triggered_id
     if tid in ("ip-panel-close", "ip-backdrop"):
-        return None, _PANEL_CLOSED, _BACKDROP_CLOSED
+        return None, _PANEL_CLOSED, _BACKDROP_CLOSED, {}
     if isinstance(tid, dict) and tid.get("type") == "ip-row":
         new_id = tid["id"]
         if new_id == panel_id:
-            return None, _PANEL_CLOSED, _BACKDROP_CLOSED
-        return new_id, _PANEL_OPEN, _BACKDROP_OPEN
+            return None, _PANEL_CLOSED, _BACKDROP_CLOSED, {}
+        return new_id, _PANEL_OPEN, _BACKDROP_OPEN, {}
     raise PreventUpdate
 
 
@@ -728,143 +752,407 @@ def _toggle_issue_panel(row_clicks, close_clk, bd_clk, panel_id):
     Output("ip-panel-title", "children"),
     Output("ip-panel-body",  "children"),
     Input("ip-panel-id",     "data"),
+    Input("ip-pending",      "data"),
     State("ip-issues-store", "data"),
     State("ip-iters-store",  "data"),
 )
-def _render_issue_panel(panel_id, issues, iters):
+def _render_issue_panel(panel_id, pending, issues, iters):
     if not panel_id:
         return "", []
     iss = next((x for x in issues if x["id"] == panel_id), None)
     if not iss:
         return f"#{panel_id}", [html.Div("Not found.", style={"color": _MT})]
 
-    pri    = iss["priority"]
-    source = iss["source"] or "Internal"
-    dev    = iss["developer"] or ""
-    itr    = iss["iteration"]
-    rd     = iss["release_date"] or ""
+    pending = pending or {}
 
-    def _toggle_grp(label, options, current, id_type):
-        btns = []
-        for opt in options:
-            active = (opt == current)
-            clr    = _PRI_COLORS.get(opt, "#60a5fa")
-            btns.append(html.Button(opt,
-                id={"type": id_type, "wid": panel_id, "opt": opt}, n_clicks=0,
-                style=dict(_BTN, fontSize="12px",
-                    color=clr if active else _MT,
-                    background=f"{clr}22" if active else "rgba(255,255,255,0.04)",
-                    border=f"1px solid {clr}55" if active else f"1px solid {_BD}",
-                )))
-        return html.Div([
-            html.Div(label, style={"fontSize": "10px", "fontWeight": "700", "color": _MT, "letterSpacing": "0.08em", "marginBottom": "6px"}),
-            html.Div(btns,  style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
-        ], style={"marginBottom": "16px"})
+    # Merge pending over stored values
+    eff_pri      = pending.get("priority",     iss["priority"])
+    eff_source   = pending.get("source",       iss["source"] or "Internal")
+    eff_dev      = pending.get("developer",    iss["developer"] or "")
+    eff_itr      = pending.get("iteration",    iss["iteration"])
+    eff_rd       = pending.get("release_date", iss["release_date"] or "")
+    eff_size     = pending.get("story_size",   iss["story_size"])
+    eff_owner    = pending.get("story_owner",  iss["story_owner"] or "")
+    eff_designer = pending.get("main_designer", iss["main_designer"] or "")
+    n_pending    = len(pending)
 
+    def _sec(label):
+        return html.Div(label, style={
+            "fontSize": "10px", "fontWeight": "700", "color": _MT,
+            "letterSpacing": "0.08em", "marginBottom": "6px", "marginTop": "14px",
+        })
+
+    def _rgb_str(color: str) -> str:
+        if color.startswith("#"):
+            h = color.lstrip("#")
+            return f"{int(h[0:2],16)},{int(h[2:4],16)},{int(h[4:6],16)}"
+        m = re.search(r'(\d+),\s*(\d+),\s*(\d+)', color)
+        return f"{m.group(1)},{m.group(2)},{m.group(3)}" if m else "96,165,250"
+
+    def _tog_btn(label, id_dict, active, color="#60a5fa"):
+        rgb_str = _rgb_str(color)
+        return html.Button(label,
+            id=id_dict, n_clicks=0,
+            style=dict(_BTN, fontSize="12px",
+                color=color if active else _MT,
+                background=f"rgba({rgb_str},0.15)" if active else "rgba(255,255,255,0.04)",
+                border=f"1px solid rgba({rgb_str},0.5)" if active else f"1px solid {_BD}",
+            ))
+
+    # Priority buttons
+    pri_btns = [
+        _tog_btn(opt, {"type": "ip-pri-toggle", "wid": panel_id, "opt": opt},
+                 active=(opt == eff_pri), color=_PRI_COLORS.get(opt, "#8b92a4"))
+        for opt in ["P1", "P2", "P3", "Other"]
+    ]
+
+    # Source buttons
+    src_btns = [
+        _tog_btn(opt, {"type": "ip-src-toggle", "wid": panel_id, "opt": opt},
+                 active=(opt == eff_source), color=_SRC_COLORS.get(opt, "#60a5fa"))
+        for opt in ["Customer", "Internal"]
+    ]
+
+    # Developer buttons
     dev_btns = []
     for d in list(DEV_NAMES) + ["Unassign"]:
-        active = (d == dev) or (d == "Unassign" and not dev)
-        dev_btns.append(html.Button(d,
-            id={"type": "ip-dev-toggle", "wid": panel_id, "opt": d}, n_clicks=0,
-            style=dict(_BTN, fontSize="11px",
-                color=_TX if active else _MT,
-                background="rgba(96,165,250,0.18)" if active else "rgba(255,255,255,0.04)",
-                border="1px solid rgba(96,165,250,0.5)" if active else f"1px solid {_BD}",
-            )))
+        active = (d == eff_dev) or (d == "Unassign" and not eff_dev)
+        dev_btns.append(_tog_btn(d, {"type": "ip-dev-toggle", "wid": panel_id, "opt": d},
+                                 active=active, color="rgb(96,165,250)"))
+
+    # Story Size buttons
+    size_btns = [
+        _tog_btn(sz, {"type": "ip-size-toggle", "wid": panel_id, "opt": sz},
+                 active=(sz == eff_size), color=_SIZE_COLORS.get(sz, "#60a5fa"))
+        for sz in _SIZES
+    ]
+
+    # User Story Owner buttons
+    owner_btns = [
+        _tog_btn(o, {"type": "ip-owner-toggle", "wid": panel_id, "opt": o},
+                 active=(o == eff_owner), color="rgb(110,118,241)")
+        for o in STORY_OWNER_NAMES
+    ]
+
+    # Main Designer buttons
+    designer_btns = [
+        _tog_btn(d.split()[0], {"type": "ip-designer-toggle", "wid": panel_id, "opt": d},
+                 active=(d == eff_designer), color="rgb(63,182,201)")
+        for d in DESIGNER_NAMES
+    ]
 
     iter_opts  = [{"label": it.split("\\")[-1], "value": it} for it in (iters or [])]
     month_opts = [{"label": m, "value": m} for m in _ALL_MONTH_OPTIONS]
 
+    _GREEN = "rgb(70,194,142)"
+    _RED   = "rgb(239,110,99)"
+
+    save_btn = html.Button("Save Changes",
+        id="ip-move-btn", n_clicks=0,
+        disabled=(n_pending == 0),
+        style={
+            "padding": "10px 20px", "borderRadius": "8px", "flex": "1",
+            "background": "rgba(70,194,142,0.15)" if n_pending else "rgb(23,28,40)",
+            "border": "1px solid rgba(70,194,142,0.5)" if n_pending else f"1px solid {_BD}",
+            "color": _GREEN if n_pending else _MT,
+            "cursor": "pointer" if n_pending else "default",
+            "fontSize": "13px", "fontWeight": "700",
+        },
+    )
+    clear_btn = html.Button("Clear",
+        id="ip-clear-pending-btn", n_clicks=0,
+        disabled=(n_pending == 0),
+        style={
+            "padding": "10px 16px", "borderRadius": "8px",
+            "background": "transparent",
+            "border": "1px solid rgba(239,110,99,0.4)" if n_pending else f"1px solid {_BD}",
+            "color": _RED if n_pending else _MT,
+            "cursor": "pointer" if n_pending else "default",
+            "fontSize": "13px", "fontWeight": "600",
+        },
+    )
+
     return f"#{panel_id}  {iss['type']}", [
-        html.Div(iss["title"], style={"fontSize": "13px", "color": _MT, "marginBottom": "20px", "paddingBottom": "14px", "borderBottom": f"1px solid {_BD}"}),
-        _toggle_grp("PRIORITY", ["P1","P2","P3","Other"], pri,    "ip-pri-toggle"),
-        _toggle_grp("SOURCE",   ["Customer","Internal"],   source, "ip-src-toggle"),
-        html.Div([
-            html.Div("DEVELOPER", style={"fontSize": "10px", "fontWeight": "700", "color": _MT, "letterSpacing": "0.08em", "marginBottom": "6px"}),
-            html.Div(dev_btns, style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
-        ], style={"marginBottom": "16px"}),
-        html.Div([
-            html.Div("ITERATION", style={"fontSize": "10px", "fontWeight": "700", "color": _MT, "letterSpacing": "0.08em", "marginBottom": "6px"}),
-            dcc.Dropdown(id={"type": "ip-iter-dd", "wid": panel_id},
-                options=iter_opts, value=itr if itr else None,
-                placeholder="Select iteration...", clearable=True,
-                style={"fontSize": "12px"}),
-        ], style={"marginBottom": "16px"}),
-        html.Div([
-            html.Div("RELEASE MONTH", style={"fontSize": "10px", "fontWeight": "700", "color": _MT, "letterSpacing": "0.08em", "marginBottom": "6px"}),
-            dcc.Dropdown(id={"type": "ip-month-dd", "wid": panel_id},
-                options=month_opts, value=rd if rd in _ALL_MONTH_OPTIONS else None,
-                placeholder="Select month...", clearable=True,
-                style={"fontSize": "12px"}),
-        ], style={"marginBottom": "16px"}),
+        html.Div(iss["title"], style={
+            "fontSize": "13px", "color": _MT, "marginBottom": "16px",
+            "paddingBottom": "14px", "borderBottom": f"1px solid {_BD}",
+        }),
+
+        _sec("PRIORITY"),
+        html.Div(pri_btns, style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
+
+        _sec("SOURCE"),
+        html.Div(src_btns, style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
+
+        _sec("STORY SIZE"),
+        html.Div(size_btns, style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
+
+        _sec("DEVELOPER"),
+        html.Div(dev_btns, style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
+
+        _sec("MAIN DESIGNER"),
+        html.Div(designer_btns, style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
+
+        _sec("USER STORY OWNER"),
+        html.Div(owner_btns, style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
+
+        _sec("ITERATION"),
+        dcc.Dropdown(id={"type": "ip-iter-dd", "wid": panel_id},
+            options=iter_opts, value=eff_itr if eff_itr else None,
+            placeholder="Select iteration...", clearable=True,
+            className="dark-dropdown", style={"fontSize": "12px"}),
+
+        _sec("RELEASE MONTH"),
+        dcc.Dropdown(id={"type": "ip-month-dd", "wid": panel_id},
+            options=month_opts,
+            value=eff_rd if eff_rd in _ALL_MONTH_OPTIONS else None,
+            placeholder="Select month...", clearable=True,
+            className="dark-dropdown", style={"fontSize": "12px"}),
+
+        # Save / Clear
+        html.Div([save_btn, clear_btn], style={
+            "display": "flex", "gap": "8px",
+            "marginTop": "28px", "paddingTop": "16px",
+            "borderTop": f"1px solid {_BD}",
+        }),
     ]
 
 
+# ── Pending-state select callbacks ────────────────────────────────────────────
+
 @callback(
-    Output("ip-issues-store",     "data"),
-    Output("ip-table-wrap",       "children"),
-    Output("ip-kpi-row",          "children"),
-    Output("ip-dev-load-section", "children"),
+    Output("ip-pending", "data", allow_duplicate=True),
     Input({"type": "ip-pri-toggle", "wid": ALL, "opt": ALL}, "n_clicks"),
-    Input({"type": "ip-src-toggle", "wid": ALL, "opt": ALL}, "n_clicks"),
-    Input({"type": "ip-dev-toggle", "wid": ALL, "opt": ALL}, "n_clicks"),
-    Input({"type": "ip-iter-dd",    "wid": ALL}, "value"),
-    Input({"type": "ip-month-dd",   "wid": ALL}, "value"),
-    State("ip-issues-store", "data"),
-    State("ip-kpi-filter",   "data"),
-    State("ip-caps-store",   "data"),
-    State("ip-devcfg-store", "data"),
+    State("ip-pending", "data"),
     prevent_initial_call=True,
 )
-def _save_issue_field(pri_c, src_c, dev_c, iter_v, month_v, issues, kpi_filt, caps, dev_cfg):
+def _select_ip_pri(clicks, pending):
+    if not any(n and n > 0 for n in (clicks or [])):
+        raise PreventUpdate
     tid = ctx.triggered_id
     if not tid or not isinstance(tid, dict):
         raise PreventUpdate
-    kind = tid.get("type", "")
-    wid  = tid.get("wid")
-    opt  = tid.get("opt", "")
-    if kind == "ip-pri-toggle":
-        if not any(n and n > 0 for n in (pri_c or [])): raise PreventUpdate
-        field, value = "priority", opt
-    elif kind == "ip-src-toggle":
-        if not any(n and n > 0 for n in (src_c or [])): raise PreventUpdate
-        field, value = "source", opt
-    elif kind == "ip-dev-toggle":
-        if not any(n and n > 0 for n in (dev_c or [])): raise PreventUpdate
-        field, value = "developer", ("" if opt == "Unassign" else opt)
-    elif kind == "ip-iter-dd":
-        field, value = "iteration", (opt or "")
-    elif kind == "ip-month-dd":
-        field, value = "release_date", (opt or "")
-    else:
+    p = dict(pending or {})
+    p["priority"] = tid["opt"]
+    return p
+
+
+@callback(
+    Output("ip-pending", "data", allow_duplicate=True),
+    Input({"type": "ip-src-toggle", "wid": ALL, "opt": ALL}, "n_clicks"),
+    State("ip-pending", "data"),
+    prevent_initial_call=True,
+)
+def _select_ip_src(clicks, pending):
+    if not any(n and n > 0 for n in (clicks or [])):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid or not isinstance(tid, dict):
+        raise PreventUpdate
+    p = dict(pending or {})
+    p["source"] = tid["opt"]
+    return p
+
+
+@callback(
+    Output("ip-pending", "data", allow_duplicate=True),
+    Input({"type": "ip-dev-toggle", "wid": ALL, "opt": ALL}, "n_clicks"),
+    State("ip-pending", "data"),
+    prevent_initial_call=True,
+)
+def _select_ip_dev(clicks, pending):
+    if not any(n and n > 0 for n in (clicks or [])):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid or not isinstance(tid, dict):
+        raise PreventUpdate
+    p = dict(pending or {})
+    p["developer"] = "" if tid["opt"] == "Unassign" else tid["opt"]
+    return p
+
+
+@callback(
+    Output("ip-pending", "data", allow_duplicate=True),
+    Input({"type": "ip-size-toggle", "wid": ALL, "opt": ALL}, "n_clicks"),
+    State("ip-pending", "data"),
+    prevent_initial_call=True,
+)
+def _select_ip_size(clicks, pending):
+    if not any(n and n > 0 for n in (clicks or [])):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid or not isinstance(tid, dict):
+        raise PreventUpdate
+    p = dict(pending or {})
+    p["story_size"] = tid["opt"]
+    return p
+
+
+@callback(
+    Output("ip-pending", "data", allow_duplicate=True),
+    Input({"type": "ip-owner-toggle", "wid": ALL, "opt": ALL}, "n_clicks"),
+    State("ip-pending", "data"),
+    prevent_initial_call=True,
+)
+def _select_ip_owner(clicks, pending):
+    if not any(n and n > 0 for n in (clicks or [])):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid or not isinstance(tid, dict):
+        raise PreventUpdate
+    p = dict(pending or {})
+    p["story_owner"] = tid["opt"]
+    return p
+
+
+@callback(
+    Output("ip-pending", "data", allow_duplicate=True),
+    Input({"type": "ip-designer-toggle", "wid": ALL, "opt": ALL}, "n_clicks"),
+    State("ip-pending", "data"),
+    prevent_initial_call=True,
+)
+def _select_ip_designer(clicks, pending):
+    if not any(n and n > 0 for n in (clicks or [])):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid or not isinstance(tid, dict):
+        raise PreventUpdate
+    p = dict(pending or {})
+    p["main_designer"] = tid["opt"]
+    return p
+
+
+@callback(
+    Output("ip-pending", "data", allow_duplicate=True),
+    Input({"type": "ip-iter-dd", "wid": ALL}, "value"),
+    State("ip-pending", "data"),
+    prevent_initial_call=True,
+)
+def _select_ip_iter(iter_vals, pending):
+    tid = ctx.triggered_id
+    if not tid or not isinstance(tid, dict):
+        raise PreventUpdate
+    new_val = iter_vals[0] if iter_vals else None
+    p = dict(pending or {})
+    if p.get("iteration") == new_val:
+        raise PreventUpdate
+    p["iteration"] = new_val or ""
+    return p
+
+
+@callback(
+    Output("ip-pending", "data", allow_duplicate=True),
+    Input({"type": "ip-month-dd", "wid": ALL}, "value"),
+    State("ip-pending", "data"),
+    prevent_initial_call=True,
+)
+def _select_ip_month(month_vals, pending):
+    tid = ctx.triggered_id
+    if not tid or not isinstance(tid, dict):
+        raise PreventUpdate
+    new_val = month_vals[0] if month_vals else None
+    p = dict(pending or {})
+    if p.get("release_date") == new_val:
+        raise PreventUpdate
+    p["release_date"] = new_val or ""
+    return p
+
+
+@callback(
+    Output("ip-pending", "data", allow_duplicate=True),
+    Input("ip-clear-pending-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def _clear_ip_pending(n):
+    if not n:
+        raise PreventUpdate
+    return {}
+
+
+@callback(
+    Output("ip-pending",          "data",     allow_duplicate=True),
+    Output("ip-issues-store",     "data",     allow_duplicate=True),
+    Output("ip-table-wrap",       "children", allow_duplicate=True),
+    Output("ip-kpi-row",          "children", allow_duplicate=True),
+    Output("ip-dev-load-section", "children", allow_duplicate=True),
+    Input("ip-move-btn",          "n_clicks"),
+    State("ip-pending",       "data"),
+    State("ip-panel-id",      "data"),
+    State("ip-issues-store",  "data"),
+    State("ip-kpi-filter",    "data"),
+    State("ip-caps-store",    "data"),
+    State("ip-devcfg-store",  "data"),
+    prevent_initial_call=True,
+)
+def _commit_ip_changes(n, pending, panel_id, issues, kpi_filt, caps, dev_cfg):
+    if not n or not pending or not panel_id:
         raise PreventUpdate
 
+    wid         = int(panel_id)
+    db_fields:  dict = {}
+    ado_fields: dict = {}
+
+    if "priority" in pending:
+        v = _pri_int(pending["priority"])
+        db_fields["priority"]   = v
+        ado_fields["priority"]  = v
+
+    if "source" in pending:
+        db_fields["source"] = pending["source"]  # maps to "type" column via _update_issue_local
+
+    if "developer" in pending:
+        v = pending["developer"]
+        db_fields["developer"]   = v
+        ado_fields["assigned_to"] = v
+
+    if "iteration" in pending:
+        v = pending["iteration"]
+        db_fields["iteration"]   = v
+        ado_fields["iteration"]  = v
+
+    if "release_date" in pending:
+        v = pending["release_date"]
+        db_fields["release_date"]    = v
+        ado_fields["release_date"]   = v
+
+    if "story_size" in pending:
+        v = pending["story_size"]
+        db_fields["story_size"]   = v
+        ado_fields["story_size"]  = v
+
+    if "story_owner" in pending:
+        v = pending["story_owner"]
+        db_fields["story_owner"]  = v
+        ado_fields["story_owner"] = v
+
+    if "main_designer" in pending:
+        v = pending["main_designer"]
+        db_fields["main_designer"]   = v
+        ado_fields["main_designer"]  = v
+
+    _update_issue_local(wid, db_fields)
+    if ado_fields:
+        try:
+            _ado_write(wid, ado_fields)
+        except Exception:
+            pass
+
+    # Update the in-memory store
     new_issues = []
     for iss in issues:
         if iss["id"] == wid:
             iss = dict(iss)
-            iss[field] = value
-            if field == "release_date":
-                iss["release_ym"] = _parse_release_ym(value) if value else ""
+            for k, v in db_fields.items():
+                if k == "priority":
+                    iss["priority"] = pending.get("priority", iss["priority"])
+                elif k in iss:
+                    iss[k] = v
+            if "release_date" in db_fields:
+                iss["release_ym"] = _parse_release_ym(db_fields["release_date"]) if db_fields["release_date"] else ""
         new_issues.append(iss)
 
-    local_vals = {"priority": _pri_int(value)} if field == "priority" else {field: value}
-    _update_issue_local(wid, local_vals)
-
-    ado_field_map = {
-        "priority":     {"priority":     _pri_int(value)},
-        "developer":    {"assigned_to":  value},
-        "iteration":    {"iteration":    value},
-        "release_date": {"release_date": value},
-    }
-    if field in ado_field_map:
-        try:
-            from sync.ado_write import write_fields
-            write_fields(wid, ado_field_map[field])
-        except Exception:
-            pass
-
     return (
+        {},
         new_issues,
         _build_table(new_issues, kpi_filt),
         _build_kpi_row(new_issues),
