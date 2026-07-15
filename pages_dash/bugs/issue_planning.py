@@ -399,13 +399,14 @@ def _build_table(issues, active_filter="all"):
         rows_data = issues
 
     release_yms = {x["release_ym"] for x in issues if x["release_ym"]}
+    cur_ym      = _current_ym()   # e.g. "2026-07"
     month_cols  = []
     for m in _ALL_MONTH_OPTIONS:
         try:
             ym = pd.to_datetime(m, format="%b %Y").strftime("%Y-%m")
         except Exception:
             continue
-        if ym.startswith("2026") or ym in release_yms:
+        if (ym.startswith("2026") or ym in release_yms) and ym >= cur_ym:
             month_cols.append((m[:3].upper() + "-" + m[-2:], ym))
 
     # ── Header ────────────────────────────────────────────────────────────────
