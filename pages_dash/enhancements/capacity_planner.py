@@ -1709,6 +1709,8 @@ def _panel_body(dev_name, ym_str, view):
                         w.title,
                         w.work_item_type,
                         w.priority,
+                        COALESCE(w.iteration_path, '') AS iteration_path,
+                        COALESCE(w.release_date,   '') AS release_date,
                         CASE
                             WHEN ta.task_h IS NOT NULL THEN ta.task_h
                             ELSE COALESCE(
@@ -1759,17 +1761,20 @@ def _panel_body(dev_name, ym_str, view):
                           )
                       )
                     GROUP BY w.work_item_id, w.title, w.work_item_type, w.priority,
+                             w.iteration_path, w.release_date,
                              w.remaining_work, w.original_estimate, w.completed_work,
                              ta.task_h, td.done_count
                 """), {"dev": dev_name, "pat": iter_pat}).fetchall()
             for r in _rows:
                 open_items.append({
-                    "id":         int(r.work_item_id),
-                    "title":      str(r.title or ""),
-                    "type":       str(r.work_item_type or "Enhancement"),
-                    "dev_h":      float(r.dev_h or 0),
-                    "priority":   int(float(r.priority)) if r.priority else 4,
-                    "done_tasks": int(r.done_task_count or 0),
+                    "id":            int(r.work_item_id),
+                    "title":         str(r.title or ""),
+                    "type":          str(r.work_item_type or "Enhancement"),
+                    "dev_h":         float(r.dev_h or 0),
+                    "priority":      int(float(r.priority)) if r.priority else 4,
+                    "done_tasks":    int(r.done_task_count or 0),
+                    "iteration_path": str(r.iteration_path or ""),
+                    "release_date":  str(r.release_date or ""),
                 })
         except Exception as exc:
             import logging
@@ -1830,12 +1835,20 @@ def _panel_body(dev_name, ym_str, view):
         p_clr     = _prio_clr(prio)
         p_bg      = _p_bgs.get(int(prio) if str(prio).isdigit() else 4, "rgba(100,116,139,0.15)")
         title_txt = item["title"]
+        item_id   = item["id"]
+        rel_date  = item.get("release_date", "")
 
-        badges = [html.Span(f"P{prio}", style={
-            "fontSize": "10px", "fontWeight": "700", "color": p_clr,
-            "background": p_bg, "padding": "2px 6px",
-            "borderRadius": "4px", "marginRight": "6px",
-        })]
+        badges = [
+            html.Span(f"#{item_id}", style={
+                "fontSize": "10px", "fontWeight": "600", "color": "#64748b",
+                "marginRight": "8px", "fontFamily": "monospace",
+            }),
+            html.Span(f"P{prio}", style={
+                "fontSize": "10px", "fontWeight": "700", "color": p_clr,
+                "background": p_bg, "padding": "2px 6px",
+                "borderRadius": "4px", "marginRight": "6px",
+            }),
+        ]
         if show_size:
             sz     = _size(item["dev_h"])
             s_bg, s_tc = _sz_clrs.get(sz, _sz_clrs["Small"])
@@ -1846,13 +1859,21 @@ def _panel_body(dev_name, ym_str, view):
             }))
         badges.append(html.Span(f"{item['dev_h']:.0f}h",
                                 style={"fontSize": "12px", "color": "#8892a4"}))
+        if rel_date:
+            badges.append(html.Span(rel_date, style={
+                "fontSize": "10px", "fontWeight": "600",
+                "color": "rgb(6,182,212)",
+                "background": "rgba(6,182,212,0.10)",
+                "border": "1px solid rgba(6,182,212,0.25)",
+                "borderRadius": "4px", "padding": "1px 6px", "marginLeft": "6px",
+            }))
         if dimmed:
             badges.append(html.Span("✓", style={
                 "fontSize": "11px", "color": "#34d399", "marginLeft": "6px", "fontWeight": "700",
             }))
 
         return html.A(
-            href=f"{ADO_BASE_URL}{item['id']}", target="_blank",
+            href=f"{ADO_BASE_URL}{item_id}", target="_blank",
             style={"textDecoration": "none", "display": "block", "marginBottom": "8px",
                    "opacity": "0.45" if dimmed else "1"},
             children=html.Div([
@@ -1860,7 +1881,8 @@ def _panel_body(dev_name, ym_str, view):
                     "fontSize": "13px", "color": "#e2e8f0",
                     "fontWeight": "600", "marginBottom": "6px", "lineHeight": "1.45",
                 }),
-                html.Div(badges),
+                html.Div(badges, style={"display": "flex", "flexWrap": "wrap",
+                                        "alignItems": "center", "gap": "2px"}),
             ], style={
                 "background": "rgba(255,255,255,0.03)", "borderRadius": "8px",
                 "padding": "10px 12px", "border": "1px solid rgba(255,255,255,0.06)",
@@ -1877,7 +1899,7 @@ def _panel_body(dev_name, ym_str, view):
                 "fontSize": "10px", "color": _GREEN, "fontWeight": "700",
                 "textTransform": "uppercase", "letterSpacing": "1px", "margin": "12px 0 8px",
             }),
-            *[_item_card(i, True) for i in sorted(open_enh, key=lambda x: x.get("priority", 4))],
+            *[_item_card(i, True) for i in sorted(open_enh, key=lambda x: (x.get("iteration_path", ""), x.get("priority", 4)))],
         ]
     if open_iss:
         lbl = f"ISSUE RESOLUTION · {iss_h:.0f}h" + (" OPEN" if is_m0 else "")
@@ -1886,7 +1908,7 @@ def _panel_body(dev_name, ym_str, view):
                 "fontSize": "10px", "color": _RED, "fontWeight": "700",
                 "textTransform": "uppercase", "letterSpacing": "1px", "margin": "12px 0 8px",
             }),
-            *[_item_card(i, False) for i in sorted(open_iss, key=lambda x: x.get("priority", 4))],
+            *[_item_card(i, False) for i in sorted(open_iss, key=lambda x: (x.get("iteration_path", ""), x.get("priority", 4)))],
         ]
 
     # ── Done section (collapsed) ──────────────────────────────────────────────
@@ -1901,7 +1923,7 @@ def _panel_body(dev_name, ym_str, view):
                        "listStyle": "none", "outline": "none"},
             ),
             *[_item_card(i, IS_ENH(i["type"]), dimmed=True)
-              for i in sorted(done_display, key=lambda x: x.get("priority", 4))],
+              for i in sorted(done_display, key=lambda x: (x.get("iteration_path", ""), x.get("priority", 4)))],
         ])]
 
     # ── No-estimate section (collapsed) ──────────────────────────────────────
@@ -1916,7 +1938,7 @@ def _panel_body(dev_name, ym_str, view):
                        "listStyle": "none", "outline": "none"},
             ),
             *[_item_card(i, IS_ENH(i["type"]))
-              for i in sorted(noest_display, key=lambda x: x.get("priority", 4))],
+              for i in sorted(noest_display, key=lambda x: (x.get("iteration_path", ""), x.get("priority", 4)))],
         ])]
 
     total_open  = len(todo_display)

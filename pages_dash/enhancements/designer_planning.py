@@ -169,7 +169,7 @@ def _load_data():
                 'No Customer Response','Resolved','Userstory Update'
               )
               AND w.iteration_path ~ 'Iteration [0-9]{4} [0-9]{2}-'
-            ORDER BY w.iteration_path, w.work_item_id
+            ORDER BY w.iteration_path, w.priority NULLS LAST, w.work_item_id
         """)).fetchall()
 
         iter_paths = conn.execute(text("""

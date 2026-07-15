@@ -127,7 +127,7 @@ def _load_issues():
                 'Active','Dev InProgress','Dev Review','Dev Complete',
                 'reopened'
               )
-            ORDER BY priority NULLS LAST, work_item_id
+            ORDER BY iteration_path NULLS LAST, priority NULLS LAST, work_item_id
         """)).fetchall()
     issues = []
     for r in rows:
