@@ -705,6 +705,11 @@ def layout(**_):
                     "Click a row to set stage status and date.",
                     style={"fontSize": "12px", "color": _MT, "marginTop": "5px"},
                 ),
+                html.Div(
+                    "ℹ Release date = ADO release date field on the work item (not iteration month).",
+                    style={"fontSize": "10px", "color": _MT, "marginTop": "2px",
+                           "fontStyle": "italic"},
+                ),
             ]),
             html.Div(f"Planning as of {date.today().strftime('%b %Y')}",
                      style={

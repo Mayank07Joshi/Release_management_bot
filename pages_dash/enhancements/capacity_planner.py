@@ -4,6 +4,7 @@ import re
 import dash
 import dash_bootstrap_components as dbc
 from dash import dcc, html, Input, Output, State, callback, ALL, no_update, ctx
+from dash.exceptions import PreventUpdate
 import pandas as pd
 from datetime import date
 import calendar
@@ -160,6 +161,30 @@ def _prio_clr(p) -> str:
 
 def _size(h: float) -> str:
     return "Big" if h >= 120 else ("Medium" if h >= 40 else "Small")
+
+
+def _ctrl_bar_dcap(pri_opt: str, srt_opt: str) -> "html.Div":
+    from dash import html as _html, dcc as _dcc
+    _PRI_OPTS = [{"label": l, "value": v} for l, v in
+                 [("All", "all"), ("P1", "p1"), ("P2", "p2"), ("P3", "p3")]]
+    _SRT_OPTS = [{"label": l, "value": v} for l, v in
+                 [("Priority", "pri"), ("Hours ↓", "hours"), ("Release", "rd")]]
+    _lbl = {"fontSize": "10px", "color": "#6b7280", "fontWeight": "600", "marginBottom": "3px"}
+
+    return _html.Div([
+        _html.Div([
+            _html.Div("Filter", style=_lbl),
+            _dcc.Dropdown(id={"type": "dcap-flt-dd", "k": "pri"},
+                          options=_PRI_OPTS, value=pri_opt, clearable=False,
+                          style={"minWidth": "100px", "fontSize": "11px"}),
+        ]),
+        _html.Div([
+            _html.Div("Sort", style=_lbl),
+            _dcc.Dropdown(id={"type": "dcap-flt-dd", "k": "srt"},
+                          options=_SRT_OPTS, value=srt_opt, clearable=False,
+                          style={"minWidth": "120px", "fontSize": "11px"}),
+        ]),
+    ], style={"display": "flex", "gap": "10px", "alignItems": "flex-end", "marginBottom": "12px"})
 
 
 def _dev_month_items(df: pd.DataFrame, dev: str, ym_str: str, open_only: bool = False) -> list[dict]:
@@ -1205,6 +1230,7 @@ def layout():
         dcc.Store(id="dcap-sel-dev",        data=None),
         dcc.Store(id="dcap-sel-month",      data=None),
         dcc.Store(id="dcap-func-size-filter", data="All"),
+        dcc.Store(id="dcap-flt",              data={"pri": "all", "srt": "pri"}),
 
         # ── Top: VIEW filter (sticky) ─────────────────────────────────────────
         html.Div([
@@ -1575,7 +1601,8 @@ def _render(view, tab, show_all, cust_filter):
                else _render_rest_grid(cap_data, devs, view)
     gantt    = _render_gantt(bool(show_all))
     sub      = (f"{len(devs)} developers · 180h default monthly capacity · "
-                "Click any cell for M0/M1/M2 detail · Purple bar = standalone overhead")
+                "Click any cell for M0/M1/M2 detail · Purple bar = standalone overhead · "
+                "ℹ M0/M1/M2 = iteration months (sprint cadence), not release dates")
     overhead = _render_overhead_section(standalone_data, devs, yms[0])
 
     result = kpis, grid, gantt, sub, overhead
@@ -1588,6 +1615,7 @@ def _render(view, tab, show_all, cust_filter):
     Output("dcap-panel",     "is_open"),
     Output("dcap-sel-dev",   "data"),
     Output("dcap-sel-month", "data"),
+    Output("dcap-flt",       "data", allow_duplicate=True),
     Input({"type": "dcap-cell", "dev": ALL, "month": ALL}, "n_clicks"),
     State({"type": "dcap-cell", "dev": ALL, "month": ALL}, "id"),
     prevent_initial_call=True,
@@ -1596,7 +1624,7 @@ def _open_panel(clicks, ids):
     tid = ctx.triggered_id
     if not tid or not isinstance(tid, dict):
         raise PreventUpdate
-    return True, tid["dev"], tid["month"]
+    return True, tid["dev"], tid["month"], {"pri": "all", "srt": "pri"}
 
 
 def _standalone_section(items: list, is_m0: bool) -> list:
@@ -1673,9 +1701,10 @@ def _standalone_section(items: list, is_m0: bool) -> list:
     Input("dcap-sel-dev",   "data"),
     Input("dcap-sel-month", "data"),
     Input("dcap-view",      "data"),
+    Input("dcap-flt",       "data"),
     prevent_initial_call=True,
 )
-def _panel_body(dev_name, ym_str, view):
+def _panel_body(dev_name, ym_str, view, flt):
     if not dev_name or not ym_str:
         return html.Div("Select a cell")
 
@@ -1811,6 +1840,24 @@ def _panel_body(dev_name, ym_str, view):
     enh_h    = sum(i["dev_h"] for i in open_enh)
     iss_h    = sum(i["dev_h"] for i in open_iss)
 
+    # Apply filter / sort for display (KPI totals use unfiltered open_enh/open_iss)
+    _flt  = flt or {"pri": "all", "srt": "pri"}
+    _pri  = _flt.get("pri", "all")
+    _srt  = _flt.get("srt", "pri")
+    if _pri != "all":
+        _p = int(_pri[1]) if len(_pri) == 2 and _pri[1].isdigit() else 99
+        open_enh = [i for i in open_enh if i.get("priority", 4) == _p]
+        open_iss = [i for i in open_iss if i.get("priority", 4) == _p]
+    if _srt == "hours":
+        open_enh = sorted(open_enh, key=lambda x: -x["dev_h"])
+        open_iss = sorted(open_iss, key=lambda x: -x["dev_h"])
+    elif _srt == "rd":
+        open_enh = sorted(open_enh, key=lambda x: (x.get("release_date") or "zzz", x["id"]))
+        open_iss = sorted(open_iss, key=lambda x: (x.get("release_date") or "zzz", x["id"]))
+    else:  # pri (default)
+        open_enh = sorted(open_enh, key=lambda x: (x.get("priority", 4), x["id"]))
+        open_iss = sorted(open_iss, key=lambda x: (x.get("priority", 4), x["id"]))
+
     remaining_h = _remaining_workday_hours(ym_str) if is_m0 else None
     display_cap = remaining_h if (is_m0 and remaining_h) else cap
     oh_h        = sum(float(r.get("original_estimate") or 0) for r in standalone_items)
@@ -1899,7 +1946,7 @@ def _panel_body(dev_name, ym_str, view):
                 "fontSize": "10px", "color": _GREEN, "fontWeight": "700",
                 "textTransform": "uppercase", "letterSpacing": "1px", "margin": "12px 0 8px",
             }),
-            *[_item_card(i, True) for i in sorted(open_enh, key=lambda x: (x.get("iteration_path", ""), x.get("priority", 4)))],
+            *[_item_card(i, True) for i in open_enh],
         ]
     if open_iss:
         lbl = f"ISSUE RESOLUTION · {iss_h:.0f}h" + (" OPEN" if is_m0 else "")
@@ -1908,7 +1955,7 @@ def _panel_body(dev_name, ym_str, view):
                 "fontSize": "10px", "color": _RED, "fontWeight": "700",
                 "textTransform": "uppercase", "letterSpacing": "1px", "margin": "12px 0 8px",
             }),
-            *[_item_card(i, False) for i in sorted(open_iss, key=lambda x: (x.get("iteration_path", ""), x.get("priority", 4)))],
+            *[_item_card(i, False) for i in open_iss],
         ]
 
     # ── Done section (collapsed) ──────────────────────────────────────────────
@@ -1987,9 +2034,31 @@ def _panel_body(dev_name, ym_str, view):
                    "textTransform": "uppercase", "letterSpacing": "1px", "marginBottom": "8px",
                    "borderTop": "1px solid rgba(255,255,255,0.07)", "paddingTop": "14px"},
         ),
+        _ctrl_bar_dcap(_pri, _srt),
         *enh_section,
         *iss_section,
         *done_section,
         *noest_section,
         *_standalone_section(standalone_items, is_m0),
     ], style={"padding": "16px"})
+
+
+# ── Dev-capacity panel filter / sort ─────────────────────────────────────────
+@callback(
+    Output("dcap-flt", "data", allow_duplicate=True),
+    Input({"type": "dcap-flt-dd", "k": ALL}, "value"),
+    State({"type": "dcap-flt-dd", "k": ALL}, "id"),
+    State("dcap-flt", "data"),
+    prevent_initial_call=True,
+)
+def _dcap_update_flt(values, dd_ids, current):
+    tid = ctx.triggered_id
+    if not tid or not isinstance(tid, dict) or tid.get("type") != "dcap-flt-dd":
+        raise PreventUpdate
+    flt = dict(current or {"pri": "all", "srt": "pri"})
+    k   = tid["k"]
+    val = next((v for v, i in zip(values, dd_ids) if i == tid), None)
+    if val is None or flt.get(k) == val:
+        raise PreventUpdate
+    flt[k] = val
+    return flt

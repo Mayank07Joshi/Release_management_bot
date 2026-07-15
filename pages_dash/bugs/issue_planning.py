@@ -503,6 +503,7 @@ def _build_table(issues, active_filter="all"):
                 html.A(str(iss["id"]),
                        href=f"https://dev.azure.com/expenseondemand/Solo%20Expenses/_workitems/edit/{iss['id']}",
                        target="_blank",
+                       className="ado-vsts-link",
                        style={"color": "rgb(110,118,241)", "fontFamily": _MONO,
                               "fontWeight": "700", "fontSize": "12.5px",
                               "textDecoration": "none"}),
@@ -637,7 +638,10 @@ def layout(**_):
             html.Button("CLEAR ALL",   id="ip-clear-btn",       n_clicks=0, style=dict(_BTN, color="#f87171", fontWeight="700", background="rgba(248,113,113,0.12)", border="1px solid rgba(248,113,113,0.35)", marginLeft="8px", verticalAlign="middle")),
         ], style={"marginBottom": "6px"}),
         html.Div("Open bugs & issues — click any row to assign priority, developer, or iteration.",
-                 style={"fontSize": "13px", "color": _MT, "marginBottom": "20px"}),
+                 style={"fontSize": "13px", "color": _MT, "marginBottom": "4px"}),
+        html.Div("ℹ Month grid shows release date (e.g. '2026 July Onboarding'), not iteration month.",
+                 style={"fontSize": "10px", "color": _MT, "marginBottom": "16px",
+                        "fontStyle": "italic"}),
 
         html.Div(id="ip-kpi-row", children=_build_kpi_row(issues)),
 

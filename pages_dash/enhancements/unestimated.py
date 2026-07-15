@@ -66,6 +66,34 @@ def layout(**_):
                 "borderBottom": f"1px solid {_BD}",
                 "flexShrink": "0",
             }),
+            html.Div(id="unest-sp-ctrl-bar", children=[
+                html.Div([
+                    html.Div("Sort", style={"fontSize": "10px", "color": _MT,
+                                            "fontWeight": "600", "marginBottom": "3px"}),
+                    dcc.Dropdown(
+                        id="unest-sp-srt-ctrl",
+                        options=[{"label": l, "value": v} for l, v in
+                                 [("Priority", "pri"), ("Release Date", "rd"),
+                                  ("Title", "title")]],
+                        value="pri", clearable=False,
+                        style={"minWidth": "130px", "fontSize": "11px"},
+                    ),
+                ]),
+                html.Div([
+                    html.Div("Type", style={"fontSize": "10px", "color": _MT,
+                                            "fontWeight": "600", "marginBottom": "3px"}),
+                    dcc.Dropdown(
+                        id="unest-sp-type-ctrl",
+                        options=[{"label": l, "value": v} for l, v in
+                                 [("All Types", "all"), ("Bug", "Bug"),
+                                  ("Bug UI", "Bug_UI"), ("Bug Text", "Bug_Text")]],
+                        value="all", clearable=False,
+                        style={"minWidth": "150px", "fontSize": "11px"},
+                    ),
+                ]),
+            ], style={"display": "none", "gap": "10px", "alignItems": "flex-end",
+                      "padding": "10px 20px", "borderBottom": f"1px solid {_BD}",
+                      "flexShrink": "0"}),
             html.Div(id="unest-panel-body", style={
                 "overflowY": "auto", "flex": "1", "padding": "16px 20px",
             }),

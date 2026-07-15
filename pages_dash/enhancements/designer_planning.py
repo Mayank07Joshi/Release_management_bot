@@ -156,7 +156,7 @@ def _load_data():
         rows = conn.execute(text("""
             SELECT w.work_item_id, w.title, w.state, w.iteration_path,
                    w.main_designer, w.main_developer, w.story_owner,
-                   w.release_date, w.work_item_type,
+                   w.release_date, w.work_item_type, w.priority,
                    COALESCE(w.story_size,   '') AS story_size,
                    COALESCE(w.story_status, '') AS story_status,
                    COALESCE(g.our_screens,  FALSE) AS our_screens,
@@ -169,7 +169,6 @@ def _load_data():
                 'No Customer Response','Resolved','Userstory Update'
               )
               AND w.iteration_path ~ 'Iteration [0-9]{4} [0-9]{2}-'
-            ORDER BY w.iteration_path, w.priority NULLS LAST, w.work_item_id
         """)).fetchall()
 
         iter_paths = conn.execute(text("""
@@ -195,6 +194,10 @@ def _load_data():
         def _clean(v):
             return (v or "").strip() if (v or "").strip() not in ("Unassigned", "") else None
 
+        try:
+            pri = int(r.priority) if r.priority else 99
+        except (TypeError, ValueError):
+            pri = 99
         stories.append({
             "id":          r.work_item_id,
             "title":       r.title or "",
@@ -211,8 +214,12 @@ def _load_data():
             "size":        (r.story_size or "").strip().title(),
             "design_done": done,
             "in_dev":      r.state in _DEV_STATES,
+            "priority":    pri,
         })
 
+    # Sort by dev month (year, month) first, then priority — groups all items for
+    # the same calendar month together even when they span multiple sub-iterations
+    stories.sort(key=lambda s: (s["dev_year"], s["dev_month"], s["priority"], s["id"]))
     return stories, iter_map
 
 
@@ -748,6 +755,7 @@ def _build_table(stories: list, plan_months: list, today: date):
                        href=(f"https://expenseondemand.visualstudio.com/"
                              f"Solo%20Expenses/_workitems/edit/{s['id']}"),
                        target="_blank",
+                       className="ado-vsts-link",
                        style={"color": _INDIGO, "fontFamily": _MONO, "fontSize": "11.5px",
                               "fontWeight": "700", "textDecoration": "none"}),
                 style={**_TD_B, "position": "sticky", "left": "0px", "zIndex": "2",
@@ -895,6 +903,11 @@ def layout(**_):
                     "Designers start one month before the planned dev month. "
                     "A story counts as done once its design is added to the story.",
                     style={"fontSize": "12px", "color": _MT, "marginTop": "5px"},
+                ),
+                html.Div(
+                    "ℹ Month columns = dev iteration months (sprint cadence), not release dates.",
+                    style={"fontSize": "10px", "color": _MT, "marginTop": "2px",
+                           "fontStyle": "italic"},
                 ),
             ]),
             html.Div([

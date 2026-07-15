@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 from datetime import date, datetime, timedelta
 
 from dash import dcc, html, Input, Output, State, ALL, callback, clientside_callback, ctx, no_update, ClientsideFunction
+from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 
 from data.loader import load_data
@@ -138,11 +139,13 @@ def _load_unestimated_data() -> list[dict]:
     try:
         with _engine.connect() as conn:
             rows = conn.execute(_text(
-                "SELECT work_item_id, title, work_item_type, main_developer, story_owner, "
-                "       month_key, est_status, task_count, task_missing_count, task_est_sum, priority "
-                "FROM agg_story_estimation "
-                "WHERE month_key IS NOT NULL "
-                "ORDER BY priority NULLS LAST, work_item_id"
+                "SELECT e.work_item_id, e.title, e.work_item_type, e.main_developer, e.story_owner, "
+                "       e.month_key, e.est_status, e.task_count, e.task_missing_count, e.task_est_sum, e.priority, "
+                "       COALESCE(w.release_date, '') AS release_date "
+                "FROM agg_story_estimation e "
+                "LEFT JOIN work_items_main w ON w.work_item_id = e.work_item_id "
+                "WHERE e.month_key IS NOT NULL "
+                "ORDER BY e.month_key NULLS LAST, e.priority NULLS LAST, e.work_item_id"
             )).fetchall()
     except Exception:
         return []
@@ -160,6 +163,7 @@ def _load_unestimated_data() -> list[dict]:
             "title":        str(r.title or "")[:100],
             "pri":          pri,
             "type":         wtype,
+            "raw_type":     str(r.work_item_type or wtype),
             "dev":          dev,
             "month":        str(r.month_key or ""),
             "est_status":   r.est_status,
@@ -167,7 +171,16 @@ def _load_unestimated_data() -> list[dict]:
             "task_missing": int(r.task_missing_count or 0),
             "task_sum":     float(r.task_est_sum or 0),
             "story_owner":  str(r.story_owner or ""),
+            "release_date": str(r.release_date or ""),
         })
+    # M0/M1/M2 sprint months first, then other months alphabetically, then by priority
+    _mk_o = {"M0": 0, "M1": 1, "M2": 2}
+    result.sort(key=lambda s: (
+        _mk_o.get(s["month"], 99),
+        "" if s["month"] in _mk_o else s["month"],
+        int(s["pri"][1:]) if len(s["pri"]) > 1 and s["pri"][1:].isdigit() else 99,
+        s["id"],
+    ))
     return result
 
 
@@ -1676,8 +1689,31 @@ def _build_unest_tab(items: list[dict], hide_cards: set | None = None) -> html.D
                "border": f"1px dashed {BD}", "borderRadius": "8px"},
     )
 
+    _lbl_s = {"fontSize": "10px", "color": MT, "fontWeight": "600", "marginBottom": "3px"}
     return html.Div([
         kpi_strip,
+        html.Div(id="unest-ctrl-bar", children=[
+            html.Div([
+                html.Div("Sort", style=_lbl_s),
+                dcc.Dropdown(
+                    id="unest-srt-ctrl",
+                    options=[{"label": l, "value": v} for l, v in
+                             [("Month", "month"), ("Priority", "pri"), ("Release", "rd")]],
+                    value="month", clearable=False,
+                    style={"minWidth": "130px", "fontSize": "11px"},
+                ),
+            ]),
+            html.Div([
+                html.Div("Developer", style=_lbl_s),
+                dcc.Dropdown(
+                    id="unest-dev-ctrl",
+                    options=[{"label": "All Devs", "value": "all"}],
+                    value="all", clearable=False,
+                    style={"minWidth": "180px", "fontSize": "11px"},
+                ),
+            ]),
+        ], style={"display": "none", "gap": "10px", "alignItems": "flex-end",
+                  "marginBottom": "10px"}),
         html.Div(id="unest-item-panel", children=panel_hint),
         partial_note,
         html.Div(
@@ -2971,6 +3007,12 @@ def _build_full_layout():
                     "KPI-03 Long-Horizon Pipeline Health · Click any cell for more detail",
                     style={"fontSize": "11px", "color": MT, "marginTop": "4px"},
                 ),
+                html.Div(
+                    "ℹ Months M0 / M1 / M2 = iteration months (sprint cadence). "
+                    "M0 = current sprint, M1 = next, M2 = sprint after.",
+                    style={"fontSize": "10px", "color": MT, "marginTop": "3px",
+                           "fontStyle": "italic"},
+                ),
             ]),
             html.Div(_sprint_info, style={
                 "fontSize": "11px", "color": MT, "whiteSpace": "nowrap",
@@ -3321,6 +3363,34 @@ def _build_full_layout():
                 "borderBottom": f"1px solid {BD}",
                 "flexShrink": "0",
             }),
+            # Sort / type-filter ctrl bar — shown when panel is open
+            html.Div(id="unest-sp-ctrl-bar", children=[
+                html.Div([
+                    html.Div("Sort", style={"fontSize": "10px", "color": MT,
+                                            "fontWeight": "600", "marginBottom": "3px"}),
+                    dcc.Dropdown(
+                        id="unest-sp-srt-ctrl",
+                        options=[{"label": l, "value": v} for l, v in
+                                 [("Priority", "pri"), ("Release Date", "rd"), ("Title", "title")]],
+                        value="pri", clearable=False,
+                        style={"minWidth": "130px", "fontSize": "11px"},
+                    ),
+                ]),
+                html.Div([
+                    html.Div("Type", style={"fontSize": "10px", "color": MT,
+                                            "fontWeight": "600", "marginBottom": "3px"}),
+                    dcc.Dropdown(
+                        id="unest-sp-type-ctrl",
+                        options=[{"label": l, "value": v} for l, v in
+                                 [("All Types", "all"), ("Bug", "Bug"),
+                                  ("Bug UI", "Bug_UI"), ("Bug Text", "Bug_Text")]],
+                        value="all", clearable=False,
+                        style={"minWidth": "150px", "fontSize": "11px"},
+                    ),
+                ]),
+            ], style={"display": "none", "gap": "10px", "alignItems": "flex-end",
+                      "padding": "10px 20px", "borderBottom": f"1px solid {BD}",
+                      "flexShrink": "0"}),
             # Scrollable body
             html.Div(id="unest-panel-body",
                      style={"overflowY": "auto", "flex": "1", "padding": "16px 20px"}),
@@ -4557,30 +4627,9 @@ def _matrix_panel(cell_clicks, close_click, stories_data):
     return _CAP_PANEL_OPEN, hdr_children, panel_body
 
 
-# ─── Unestimated KPI cards → inline table ─────────────────────────────────────
-@callback(
-    Output("unest-item-panel", "children"),
-    Output({"type": "unest-kcard", "filter": ALL}, "style"),
-    Output("unest-active-kcard", "data"),
-    Input({"type": "unest-kcard", "filter": ALL}, "n_clicks"),
-    State("plan-unest-store", "data"),
-    State({"type": "unest-kcard", "filter": ALL}, "id"),
-    State("unest-active-kcard", "data"),
-    prevent_initial_call=True,
-)
-def _unest_card_click(clicks, items, card_ids, currently_active):
-    if not ctx.triggered_id or not items:
-        return no_update, no_update, no_update
-    items = [s for s in items if s["est_status"] in ("unestimated", "partial")]
-
-    active_f = ctx.triggered_id["filter"]
-
-    # Toggle: clicking the already-active card collapses the table
-    if active_f == currently_active:
-        blank_styles = [_kcard_style(_UNEST_CARD_COLORS[cid["filter"]], False) for cid in card_ids]
-        return html.Div(), blank_styles, None
+# ─── Shared rendering helper ───────────────────────────────────────────────────
+def _build_unest_panel(active_f: str, items: list, flt_data: dict | None, color: str):
     _UNA = ("Unassigned", "Not Specified", "")
-
     if active_f == "all":
         filtered, label = items, "All Unestimated Items"
     elif active_f == "p1":
@@ -4596,9 +4645,25 @@ def _unest_card_click(clicks, items, card_ids, currently_active):
     else:
         filtered, label = items, "Items"
 
-    filtered = sorted(filtered, key=lambda s: (s["pri"], s["dev"], s["title"]))
-    count    = len(filtered)
-    color    = _UNEST_CARD_COLORS.get(active_f, R)
+    _fd   = flt_data or {"srt": "month", "dev": "all"}
+    _srt  = _fd.get("srt", "month")
+    _ddev = _fd.get("dev", "all")
+
+    if _ddev != "all":
+        filtered = [s for s in filtered if s.get("dev") == _ddev]
+
+    _mk_o = {"M0": 0, "M1": 1, "M2": 2}
+    if _srt == "pri":
+        filtered = sorted(filtered, key=lambda s: (s["pri"], s["dev"], s["title"]))
+    elif _srt == "rd":
+        filtered = sorted(filtered, key=lambda s: (s.get("release_date") or "zzz", s["pri"], s["id"]))
+    else:
+        filtered = sorted(filtered, key=lambda s: (
+            _mk_o.get(s.get("month") or "", 99),
+            "" if (s.get("month") or "") in _mk_o else (s.get("month") or ""),
+            s["pri"], s["dev"], s["title"],
+        ))
+    count = len(filtered)
 
     td_s = {"fontSize": "12px", "color": TX, "padding": "10px 14px",
             "borderBottom": f"1px solid {BD}", "verticalAlign": "middle"}
@@ -4611,15 +4676,23 @@ def _unest_card_click(clicks, items, card_ids, currently_active):
         est_lbl, est_c = ("Partial", A) if s["est_status"] == "partial" else ("Missing", R)
         task_note = f"  {s['task_count']}t, {s['task_missing']} missing" \
                     if s.get("task_count", 0) > 0 else ""
+        rd = s.get("release_date") or ""
         rows.append(html.Tr([
             html.Td(html.A(f"#{s['id']}", href=f"{ADO_BASE_URL}{s['id']}", target="_blank",
                            style={"color": P, "fontWeight": "700", "textDecoration": "none",
                                   "fontSize": "12px"}),
                     style={**td_s, "width": "72px"}),
-            html.Td(html.A(s["title"], href=f"{ADO_BASE_URL}{s['id']}", target="_blank",
-                           style={"color": TX, "textDecoration": "none", "fontSize": "12px",
-                                  "fontWeight": "500", "lineHeight": "1.4"}),
-                    style=td_s),
+            html.Td([
+                html.A(s["title"], href=f"{ADO_BASE_URL}{s['id']}", target="_blank",
+                       style={"color": TX, "textDecoration": "none", "fontSize": "12px",
+                              "fontWeight": "500", "lineHeight": "1.4"}),
+                html.Div(html.Span(rd, style={
+                    "fontSize": "10px", "color": "rgb(6,182,212)",
+                    "background": "rgba(6,182,212,0.10)",
+                    "border": "1px solid rgba(6,182,212,0.25)",
+                    "borderRadius": "3px", "padding": "1px 5px",
+                }), style={"marginTop": "4px"}) if rd else None,
+            ], style=td_s),
             html.Td(s["dev"] or "—", style={**td_s, "color": MT, "fontSize": "11px",
                                              "whiteSpace": "nowrap"}),
             html.Td(html.Span(s["pri"], style={
@@ -4642,11 +4715,10 @@ def _unest_card_click(clicks, items, card_ids, currently_active):
             ], style={**td_s, "whiteSpace": "nowrap"}),
         ], style={"background": CD}))
 
-    panel = html.Div([
+    return html.Div([
         html.Div([
             html.Span(label, style={"fontWeight": "700", "color": color, "fontSize": "14px"}),
-            html.Span(f"  ·  {count} items",
-                      style={"color": MT, "fontSize": "12px"}),
+            html.Span(f"  ·  {count} items", style={"color": MT, "fontSize": "12px"}),
             html.Span("  ↗ opens in ADO",
                       style={"color": MT, "fontSize": "10px", "marginLeft": "8px"}),
         ], style={"marginBottom": "10px"}),
@@ -4668,11 +4740,84 @@ def _unest_card_click(clicks, items, card_ids, currently_active):
         ),
     ], style={"marginBottom": "20px"})
 
-    card_styles = [
-        _kcard_style(_UNEST_CARD_COLORS[cid["filter"]], cid["filter"] == active_f)
-        for cid in card_ids
-    ]
-    return panel, card_styles, active_f
+
+# ─── Unestimated KPI cards → inline table ─────────────────────────────────────
+_UNEST_UNA = ("Unassigned", "Not Specified", "")
+_CTRL_SHOW  = {"display": "flex", "gap": "10px", "alignItems": "flex-end", "marginBottom": "10px"}
+_CTRL_HIDE  = {"display": "none"}
+
+@callback(
+    Output("unest-item-panel", "children"),
+    Output({"type": "unest-kcard", "filter": ALL}, "style"),
+    Output("unest-active-kcard", "data"),
+    Output("unest-ctrl-bar", "style"),
+    Output("unest-dev-ctrl", "options"),
+    Output("unest-dev-ctrl", "value"),
+    Input({"type": "unest-kcard", "filter": ALL}, "n_clicks"),
+    State("plan-unest-store", "data"),
+    State({"type": "unest-kcard", "filter": ALL}, "id"),
+    State("unest-active-kcard", "data"),
+    State("unest-srt-ctrl", "value"),
+    prevent_initial_call=True,
+)
+def _unest_card_click(clicks, items, card_ids, currently_active, srt_val):
+    _nu6 = (no_update,) * 6
+    trigger = ctx.triggered_id
+    if not trigger or not isinstance(trigger, dict) or trigger.get("type") != "unest-kcard":
+        return _nu6
+    if not items:
+        return _nu6
+
+    items    = [s for s in items if s["est_status"] in ("unestimated", "partial")]
+    active_f = trigger["filter"]
+
+    # Toggle: clicking the already-active card collapses the table
+    if active_f == currently_active:
+        blank_styles = [_kcard_style(_UNEST_CARD_COLORS[cid["filter"]], False) for cid in card_ids]
+        return html.Div(), blank_styles, None, _CTRL_HIDE, no_update, "all"
+
+    flt_data = {"srt": srt_val or "month", "dev": "all"}
+    color       = _UNEST_CARD_COLORS.get(active_f, R)
+    panel       = _build_unest_panel(active_f, items, flt_data, color)
+    card_styles = [_kcard_style(_UNEST_CARD_COLORS[cid["filter"]], cid["filter"] == active_f)
+                   for cid in card_ids]
+
+    # Compute dev options for the new active filter
+    if active_f == "all":
+        src = items
+    elif active_f == "p1":
+        src = [s for s in items if s["pri"] == "P1"]
+    elif active_f == "issues":
+        src = [s for s in items if s["type"] == "Issue"]
+    elif active_f == "enhanc":
+        src = [s for s in items if s["type"] == "Enhancement"]
+    elif active_f == "devsp1":
+        gap = {s["dev"] for s in items if s["pri"] == "P1" and s["dev"] not in _UNEST_UNA}
+        src = [s for s in items if s["pri"] == "P1" and s["dev"] in gap]
+    else:
+        src = items
+    devs = sorted({s["dev"] for s in src if s.get("dev") and s["dev"] not in _UNEST_UNA})
+    dev_opts = [{"label": "All Devs", "value": "all"}] + [{"label": d, "value": d} for d in devs]
+
+    return panel, card_styles, active_f, _CTRL_SHOW, dev_opts, "all"
+
+
+# ─── Unestimated panel filter / sort ─────────────────────────────────────────
+@callback(
+    Output("unest-item-panel", "children", allow_duplicate=True),
+    Input("unest-srt-ctrl", "value"),
+    Input("unest-dev-ctrl", "value"),
+    State("unest-active-kcard", "data"),
+    State("plan-unest-store", "data"),
+    prevent_initial_call=True,
+)
+def _unest_update_flt(srt_val, dev_val, active_card, items):
+    if not active_card:
+        raise PreventUpdate
+    flt = {"srt": srt_val or "month", "dev": dev_val or "all"}
+    all_items = [s for s in (items or []) if s["est_status"] in ("unestimated", "partial")]
+    color     = _UNEST_CARD_COLORS.get(active_card, R)
+    return _build_unest_panel(active_card, all_items, flt, color)
 
 
 # ─── Unestimated matrix cell → side panel ──────────────────────────────────────
@@ -4694,87 +4839,141 @@ def _unest_matrix_toggle(cell_clicks, close_click, backdrop_click):
     return no_update
 
 
+def _sp_item_card(s: dict) -> html.A:
+    if s["est_status"] in ("estimated", "estimated_via_tasks"):
+        est_lbl, est_c = "Estimated", G
+    elif s["est_status"] == "partial":
+        est_lbl, est_c = "Partial", A
+    else:
+        est_lbl, est_c = "Missing", R
+    task_note = ""
+    if s.get("task_count", 0) > 0:
+        miss = s["task_missing"]
+        task_note = f"{s['task_count']} tasks" + (f", {miss} missing" if miss else "")
+    card_rd = s.get("release_date") or ""
+    return html.A(
+        href=f"{ADO_BASE_URL}{s['id']}", target="_blank",
+        style={"textDecoration": "none", "display": "block", "marginBottom": "8px"},
+        children=html.Div([
+            html.Div([
+                html.Span(f"#{s['id']}",
+                          style={"color": P, "fontWeight": "700",
+                                 "fontSize": "11px", "marginRight": "8px"}),
+                html.Span(s["pri"], style={
+                    "background": f"{_pri_clr(s['pri'])}22", "color": _pri_clr(s["pri"]),
+                    "border": f"1px solid {_pri_clr(s['pri'])}44",
+                    "borderRadius": "4px", "padding": "1px 6px",
+                    "fontSize": "10px", "fontWeight": "700", "marginRight": "6px",
+                }),
+                html.Span(est_lbl, style={
+                    "background": f"{est_c}18", "color": est_c,
+                    "border": f"1px solid {est_c}44",
+                    "borderRadius": "4px", "padding": "1px 6px",
+                    "fontSize": "10px", "fontWeight": "600",
+                }),
+                html.Span(card_rd, style={
+                    "fontSize": "10px", "color": "rgb(6,182,212)",
+                    "background": "rgba(6,182,212,0.10)",
+                    "border": "1px solid rgba(6,182,212,0.25)",
+                    "borderRadius": "4px", "padding": "1px 6px",
+                }) if card_rd else None,
+            ], style={"marginBottom": "6px", "display": "flex",
+                      "alignItems": "center", "flexWrap": "wrap", "gap": "4px"}),
+            html.Div(s["title"], style={
+                "color": TX, "fontSize": "13px", "fontWeight": "600",
+                "lineHeight": "1.4", "marginBottom": "5px",
+            }),
+            html.Div(html.Span(task_note, style={"color": MT, "fontSize": "10px"})),
+        ], style={
+            "background": CD, "border": f"1px solid {BD}",
+            "borderLeft": f"3px solid {_pri_clr(s['pri'])}",
+            "borderRadius": "8px", "padding": "12px 14px", "transition": "opacity .15s",
+        })
+    )
+
+
+def _sp_section_header(label: str, count: int) -> html.Div:
+    return html.Div([
+        html.Span(label, style={"fontSize": "10px", "fontWeight": "700",
+                                "color": MT, "textTransform": "uppercase",
+                                "letterSpacing": "0.8px"}),
+        html.Span(f"  {count}", style={"fontSize": "10px", "color": MT, "fontWeight": "400"}),
+    ], style={"borderBottom": f"1px solid {BD}",
+              "paddingBottom": "5px", "marginBottom": "8px", "marginTop": "14px"})
+
+
+_BUG_TYPE_LABELS = {"Bug": "Bug", "Bug_UI": "Bug UI", "Bug_Text": "Bug Text"}
+
+def _build_sp_body(filtered: list, est_type: str,
+                   srt_val: str, type_val: str) -> html.Div:
+    if type_val != "all":
+        filtered = [s for s in filtered if s.get("raw_type", s["type"]) == type_val]
+
+    if srt_val == "rd":
+        filtered = sorted(filtered, key=lambda s: (s.get("release_date") or "zzz", s["pri"]))
+    elif srt_val == "title":
+        filtered = sorted(filtered, key=lambda s: s["title"])
+    else:
+        filtered = sorted(filtered, key=lambda s: (s["pri"], s["title"]))
+
+    _est_label = "Estimated" if est_type == "e" else "Unestimated"
+    if not filtered:
+        return html.Div(f"No {_est_label.lower()} items for this cell.",
+                        style={"color": MT, "fontSize": "13px", "padding": "20px 0"})
+
+    # Group by raw_type so Bug/Bug_UI/Bug_Text appear as separate sections
+    seen_types, groups = [], {}
+    for s in filtered:
+        t = s.get("raw_type", s["type"])
+        if t not in groups:
+            groups[t] = []
+            seen_types.append(t)
+        groups[t].append(s)
+
+    body_items = [
+        html.Div("↗ Click any item to open in ADO",
+                 style={"color": MT, "fontSize": "10px",
+                        "marginBottom": "8px", "textAlign": "right"}),
+    ]
+    for t in seen_types:
+        label = _BUG_TYPE_LABELS.get(t, t)
+        group = groups[t]
+        body_items.append(_sp_section_header(label, len(group)))
+        body_items.extend(_sp_item_card(s) for s in group)
+    return html.Div(body_items)
+
+
 # Render: store → slide panel open/closed with item cards
 @callback(
-    Output("unest-side-panel",  "style"),
-    Output("unest-backdrop",    "style"),
-    Output("unest-panel-title", "children"),
-    Output("unest-panel-body",  "children"),
-    Input("unest-panel-filter", "data"),
-    State("plan-unest-store",   "data"),
+    Output("unest-side-panel",    "style"),
+    Output("unest-backdrop",      "style"),
+    Output("unest-panel-title",   "children"),
+    Output("unest-panel-body",    "children"),
+    Output("unest-sp-ctrl-bar",   "style"),
+    Input("unest-panel-filter",   "data"),
+    State("plan-unest-store",     "data"),
+    State("unest-sp-srt-ctrl",    "value"),
+    State("unest-sp-type-ctrl",   "value"),
     prevent_initial_call=True,
 )
-def _unest_matrix_panel(cell_sel, items):
+def _unest_matrix_panel(cell_sel, items, srt_val, type_val):
+    _sp_hide = {"display": "none", "gap": "10px", "alignItems": "flex-end",
+                "padding": "10px 20px", "borderBottom": f"1px solid {BD}", "flexShrink": "0"}
+    _sp_show = {**_sp_hide, "display": "flex"}
+
     if not cell_sel or not items:
-        return _PANEL_CLOSED, _BACKDROP_CLOSED, "", []
+        return _PANEL_CLOSED, _BACKDROP_CLOSED, "", [], _sp_hide
 
     dev      = cell_sel["dev"]
     month    = cell_sel["month"]
-    est_type = cell_sel.get("est_type", "u")  # "e" = estimated, "u" = unestimated
+    est_type = cell_sel.get("est_type", "u")
 
     if est_type == "e":
-        filtered = sorted(
-            [s for s in items if s["dev"] == dev and s["month"] == month
-             and s["est_status"] in ("estimated", "estimated_via_tasks")],
-            key=lambda s: (s["pri"], s["title"]),
-        )
+        base = [s for s in items if s["dev"] == dev and s["month"] == month
+                and s["est_status"] in ("estimated", "estimated_via_tasks")]
     else:
-        filtered = sorted(
-            [s for s in items if s["dev"] == dev and s["month"] == month
-             and s["est_status"] in ("unestimated", "partial")],
-            key=lambda s: (s["pri"], s["title"]),
-        )
-
-    def _item_card(s):
-        if s["est_status"] in ("estimated", "estimated_via_tasks"):
-            est_lbl, est_c = "Estimated", G
-        elif s["est_status"] == "partial":
-            est_lbl, est_c = "Partial", A
-        else:
-            est_lbl, est_c = "Missing", R
-        task_note = ""
-        if s.get("task_count", 0) > 0:
-            miss = s["task_missing"]
-            task_note = f"{s['task_count']} tasks" + (f", {miss} missing" if miss else "")
-
-        return html.A(
-            href=f"{ADO_BASE_URL}{s['id']}", target="_blank",
-            style={"textDecoration": "none", "display": "block", "marginBottom": "8px"},
-            children=html.Div([
-                html.Div([
-                    html.Span(f"#{s['id']}",
-                              style={"color": P, "fontWeight": "700",
-                                     "fontSize": "11px", "marginRight": "8px"}),
-                    html.Span(s["pri"], style={
-                        "background": f"{_pri_clr(s['pri'])}22",
-                        "color": _pri_clr(s["pri"]),
-                        "border": f"1px solid {_pri_clr(s['pri'])}44",
-                        "borderRadius": "4px", "padding": "1px 6px",
-                        "fontSize": "10px", "fontWeight": "700", "marginRight": "6px",
-                    }),
-                    html.Span(est_lbl, style={
-                        "background": f"{est_c}18", "color": est_c,
-                        "border": f"1px solid {est_c}44",
-                        "borderRadius": "4px", "padding": "1px 6px",
-                        "fontSize": "10px", "fontWeight": "600",
-                    }),
-                ], style={"marginBottom": "6px", "display": "flex",
-                           "alignItems": "center", "flexWrap": "wrap", "gap": "4px"}),
-                html.Div(s["title"], style={
-                    "color": TX, "fontSize": "13px", "fontWeight": "600",
-                    "lineHeight": "1.4", "marginBottom": "5px",
-                }),
-                html.Div([
-                    html.Span(task_note, style={"color": MT, "fontSize": "10px"}),
-                ]),
-            ], style={
-                "background": CD,
-                "border": f"1px solid {BD}",
-                "borderLeft": f"3px solid {_pri_clr(s['pri'])}",
-                "borderRadius": "8px", "padding": "12px 14px",
-                "transition": "opacity .15s",
-            })
-        )
+        base = [s for s in items if s["dev"] == dev and s["month"] == month
+                and s["est_status"] in ("unestimated", "partial")]
 
     _est_label = "Estimated" if est_type == "e" else "Unestimated"
     title_el = [
@@ -4783,43 +4982,36 @@ def _unest_matrix_panel(cell_sel, items):
         html.Span(f"  ·  {_est_label}",
                   style={"color": G if est_type == "e" else R,
                          "fontSize": "11px", "fontWeight": "700", "marginLeft": "4px"}),
-        html.Span(f"  ·  {len(filtered)} item{'s' if len(filtered) != 1 else ''}",
+        html.Span(f"  ·  {len(base)} item{'s' if len(base) != 1 else ''}",
                   style={"color": MT, "fontSize": "13px", "fontWeight": "400"}),
     ]
 
-    def _section_header(label: str, count: int) -> html.Div:
-        return html.Div([
-            html.Span(label, style={"fontSize": "10px", "fontWeight": "700",
-                                    "color": MT, "textTransform": "uppercase",
-                                    "letterSpacing": "0.8px"}),
-            html.Span(f"  {count}", style={"fontSize": "10px", "color": MT,
-                                           "fontWeight": "400"}),
-        ], style={
-            "borderBottom": f"1px solid {BD}",
-            "paddingBottom": "5px", "marginBottom": "8px", "marginTop": "14px",
-        })
+    body = _build_sp_body(base, est_type, srt_val or "pri", type_val or "all")
+    return _PANEL_OPEN, _BACKDROP_OPEN, title_el, body, _sp_show
 
-    enhancements = [s for s in filtered if s["type"] == "Enhancement"]
-    issues       = [s for s in filtered if s["type"] == "Issue"]
 
-    body_items = [
-        html.Div("↗ Click any item to open in ADO",
-                 style={"color": MT, "fontSize": "10px",
-                        "marginBottom": "8px", "textAlign": "right"}),
-    ]
-    for label, group in [("Enhancements", enhancements), ("Issues", issues)]:
-        if not group:
-            continue
-        body_items.append(_section_header(label, len(group)))
-        body_items.extend(_item_card(s) for s in group)
-
-    _empty_msg = f"No {_est_label.lower()} items for this cell."
-    body = html.Div(body_items) if filtered else html.Div(
-        _empty_msg,
-        style={"color": MT, "fontSize": "13px", "padding": "20px 0"},
-    )
-
-    return _PANEL_OPEN, _BACKDROP_OPEN, title_el, body
+# ─── Side panel sort / type filter ───────────────────────────────────────────
+@callback(
+    Output("unest-panel-body", "children", allow_duplicate=True),
+    Input("unest-sp-srt-ctrl",  "value"),
+    Input("unest-sp-type-ctrl", "value"),
+    State("unest-panel-filter", "data"),
+    State("plan-unest-store",   "data"),
+    prevent_initial_call=True,
+)
+def _unest_sp_update_flt(srt_val, type_val, cell_sel, items):
+    if not cell_sel or not items:
+        raise PreventUpdate
+    dev      = cell_sel["dev"]
+    month    = cell_sel["month"]
+    est_type = cell_sel.get("est_type", "u")
+    if est_type == "e":
+        base = [s for s in items if s["dev"] == dev and s["month"] == month
+                and s["est_status"] in ("estimated", "estimated_via_tasks")]
+    else:
+        base = [s for s in items if s["dev"] == dev and s["month"] == month
+                and s["est_status"] in ("unestimated", "partial")]
+    return _build_sp_body(base, est_type, srt_val or "pri", type_val or "all")
 
 
 # ── 11. Per-ticket sign-off log ───────────────────────────────────────────────

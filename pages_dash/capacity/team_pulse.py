@@ -637,7 +637,8 @@ def _build_item_detail_content(item_id: int, pending: dict) -> html.Div:
 def _build_panel_content(panel_ctx: dict, team_filter: str,
                          source_filter: str = "All", platform_filter: str = "All",
                          selected_ids: list | None = None,
-                         moved_items: dict | None = None) -> html.Div:
+                         moved_items: dict | None = None,
+                         flt: dict | None = None) -> html.Div:
     kind = panel_ctx["kind"]
     key  = panel_ctx["key"]
     mk   = panel_ctx["mk"]
@@ -680,6 +681,26 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
         type_label = "Enhancements"
     else:
         return html.Div("Unknown context", style={"color": _DIM})
+
+    flt = flt or {"pri": "all", "srt": "hours"}
+    pri_opt = flt.get("pri", "all")
+    srt_opt = flt.get("srt", "hours")
+
+    # Apply priority filter before stat computation
+    if pri_opt != "all":
+        items = [x for x in items if x.get("pri", "Others").lower() == pri_opt]
+
+    # Sort key used for all sections
+    if srt_opt == "pri":
+        _pri_num = {"P1": 1, "P2": 2, "P3": 3, "Others": 4}
+        _sort_key: object = lambda x: (_pri_num.get(x.get("pri", "Others"), 4), x["id"])
+        _reverse = False
+    elif srt_opt == "rd":
+        _sort_key = lambda x: (x.get("release_date") or "zzz", x["id"])
+        _reverse = False
+    else:  # hours (default)
+        _sort_key = lambda x: x["est_h"]
+        _reverse = True
 
     sel     = set(selected_ids or [])
     n_sel   = len(sel)
@@ -834,9 +855,9 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
     if kind == "dev_hours":
         # Group by issues / enhancements
         iss_items = sorted([x for x in items if x["type"] == "issue"],
-                           key=lambda x: x["est_h"], reverse=True)
+                           key=_sort_key, reverse=_reverse)
         enh_items = sorted([x for x in items if x["type"] == "enh"],
-                           key=lambda x: x["est_h"], reverse=True)
+                           key=_sort_key, reverse=_reverse)
         iss_h = sum(x["est_h"] for x in iss_items)
         enh_h = sum(x["est_h"] for x in enh_items)
         iss_est = sum(1 for x in iss_items if x["estimated"])
@@ -860,8 +881,9 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
         sections.append(_total_line("Total hours — all work", total_h))
     else:
         est_items   = sorted([x for x in items if x["estimated"]],
-                             key=lambda x: x["est_h"], reverse=True)
-        unest_items = [x for x in items if not x["estimated"]]
+                             key=_sort_key, reverse=_reverse)
+        unest_items = sorted([x for x in items if not x["estimated"]],
+                             key=_sort_key, reverse=_reverse)
         sections = []
         if est_items:
             sections += [
@@ -937,6 +959,9 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
             }),
         ], style={"display": "grid", "gridTemplateColumns": "1fr 1fr",
                   "gap": "10px", "marginBottom": "20px"}),
+
+        # Filter / Sort controls
+        _ctrl_bar_tp(pri_opt, srt_opt),
 
         # Items
         html.Div(sections),
@@ -1515,6 +1540,29 @@ def _rgb(c: str) -> str:
     return f"{m.group(1)},{m.group(2)},{m.group(3)}" if m else "139,146,164"
 
 
+def _ctrl_bar_tp(pri_opt: str, srt_opt: str) -> html.Div:
+    _PRI_OPTS = [{"label": l, "value": v} for l, v in
+                 [("All", "all"), ("P1", "p1"), ("P2", "p2"), ("P3", "p3")]]
+    _SRT_OPTS = [{"label": l, "value": v} for l, v in
+                 [("Hours ↓", "hours"), ("Priority", "pri"), ("Release", "rd")]]
+    _lbl_style = {"fontSize": "10px", "color": _DIM, "fontWeight": "600", "marginBottom": "3px"}
+
+    return html.Div([
+        html.Div([
+            html.Div("Filter", style=_lbl_style),
+            dcc.Dropdown(id={"type": "tp-flt-dd", "k": "pri"},
+                         options=_PRI_OPTS, value=pri_opt, clearable=False,
+                         style={"minWidth": "100px", "fontSize": "11px"}),
+        ]),
+        html.Div([
+            html.Div("Sort", style=_lbl_style),
+            dcc.Dropdown(id={"type": "tp-flt-dd", "k": "srt"},
+                         options=_SRT_OPTS, value=srt_opt, clearable=False,
+                         style={"minWidth": "130px", "fontSize": "11px"}),
+        ]),
+    ], style={"display": "flex", "gap": "10px", "alignItems": "flex-end", "marginBottom": "14px"})
+
+
 # ── Layout ────────────────────────────────────────────────────────────────────
 def layout(**_):
     items      = _load_items()
@@ -1628,6 +1676,7 @@ def layout(**_):
         dcc.Store(id="tp-item-detail",     data=None),
         dcc.Store(id="tp-item-pending",    data={}),
         dcc.Store(id="tp-item-initial",    data={}),
+        dcc.Store(id="tp-flt",             data={"pri": "all", "srt": "hours"}),
 
         # ── Toast notification ────────────────────────────────────────────────
         html.Div(id="tp-toast", style={"display": "none"},
@@ -1667,6 +1716,9 @@ def layout(**_):
                 html.Div("Rolling 12-month workload — issues by priority, "
                          "enhancements by size, hours per developer.",
                          style={"fontSize": "12px", "color": _MT, "marginTop": "5px"}),
+                html.Div("ℹ Month columns = iteration months (sprint cadence), not release dates.",
+                         style={"fontSize": "10px", "color": _MT, "marginTop": "2px",
+                                "fontStyle": "italic"}),
             ]),
             html.Div(f"Monthly grid · {date.today().strftime('%b %Y')}",
                      style={
@@ -1964,12 +2016,13 @@ def _close_panel(n):
     Input("tp-rd-refresh",      "data"),
     Input("tp-item-detail",     "data"),
     Input("tp-item-pending",    "data"),
+    Input("tp-flt",             "data"),
     State("tp-team-store",     "data"),
     State("tp-source-store",   "data"),
     State("tp-platform-store", "data"),
     State("tp-moved-store",    "data"),
 )
-def _render_panel(panel_ctx, selection, _rd_refresh, item_detail, item_pending,
+def _render_panel(panel_ctx, selection, _rd_refresh, item_detail, item_pending, flt,
                   team_filter, source_filter, platform_filter, moved_items):
     _PANEL_STYLE = {
         "position": "fixed", "top": "0", "right": "0",
@@ -1989,15 +2042,18 @@ def _render_panel(panel_ctx, selection, _rd_refresh, item_detail, item_pending,
         return {"display": "block"}, html.Div(
             [detail] + _detail_side_stubs(), style=_PANEL_STYLE
         )
-    # When the panel context changes, treat as fresh open (ignore stale selection)
+    # When the panel context changes, treat as fresh open (reset filter + selection)
     if ctx.triggered_id == "tp-panel-ctx":
         effective_sel = []
+        effective_flt = {"pri": "all", "srt": "hours"}
     else:
         effective_sel = selection or []
+        effective_flt = flt or {"pri": "all", "srt": "hours"}
     content = _build_panel_content(panel_ctx, team_filter or "All",
                                    source_filter or "All", platform_filter or "All",
                                    selected_ids=effective_sel,
-                                   moved_items=moved_items or {})
+                                   moved_items=moved_items or {},
+                                   flt=effective_flt)
     # Include detail-view stubs so callbacks like _close_item_detail never lose their Inputs
     return {"display": "block"}, html.Div(
         [content] + _list_side_stubs(), style=_PANEL_STYLE
@@ -2026,9 +2082,13 @@ def _panel_selection(panel_ctx, _item_clicks, _sel_all, _sel_clear,
         return []
 
     if trigger == "tp-sel-clear":
+        if not _sel_clear:  # n_clicks=0 → stub re-mounted, not a real click
+            raise PreventUpdate
         return []
 
     if trigger == "tp-sel-all":
+        if not _sel_all:  # n_clicks=0 → stub re-mounted, not a real click
+            raise PreventUpdate
         if not panel_ctx:
             return []
         kind, key = panel_ctx.get("kind"), panel_ctx.get("key")
@@ -2053,6 +2113,8 @@ def _panel_selection(panel_ctx, _item_clicks, _sel_all, _sel_clear,
 
     # Item row click — toggle
     if isinstance(trigger, dict) and trigger.get("type") == "tp-panel-item":
+        if not (ctx.triggered[0]["value"] if ctx.triggered else 0):
+            raise PreventUpdate
         wid = trigger["wid"]
         sel = set(current_sel or [])
         if wid in sel:
@@ -2454,3 +2516,33 @@ def _commit_tp_changes(n, item_id, pending):
 
     import time as _t
     return {}, _t.time()
+
+
+# ── Panel filter / sort ───────────────────────────────────────────────────────
+@callback(
+    Output("tp-flt", "data"),
+    Input("tp-panel-ctx", "data"),
+    prevent_initial_call=True,
+)
+def _tp_reset_flt(_):
+    return {"pri": "all", "srt": "hours"}
+
+
+@callback(
+    Output("tp-flt", "data", allow_duplicate=True),
+    Input({"type": "tp-flt-dd", "k": ALL}, "value"),
+    State({"type": "tp-flt-dd", "k": ALL}, "id"),
+    State("tp-flt", "data"),
+    prevent_initial_call=True,
+)
+def _tp_update_flt(values, dd_ids, current):
+    tid = ctx.triggered_id
+    if not tid or not isinstance(tid, dict) or tid.get("type") != "tp-flt-dd":
+        raise PreventUpdate
+    flt = dict(current or {"pri": "all", "srt": "hours"})
+    k   = tid["k"]
+    val = next((v for v, i in zip(values, dd_ids) if i == tid), None)
+    if val is None or flt.get(k) == val:
+        raise PreventUpdate
+    flt[k] = val
+    return flt
