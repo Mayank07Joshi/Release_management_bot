@@ -497,12 +497,17 @@ def _build_table(issues, active_filter="all"):
                 "position": "sticky", "left": "0", "zIndex": 2, "background": _BG_ROW,
                 "borderLeft": f"2px solid {pri_col}",
             })),
-            # VSTS ID — sticky indigo monospace
-            html.Td(str(iss["id"]), style=_td({
-                "fontFamily": _MONO, "color": "rgb(110,118,241)",
-                "fontWeight": "700", "fontSize": "12.5px",
-                "position": "sticky", "left": "40px", "zIndex": 2, "background": _BG_ROW,
-            })),
+            # VSTS ID — sticky indigo monospace, links to ADO
+            html.Td(
+                html.A(str(iss["id"]),
+                       href=f"https://dev.azure.com/expenseondemand/Solo%20Expenses/_workitems/edit/{iss['id']}",
+                       target="_blank",
+                       style={"color": "rgb(110,118,241)", "fontFamily": _MONO,
+                              "fontWeight": "700", "fontSize": "12.5px",
+                              "textDecoration": "none"}),
+                style=_td({
+                    "position": "sticky", "left": "40px", "zIndex": 2, "background": _BG_ROW,
+                })),
             # Item details — sticky, title text
             html.Td(iss["title"], style=_td({
                 "color": "rgb(234,236,242)",
