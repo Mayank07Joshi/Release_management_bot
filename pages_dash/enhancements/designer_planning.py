@@ -1138,6 +1138,33 @@ def _render_panel(story_id, pending, iter_map_store):
                     "fontSize": "13px", "fontWeight": "600", "color": _FG,
                     "marginTop": "6px", "lineHeight": "1.4",
                 }),
+                html.Div([
+                    *([html.Span(cur_priority, style={
+                        "background": {
+                            "P1": "rgba(239,68,68,0.15)", "P2": "rgba(251,191,36,0.12)",
+                            "P3": "rgba(52,211,153,0.10)",
+                        }.get(cur_priority, "rgba(148,163,184,0.08)"),
+                        "color": {
+                            "P1": "rgb(239,68,68)", "P2": "rgb(251,191,36)",
+                            "P3": "rgb(52,211,153)",
+                        }.get(cur_priority, "rgb(148,163,184)"),
+                        "border": "1px solid " + {
+                            "P1": "rgba(239,68,68,0.35)", "P2": "rgba(251,191,36,0.30)",
+                            "P3": "rgba(52,211,153,0.25)",
+                        }.get(cur_priority, "rgba(148,163,184,0.20)"),
+                        "borderRadius": "4px", "padding": "1px 6px",
+                        "fontSize": "10px", "fontWeight": "600", "whiteSpace": "nowrap",
+                    })] if cur_priority else []),
+                    *([html.Span(cur_release, style={
+                        "background": "rgba(6,182,212,0.10)",
+                        "color": "rgb(6,182,212)",
+                        "border": "1px solid rgba(6,182,212,0.25)",
+                        "borderRadius": "4px", "padding": "1px 6px",
+                        "fontSize": "10px", "fontWeight": "600", "whiteSpace": "nowrap",
+                    })] if cur_release else []),
+                ], style={
+                    "display": "flex", "flexWrap": "wrap", "gap": "4px", "marginTop": "7px",
+                }),
             ], style={"flex": "1"}),
             html.Button("✕", id="dp-panel-close", n_clicks=0, style={
                 "background": f"rgba({_rgb(_DIM)},0.1)", "border": f"1px solid {_BD}",

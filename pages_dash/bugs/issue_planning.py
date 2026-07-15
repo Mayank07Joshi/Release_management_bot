@@ -891,10 +891,33 @@ def _render_issue_panel(panel_id, pending, issues, iters):
         },
     )
 
+    _ip_pri_style = {
+        "P1":    ("rgba(239,68,68,0.15)",   "rgb(239,68,68)",   "rgba(239,68,68,0.35)"),
+        "P2":    ("rgba(251,191,36,0.12)",  "rgb(251,191,36)",  "rgba(251,191,36,0.30)"),
+        "P3":    ("rgba(52,211,153,0.10)",  "rgb(52,211,153)",  "rgba(52,211,153,0.25)"),
+        "Other": ("rgba(148,163,184,0.08)", "rgb(148,163,184)", "rgba(148,163,184,0.20)"),
+    }
+    def _ptag(label, bg, fg, bd):
+        return html.Span(label, style={
+            "background": bg, "color": fg, "border": f"1px solid {bd}",
+            "borderRadius": "4px", "padding": "1px 6px",
+            "fontSize": "10px", "fontWeight": "600", "whiteSpace": "nowrap",
+        })
+    _hdr_tags = []
+    _hp_bg, _hp_fg, _hp_bd = _ip_pri_style.get(eff_pri, _ip_pri_style["Other"])
+    _hdr_tags.append(_ptag(eff_pri or "Other", _hp_bg, _hp_fg, _hp_bd))
+    _hrd = (iss.get("release_date") or "").strip()
+    if _hrd:
+        _hdr_tags.append(_ptag(_hrd, "rgba(6,182,212,0.10)", "rgb(6,182,212)", "rgba(6,182,212,0.25)"))
+
     return f"#{panel_id}  {iss['type']}", [
         html.Div(iss["title"], style={
-            "fontSize": "13px", "color": _MT, "marginBottom": "16px",
-            "paddingBottom": "14px", "borderBottom": f"1px solid {_BD}",
+            "fontSize": "13px", "color": _MT, "marginBottom": "6px",
+        }),
+        html.Div(_hdr_tags, style={
+            "display": "flex", "flexWrap": "wrap", "gap": "4px",
+            "marginBottom": "14px", "paddingBottom": "14px",
+            "borderBottom": f"1px solid {_BD}",
         }),
 
         _sec("PRIORITY"),

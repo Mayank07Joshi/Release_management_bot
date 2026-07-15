@@ -385,7 +385,8 @@ def _build_panel(wid: int):
                    COALESCE(main_developer,'') AS main_developer,
                    COALESCE(story_size,    '') AS story_size,
                    COALESCE(story_status,  '') AS story_status,
-                   COALESCE(release_date,  '') AS release_date
+                   COALESCE(release_date,  '') AS release_date,
+                   COALESCE(priority,      '') AS priority
             FROM work_items_main WHERE work_item_id = :id
         """), {"id": wid}).fetchone()
         stage_rows = conn.execute(text("""
@@ -488,6 +489,33 @@ def _build_panel(wid: int):
                 html.Div(f"#{wid} · {cur_dev or '—'}", style={
                     "fontSize": "11px", "color": _MT, "marginTop": "3px",
                     "fontFamily": _MONO,
+                }),
+                html.Div([
+                    *([html.Span(row.priority, style={
+                        "background": {
+                            "P1": "rgba(239,68,68,0.15)", "P2": "rgba(251,191,36,0.12)",
+                            "P3": "rgba(52,211,153,0.10)",
+                        }.get(row.priority, "rgba(148,163,184,0.08)"),
+                        "color": {
+                            "P1": "rgb(239,68,68)", "P2": "rgb(251,191,36)",
+                            "P3": "rgb(52,211,153)",
+                        }.get(row.priority, "rgb(148,163,184)"),
+                        "border": "1px solid " + {
+                            "P1": "rgba(239,68,68,0.35)", "P2": "rgba(251,191,36,0.30)",
+                            "P3": "rgba(52,211,153,0.25)",
+                        }.get(row.priority, "rgba(148,163,184,0.20)"),
+                        "borderRadius": "4px", "padding": "1px 6px",
+                        "fontSize": "10px", "fontWeight": "600", "whiteSpace": "nowrap",
+                    })] if row.priority else []),
+                    *([html.Span(row.release_date, style={
+                        "background": "rgba(6,182,212,0.10)",
+                        "color": "rgb(6,182,212)",
+                        "border": "1px solid rgba(6,182,212,0.25)",
+                        "borderRadius": "4px", "padding": "1px 6px",
+                        "fontSize": "10px", "fontWeight": "600", "whiteSpace": "nowrap",
+                    })] if row.release_date else []),
+                ], style={
+                    "display": "flex", "flexWrap": "wrap", "gap": "4px", "marginTop": "7px",
                 }),
             ], style={"flex": "1"}),
             html.Button("✕", id="rs-panel-close", n_clicks=0, style={
