@@ -77,12 +77,6 @@ def _classify_size(h: float) -> str:
 
 _BUG_TYPES = ("Issue", "Bug", "Bug_UI", "Bug_Text")
 
-_MONTH_OPTIONS = [
-    "Jan 2026","Feb 2026","Mar 2026","Apr 2026","May 2026","Jun 2026",
-    "Jul 2026","Aug 2026","Sep 2026","Oct 2026","Nov 2026","Dec 2026",
-    "Jan 2027","Feb 2027","Mar 2027","Apr 2027","May 2027","Jun 2027",
-]
-
 def _classify_pri(priority) -> str:
     p = str(priority or "").strip()
     if p in ("1", "P1"):   return "P1"
@@ -413,22 +407,33 @@ def _panel_load(mk: str, team_filter: str,
 # ── Panel stub helper (hidden seed elements keep Dash callbacks registered) ───
 _SEL_CYAN = "rgb(6,182,212)"
 
-def _panel_stubs() -> list:
-    """Return fresh hidden stub components so Dash can resolve panel callback IDs
-    even before the panel has been opened for the first time."""
+def _detail_side_stubs() -> list:
+    """Hidden stubs for list-view components absent when the detail view is shown."""
     return [
-        html.Button(id="tp-sel-all",        n_clicks=0, style={"display": "none"}),
-        html.Button(id="tp-sel-clear",      n_clicks=0, style={"display": "none"}),
-        html.Button(id="tp-move-btn",       n_clicks=0, style={"display": "none"}),
-        html.Button(id="tp-move-rel-btn",   n_clicks=0, style={"display": "none"}),
+        html.Button(id="tp-panel-close",     n_clicks=0, style={"display": "none"}),
+        html.Button(id="tp-sel-all",         n_clicks=0, style={"display": "none"}),
+        html.Button(id="tp-sel-clear",       n_clicks=0, style={"display": "none"}),
+        html.Button(id="tp-move-btn",        n_clicks=0, style={"display": "none"}),
+        html.Button(id="tp-move-rel-btn",    n_clicks=0, style={"display": "none"}),
+        dcc.Dropdown(id="tp-move-month",     options=[], style={"display": "none"}),
+        dcc.Dropdown(id="tp-move-rel-month", options=[], style={"display": "none"}),
+    ]
+
+
+def _list_side_stubs() -> list:
+    """Hidden stubs for detail-view components absent when the list view is shown."""
+    return [
         html.Button(id="tp-item-back-btn",  n_clicks=0, style={"display": "none"}),
         html.Button(id="tp-item-move-btn",  n_clicks=0, style={"display": "none"}),
         html.Button(id="tp-item-clear-btn", n_clicks=0, style={"display": "none"}),
-        dcc.Dropdown(id="tp-move-month",     options=[], style={"display": "none"}),
-        dcc.Dropdown(id="tp-move-rel-month", options=[], style={"display": "none"}),
-        dcc.Dropdown(id="tp-item-iter-dd",   options=[], style={"display": "none"}),
-        dcc.Dropdown(id="tp-item-rel-dd",    options=[], style={"display": "none"}),
+        dcc.Dropdown(id="tp-item-iter-dd",  options=[], style={"display": "none"}),
+        dcc.Dropdown(id="tp-item-rel-dd",   options=[], style={"display": "none"}),
     ]
+
+
+def _panel_stubs() -> list:
+    """All hidden stubs — returned when the panel is fully closed."""
+    return _detail_side_stubs() + _list_side_stubs()
 
 
 def _pri_label_to_int(label: str) -> int:
@@ -448,7 +453,7 @@ def _build_item_detail_content(item_id: int, pending: dict) -> html.Div:
     with engine.connect() as conn:
         row = conn.execute(text("""
             SELECT work_item_id, title, work_item_type,
-                   COALESCE(priority, 4) AS priority,
+                   priority,
                    COALESCE(assigned_to, '') AS assigned_to,
                    COALESCE(main_developer, '') AS main_developer,
                    COALESCE(main_designer, '') AS main_designer,
@@ -463,6 +468,11 @@ def _build_item_detail_content(item_id: int, pending: dict) -> html.Div:
             "SELECT DISTINCT iteration_path FROM work_items_main"
             " WHERE iteration_path IS NOT NULL AND iteration_path != ''"
             " ORDER BY iteration_path"
+        )).fetchall()
+        rel_rows = conn.execute(text(
+            "SELECT DISTINCT release_date FROM work_items_main"
+            " WHERE release_date IS NOT NULL AND release_date != ''"
+            " ORDER BY release_date"
         )).fetchall()
 
     if not row:
@@ -488,8 +498,9 @@ def _build_item_detail_content(item_id: int, pending: dict) -> html.Div:
     eff_owner    = pending.get("story_owner",  cur_owner)
     eff_designer = pending.get("main_designer", cur_designer)
     eff_iter     = pending.get("iteration",    cur_iter)
+    rel_vals     = [r.release_date for r in rel_rows]
     eff_rel      = pending.get("release_date",
-                               cur_rel if cur_rel in _MONTH_OPTIONS else "")
+                               cur_rel if cur_rel in rel_vals else "")
     n_pending    = len(pending)
 
     def _sec(label):
@@ -546,7 +557,7 @@ def _build_item_detail_content(item_id: int, pending: dict) -> html.Div:
         {"label": r.iteration_path.split("\\")[-1], "value": r.iteration_path}
         for r in iter_rows
     ]
-    month_opts = [{"label": m, "value": m} for m in _MONTH_OPTIONS]
+    month_opts = [{"label": r, "value": r} for r in rel_vals]
 
     rg = _rgb(_GREEN)
     rr = _rgb(_RED)
@@ -605,7 +616,7 @@ def _build_item_detail_content(item_id: int, pending: dict) -> html.Div:
                      className="dark-dropdown", style={"fontSize": "12px"}),
         _sec("RELEASE MONTH"),
         dcc.Dropdown(id="tp-item-rel-dd", options=month_opts,
-                     value=eff_rel if eff_rel in _MONTH_OPTIONS else None,
+                     value=eff_rel if eff_rel in rel_vals else None,
                      placeholder="Select release month...", clearable=True,
                      className="dark-dropdown", style={"fontSize": "12px"}),
         html.Div([
@@ -630,6 +641,15 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
     kind = panel_ctx["kind"]
     key  = panel_ctx["key"]
     mk   = panel_ctx["mk"]
+
+    # Release-date options from DB so values always match what ADO expects
+    with engine.connect() as conn:
+        _rd_rows = conn.execute(text(
+            "SELECT DISTINCT release_date FROM work_items_main"
+            " WHERE release_date IS NOT NULL AND release_date != ''"
+            " ORDER BY release_date"
+        )).fetchall()
+    panel_rel_opts = [{"label": r.release_date, "value": r.release_date} for r in _rd_rows]
 
     # Developer cells: load by task assignee (matches grid logic).
     # Non-dev cells: load by story owner filtered to the month.
@@ -691,6 +711,40 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
                     f"· {n_est} of {n_total} estimated")
 
     # ── Item row ──────────────────────────────────────────────────────────────
+    _PRI_STYLE = {
+        "P1":     ("rgba(239,68,68,0.15)",    "rgb(239,68,68)",    "rgba(239,68,68,0.35)"),
+        "P2":     ("rgba(251,191,36,0.12)",   "rgb(251,191,36)",   "rgba(251,191,36,0.30)"),
+        "P3":     ("rgba(52,211,153,0.10)",   "rgb(52,211,153)",   "rgba(52,211,153,0.25)"),
+        "Others": ("rgba(148,163,184,0.08)",  "rgb(148,163,184)",  "rgba(148,163,184,0.20)"),
+    }
+
+    def _tag(label: str, bg: str, fg: str, bd: str) -> html.Span:
+        return html.Span(label, style={
+            "background": bg, "color": fg, "border": f"1px solid {bd}",
+            "borderRadius": "4px", "padding": "1px 6px",
+            "fontSize": "10px", "fontWeight": "600", "whiteSpace": "nowrap",
+        })
+
+    def _item_tags(x: dict, moved: dict | None) -> list:
+        tags = []
+        # Priority
+        pri = x.get("pri", "Others")
+        p_bg, p_fg, p_bd = _PRI_STYLE.get(pri, _PRI_STYLE["Others"])
+        tags.append(_tag(pri, p_bg, p_fg, p_bd))
+        # Release date
+        rd = (x.get("release_date") or "").strip()
+        if rd:
+            tags.append(_tag(rd,
+                "rgba(6,182,212,0.10)", "rgb(6,182,212)", "rgba(6,182,212,0.25)"))
+        elif x.get("type") == "issue":
+            tags.append(_tag("No release date",
+                "rgba(251,191,36,0.10)", "rgb(251,191,36)", "rgba(251,191,36,0.28)"))
+        # Moved badge
+        if moved and str(x["id"]) in moved:
+            tags.append(_tag(f"→ {moved[str(x['id'])]}",
+                "rgba(6,182,212,0.15)", "rgb(6,182,212)", "rgba(6,182,212,0.30)"))
+        return tags
+
     def _item_row(x: dict, is_est: bool) -> html.Div:
         h_str   = f"{int(x['est_h'])}h" if x["est_h"] > 0 else "—"
         h_color = _FG if is_est else _AMBER
@@ -720,34 +774,10 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
                     html.Div(x["dev"], style={
                         "fontSize": "10px", "color": _DIM, "marginTop": "1px",
                     }),
-                    *(
-                        [html.Span(
-                            "No release date",
-                            style={
-                                "display": "inline-block", "marginTop": "4px",
-                                "background": "rgba(251,191,36,0.12)",
-                                "color": "rgb(251,191,36)",
-                                "border": "1px solid rgba(251,191,36,0.3)",
-                                "borderRadius": "4px", "padding": "1px 7px",
-                                "fontSize": "10px", "fontWeight": "600",
-                            },
-                        )]
-                        if x.get("type") == "issue" and not x.get("release_date") else []
-                    ),
-                    *(
-                        [html.Span(
-                            f"Moved → {(moved_items or {}).get(str(x['id']))}",
-                            style={
-                                "display": "inline-block", "marginTop": "4px",
-                                "background": "rgba(6,182,212,0.15)",
-                                "color": "rgb(6,182,212)",
-                                "border": "1px solid rgba(6,182,212,0.3)",
-                                "borderRadius": "4px", "padding": "1px 7px",
-                                "fontSize": "10px", "fontWeight": "600",
-                            }
-                        )]
-                        if (moved_items and str(x["id"]) in moved_items) else []
-                    ),
+                    html.Div(_item_tags(x, moved_items), style={
+                        "display": "flex", "flexWrap": "wrap",
+                        "gap": "4px", "marginTop": "5px",
+                    }),
                 ], style={"minWidth": "0", "flex": "1"}),
                 html.Span(h_str, style={
                     "fontFamily": _MONO, "fontWeight": "600", "color": h_color,
@@ -976,7 +1006,7 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
             html.Div([
                 dcc.Dropdown(
                     id="tp-move-rel-month",
-                    options=[{"label": m, "value": m} for m in _MONTH_OPTIONS],
+                    options=panel_rel_opts,
                     placeholder="Select release month…",
                     clearable=False,
                     style={"flex": "1", "fontSize": "12.5px"},
@@ -1597,6 +1627,7 @@ def layout(**_):
         dcc.Store(id="tp-rd-refresh",      data=0),
         dcc.Store(id="tp-item-detail",     data=None),
         dcc.Store(id="tp-item-pending",    data={}),
+        dcc.Store(id="tp-item-initial",    data={}),
 
         # ── Toast notification ────────────────────────────────────────────────
         html.Div(id="tp-toast", style={"display": "none"},
@@ -1954,7 +1985,10 @@ def _render_panel(panel_ctx, selection, _rd_refresh, item_detail, item_pending,
     # Show per-item detail view when an item has been opened for editing
     if item_detail:
         detail = _build_item_detail_content(int(item_detail), item_pending or {})
-        return {"display": "block"}, html.Div(detail, style=_PANEL_STYLE)
+        # Include list-view stubs so callbacks like _panel_selection never lose their Inputs
+        return {"display": "block"}, html.Div(
+            [detail] + _detail_side_stubs(), style=_PANEL_STYLE
+        )
     # When the panel context changes, treat as fresh open (ignore stale selection)
     if ctx.triggered_id == "tp-panel-ctx":
         effective_sel = []
@@ -1964,7 +1998,10 @@ def _render_panel(panel_ctx, selection, _rd_refresh, item_detail, item_pending,
                                    source_filter or "All", platform_filter or "All",
                                    selected_ids=effective_sel,
                                    moved_items=moved_items or {})
-    return {"display": "block"}, html.Div(content, style=_PANEL_STYLE)
+    # Include detail-view stubs so callbacks like _close_item_detail never lose their Inputs
+    return {"display": "block"}, html.Div(
+        [content] + _list_side_stubs(), style=_PANEL_STYLE
+    )
 
 
 # ── Panel selection toggle ────────────────────────────────────────────────────
@@ -2097,7 +2134,6 @@ def _panel_move(n_clicks, selected_ids, month_idx, panel_ctx, moved_store,
 
 # ── Bulk release date set (Move Release Date button) ─────────────────────────
 @callback(
-    Output("tp-rd-refresh",  "data", allow_duplicate=True),
     Output("tp-toast-store", "data", allow_duplicate=True),
     Input("tp-move-rel-btn", "n_clicks"),
     State("tp-panel-selection", "data"),
@@ -2116,8 +2152,7 @@ def _bulk_set_release_date(n_clicks, selected_ids, rd):
     from sync.ado_write import write_fields as _aw
     for wid in ids:
         _aw(wid, {"release_date": rd})
-    import time as _t
-    return _t.time(), f"Release date set for {len(ids)} item(s) → {rd}"
+    return f"Release date set for {len(ids)} item(s) → {rd}"
 
 
 # ── Toast notification (server-side: show for 3 s via interval) ───────────────
@@ -2146,6 +2181,7 @@ def _show_toast(msg):
 @callback(
     Output("tp-item-detail",  "data"),
     Output("tp-item-pending", "data"),
+    Output("tp-item-initial", "data"),
     Input({"type": "tp-edit-btn", "wid": ALL}, "n_clicks"),
     prevent_initial_call=True,
 )
@@ -2155,19 +2191,30 @@ def _open_item_detail(clicks):
     tid = ctx.triggered_id
     if not tid or not isinstance(tid, dict):
         raise PreventUpdate
-    return tid["wid"], {}
+    wid = tid["wid"]
+    # Snapshot DB values so dropdown callbacks can guard against the initial render
+    with engine.connect() as conn:
+        row = conn.execute(text(
+            "SELECT iteration_path, release_date FROM work_items_main WHERE work_item_id = :id"
+        ), {"id": int(wid)}).fetchone()
+    initial = {}
+    if row:
+        initial["iteration"]    = (row.iteration_path or "").strip()
+        initial["release_date"] = (row.release_date   or "").strip()
+    return wid, {}, initial
 
 
 @callback(
     Output("tp-item-detail",  "data", allow_duplicate=True),
     Output("tp-item-pending", "data", allow_duplicate=True),
+    Output("tp-item-initial", "data", allow_duplicate=True),
     Input("tp-item-back-btn", "n_clicks"),
     prevent_initial_call=True,
 )
 def _close_item_detail(n):
     if not n:
         raise PreventUpdate
-    return None, {}
+    return None, {}, {}
 
 
 # ── Item detail — field select callbacks ──────────────────────────────────────
@@ -2277,11 +2324,15 @@ def _select_tp_owner(clicks, pending):
     Output("tp-item-pending", "data", allow_duplicate=True),
     Input("tp-item-iter-dd", "value"),
     State("tp-item-pending", "data"),
+    State("tp-item-initial", "data"),
     prevent_initial_call=True,
 )
-def _select_tp_iter(val, pending):
+def _select_tp_iter(val, pending, initial):
     p = dict(pending or {})
     if p.get("iteration") == val:
+        raise PreventUpdate
+    # Ignore the initial render firing with the DB value (user made no change)
+    if val == (initial or {}).get("iteration") and "iteration" not in p:
         raise PreventUpdate
     p["iteration"] = val or ""
     return p
@@ -2291,11 +2342,15 @@ def _select_tp_iter(val, pending):
     Output("tp-item-pending", "data", allow_duplicate=True),
     Input("tp-item-rel-dd", "value"),
     State("tp-item-pending", "data"),
+    State("tp-item-initial", "data"),
     prevent_initial_call=True,
 )
-def _select_tp_rel(val, pending):
+def _select_tp_rel(val, pending, initial):
     p = dict(pending or {})
     if p.get("release_date") == val:
+        raise PreventUpdate
+    # Ignore the initial render firing with the DB value (user made no change)
+    if val == (initial or {}).get("release_date") and "release_date" not in p:
         raise PreventUpdate
     p["release_date"] = val or ""
     return p

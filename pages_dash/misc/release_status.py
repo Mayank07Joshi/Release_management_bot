@@ -659,6 +659,7 @@ def layout(**_):
         dcc.Store(id="rs-release-store", data=default),
         dcc.Store(id="rs-panel-store"),
         dcc.Store(id="rs-panel-visible", data=False),
+        dcc.Store(id="rs-initial", data={}),
 
         # Header
         html.Div([
@@ -798,6 +799,7 @@ def _render_table(release, selected_id, panel_visible):
 @callback(
     Output("rs-panel-store",   "data"),
     Output("rs-panel-visible", "data"),
+    Output("rs-initial",       "data"),
     Input({"type": "rs-row", "key": ALL}, "n_clicks"),
     prevent_initial_call=True,
 )
@@ -807,7 +809,22 @@ def _open_panel(clicks):
     tid = ctx.triggered_id
     if not tid:
         raise PreventUpdate
-    return int(tid["key"]), True
+    wid = int(tid["key"])
+    with engine.connect() as conn:
+        snap = conn.execute(text("""
+            SELECT COALESCE(story_owner,   '') AS story_owner,
+                   COALESCE(main_developer,'') AS main_developer,
+                   COALESCE(release_date,  '') AS release_date
+            FROM work_items_main WHERE work_item_id = :id
+        """), {"id": wid}).fetchone()
+    initial = {}
+    if snap:
+        initial = {
+            "story_owner":    snap.story_owner,
+            "main_developer": snap.main_developer,
+            "release_date":   snap.release_date,
+        }
+    return wid, True, initial
 
 
 @callback(
@@ -836,10 +853,13 @@ def _render_panel(story_id):
     Output("rs-panel-store", "data", allow_duplicate=True),
     Input("rs-owner-dd", "value"),
     State("rs-panel-store", "data"),
+    State("rs-initial",     "data"),
     prevent_initial_call=True,
 )
-def _save_owner(val, story_id):
+def _save_owner(val, story_id, initial):
     if not story_id or not val:
+        raise PreventUpdate
+    if val == (initial or {}).get("story_owner"):
         raise PreventUpdate
     with engine.begin() as conn:
         conn.execute(text("UPDATE work_items_main SET story_owner=:o WHERE work_item_id=:id"),
@@ -851,10 +871,13 @@ def _save_owner(val, story_id):
     Output("rs-panel-store", "data", allow_duplicate=True),
     Input("rs-dev-dd", "value"),
     State("rs-panel-store", "data"),
+    State("rs-initial",     "data"),
     prevent_initial_call=True,
 )
-def _save_developer(val, story_id):
+def _save_developer(val, story_id, initial):
     if not story_id or not val:
+        raise PreventUpdate
+    if val == (initial or {}).get("main_developer"):
         raise PreventUpdate
     with engine.begin() as conn:
         conn.execute(text("UPDATE work_items_main SET main_developer=:d WHERE work_item_id=:id"),
@@ -978,10 +1001,13 @@ def _save_comment(n, comment, story_id):
     Output("rs-panel-store", "data", allow_duplicate=True),
     Input("rs-release-date-dd", "value"),
     State("rs-panel-store",     "data"),
+    State("rs-initial",         "data"),
     prevent_initial_call=True,
 )
-def _save_release_date(val, story_id):
+def _save_release_date(val, story_id, initial):
     if not story_id or not val:
+        raise PreventUpdate
+    if val == (initial or {}).get("release_date"):
         raise PreventUpdate
     with engine.begin() as conn:
         conn.execute(text("UPDATE work_items_main SET release_date=:d WHERE work_item_id=:id"),

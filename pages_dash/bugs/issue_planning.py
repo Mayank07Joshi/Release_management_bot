@@ -594,6 +594,7 @@ def layout(**_):
         dcc.Store(id="ip-iters-store",  data=iters),
         dcc.Store(id="ip-panel-id",     data=None),
         dcc.Store(id="ip-pending",      data={}),
+        dcc.Store(id="ip-initial",      data={}),
         dcc.Store(id="ip-kpi-filter",   data="all"),
         dcc.Download(id="ip-past-due-download"),
 
@@ -730,21 +731,32 @@ def _past_due_download(clicks, issues):
     Output("ip-side-panel", "style"),
     Output("ip-backdrop",   "style"),
     Output("ip-pending",    "data"),
+    Output("ip-initial",    "data"),
     Input({"type": "ip-row", "id": ALL}, "n_clicks"),
     Input("ip-panel-close", "n_clicks"),
     Input("ip-backdrop",    "n_clicks"),
     State("ip-panel-id",    "data"),
+    State("ip-issues-store", "data"),
     prevent_initial_call=True,
 )
-def _toggle_issue_panel(row_clicks, close_clk, bd_clk, panel_id):
+def _toggle_issue_panel(row_clicks, close_clk, bd_clk, panel_id, issues):
     tid = ctx.triggered_id
     if tid in ("ip-panel-close", "ip-backdrop"):
-        return None, _PANEL_CLOSED, _BACKDROP_CLOSED, {}
+        return None, _PANEL_CLOSED, _BACKDROP_CLOSED, {}, {}
     if isinstance(tid, dict) and tid.get("type") == "ip-row":
+        # Guard: component recreated (n_clicks reset to 0) — not a real user click
+        if not ctx.triggered[0]["value"]:
+            raise PreventUpdate
         new_id = tid["id"]
         if new_id == panel_id:
-            return None, _PANEL_CLOSED, _BACKDROP_CLOSED, {}
-        return new_id, _PANEL_OPEN, _BACKDROP_OPEN, {}
+            return None, _PANEL_CLOSED, _BACKDROP_CLOSED, {}, {}
+        # Snapshot current DB values so dropdown callbacks can guard against initial render
+        iss = next((x for x in (issues or []) if x["id"] == new_id), None)
+        initial = {}
+        if iss:
+            initial["iteration"]    = (iss.get("iteration") or "").strip()
+            initial["release_date"] = (iss.get("release_date") or "").strip()
+        return new_id, _PANEL_OPEN, _BACKDROP_OPEN, {}, initial
     raise PreventUpdate
 
 
@@ -842,7 +854,14 @@ def _render_issue_panel(panel_id, pending, issues, iters):
     ]
 
     iter_opts  = [{"label": it.split("\\")[-1], "value": it} for it in (iters or [])]
-    month_opts = [{"label": m, "value": m} for m in _ALL_MONTH_OPTIONS]
+    with engine.connect() as conn:
+        _rd_rows = conn.execute(text(
+            "SELECT DISTINCT release_date FROM work_items_main"
+            " WHERE release_date IS NOT NULL AND release_date != ''"
+            " ORDER BY release_date"
+        )).fetchall()
+    rd_vals    = [r.release_date for r in _rd_rows]
+    month_opts = [{"label": v, "value": v} for v in rd_vals]
 
     _GREEN = "rgb(70,194,142)"
     _RED   = "rgb(239,110,99)"
@@ -905,7 +924,7 @@ def _render_issue_panel(panel_id, pending, issues, iters):
         _sec("RELEASE MONTH"),
         dcc.Dropdown(id={"type": "ip-month-dd", "wid": panel_id},
             options=month_opts,
-            value=eff_rd if eff_rd in _ALL_MONTH_OPTIONS else None,
+            value=eff_rd if eff_rd in rd_vals else None,
             placeholder="Select month...", clearable=True,
             className="dark-dropdown", style={"fontSize": "12px"}),
 
@@ -1026,15 +1045,18 @@ def _select_ip_designer(clicks, pending):
     Output("ip-pending", "data", allow_duplicate=True),
     Input({"type": "ip-iter-dd", "wid": ALL}, "value"),
     State("ip-pending", "data"),
+    State("ip-initial", "data"),
     prevent_initial_call=True,
 )
-def _select_ip_iter(iter_vals, pending):
+def _select_ip_iter(iter_vals, pending, initial):
     tid = ctx.triggered_id
     if not tid or not isinstance(tid, dict):
         raise PreventUpdate
     new_val = iter_vals[0] if iter_vals else None
     p = dict(pending or {})
     if p.get("iteration") == new_val:
+        raise PreventUpdate
+    if new_val == (initial or {}).get("iteration") and "iteration" not in p:
         raise PreventUpdate
     p["iteration"] = new_val or ""
     return p
@@ -1044,15 +1066,18 @@ def _select_ip_iter(iter_vals, pending):
     Output("ip-pending", "data", allow_duplicate=True),
     Input({"type": "ip-month-dd", "wid": ALL}, "value"),
     State("ip-pending", "data"),
+    State("ip-initial", "data"),
     prevent_initial_call=True,
 )
-def _select_ip_month(month_vals, pending):
+def _select_ip_month(month_vals, pending, initial):
     tid = ctx.triggered_id
     if not tid or not isinstance(tid, dict):
         raise PreventUpdate
     new_val = month_vals[0] if month_vals else None
     p = dict(pending or {})
     if p.get("release_date") == new_val:
+        raise PreventUpdate
+    if new_val == (initial or {}).get("release_date") and "release_date" not in p:
         raise PreventUpdate
     p["release_date"] = new_val or ""
     return p

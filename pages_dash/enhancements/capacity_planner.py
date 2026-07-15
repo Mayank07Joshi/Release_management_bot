@@ -1593,10 +1593,10 @@ def _render(view, tab, show_all, cust_filter):
     prevent_initial_call=True,
 )
 def _open_panel(clicks, ids):
-    for c, cid in zip(clicks, ids):
-        if c:
-            return True, cid["dev"], cid["month"]
-    return no_update, no_update, no_update
+    tid = ctx.triggered_id
+    if not tid or not isinstance(tid, dict):
+        raise PreventUpdate
+    return True, tid["dev"], tid["month"]
 
 
 def _standalone_section(items: list, is_m0: bool) -> list:
@@ -1715,7 +1715,8 @@ def _panel_body(dev_name, ym_str, view):
                                 w.remaining_work,
                                 GREATEST(COALESCE(w.original_estimate,0) - COALESCE(w.completed_work,0), 0)
                             )
-                        END AS dev_h
+                        END AS dev_h,
+                        COALESCE(td.done_count, 0) AS done_task_count
                     FROM work_items_main w
                     LEFT JOIN (
                         SELECT parent_id,
@@ -1730,6 +1731,16 @@ def _panel_body(dev_name, ym_str, view):
                           AND state NOT IN ('Closed','Resolved','Not Required','Not an issue')
                         GROUP BY parent_id
                     ) ta ON ta.parent_id = w.work_item_id
+                    LEFT JOIN (
+                        SELECT parent_id, COUNT(*) AS done_count
+                        FROM work_items_main
+                        WHERE work_item_type = 'Task'
+                          AND main_developer  = :dev
+                          AND iteration_path  LIKE :pat
+                          AND state IN ('Closed','Resolved','Dev Complete',
+                                        'Not Required','Not an issue')
+                        GROUP BY parent_id
+                    ) td ON td.parent_id = w.work_item_id
                     WHERE w.work_item_type IN ('Enhancement','User Story','Issue','Bug')
                       AND w.state NOT IN (
                           'Closed','Resolved','Not Required','Not an issue',
@@ -1737,6 +1748,7 @@ def _panel_body(dev_name, ym_str, view):
                       )
                       AND (
                           ta.parent_id IS NOT NULL
+                          OR td.parent_id IS NOT NULL
                           OR (
                               w.main_developer = :dev
                               AND w.iteration_path LIKE :pat
@@ -1747,15 +1759,17 @@ def _panel_body(dev_name, ym_str, view):
                           )
                       )
                     GROUP BY w.work_item_id, w.title, w.work_item_type, w.priority,
-                             w.remaining_work, w.original_estimate, w.completed_work, ta.task_h
+                             w.remaining_work, w.original_estimate, w.completed_work,
+                             ta.task_h, td.done_count
                 """), {"dev": dev_name, "pat": iter_pat}).fetchall()
             for r in _rows:
                 open_items.append({
-                    "id":       int(r.work_item_id),
-                    "title":    str(r.title or ""),
-                    "type":     str(r.work_item_type or "Enhancement"),
-                    "dev_h":    float(r.dev_h or 0),
-                    "priority": int(float(r.priority)) if r.priority else 4,
+                    "id":         int(r.work_item_id),
+                    "title":      str(r.title or ""),
+                    "type":       str(r.work_item_type or "Enhancement"),
+                    "dev_h":      float(r.dev_h or 0),
+                    "priority":   int(float(r.priority)) if r.priority else 4,
+                    "done_tasks": int(r.done_task_count or 0),
                 })
         except Exception as exc:
             import logging
@@ -1780,11 +1794,15 @@ def _panel_body(dev_name, ym_str, view):
         if view == "Issues":       return [i for i in items if IS_ISSUE(i["type"])]
         return items
 
-    open_display = _filter_view(open_items)
-    done_display = _filter_view(done_items)
+    all_display  = _filter_view(open_items)
 
-    open_enh = [i for i in open_display if IS_ENH(i["type"])]
-    open_iss = [i for i in open_display if IS_ISSUE(i["type"])]
+    # Three-bucket classification
+    todo_display  = [i for i in all_display if i["dev_h"] > 0]
+    done_display  = [i for i in all_display if i["dev_h"] == 0 and i.get("done_tasks", 0) > 0]
+    noest_display = [i for i in all_display if i["dev_h"] == 0 and i.get("done_tasks", 0) == 0]
+
+    open_enh = [i for i in todo_display if IS_ENH(i["type"])]
+    open_iss = [i for i in todo_display if IS_ISSUE(i["type"])]
     enh_h    = sum(i["dev_h"] for i in open_enh)
     iss_h    = sum(i["dev_h"] for i in open_iss)
 
@@ -1871,13 +1889,12 @@ def _panel_body(dev_name, ym_str, view):
             *[_item_card(i, False) for i in sorted(open_iss, key=lambda x: x.get("priority", 4))],
         ]
 
-    # ── Done section (M0 only, collapsed) ────────────────────────────────────
+    # ── Done section (collapsed) ──────────────────────────────────────────────
     done_section = []
     if done_display:
-        done_h = sum(i["dev_h"] for i in done_display)
         done_section = [html.Details([
             html.Summary(
-                f"✓  COMPLETED  ·  {len(done_display)} items  ·  {done_h:.0f}h",
+                f"✓  COMPLETED  ·  {len(done_display)} items",
                 style={"fontSize": "10px", "color": "#34d399", "fontWeight": "700",
                        "textTransform": "uppercase", "letterSpacing": "1px",
                        "cursor": "pointer", "margin": "16px 0 8px",
@@ -1887,7 +1904,22 @@ def _panel_body(dev_name, ym_str, view):
               for i in sorted(done_display, key=lambda x: x.get("priority", 4))],
         ])]
 
-    total_open  = len(open_display)
+    # ── No-estimate section (collapsed) ──────────────────────────────────────
+    noest_section = []
+    if noest_display:
+        noest_section = [html.Details([
+            html.Summary(
+                f"⚠  NEEDS ESTIMATION  ·  {len(noest_display)} items",
+                style={"fontSize": "10px", "color": _GOLD, "fontWeight": "700",
+                       "textTransform": "uppercase", "letterSpacing": "1px",
+                       "cursor": "pointer", "margin": "16px 0 8px",
+                       "listStyle": "none", "outline": "none"},
+            ),
+            *[_item_card(i, IS_ENH(i["type"]))
+              for i in sorted(noest_display, key=lambda x: x.get("priority", 4))],
+        ])]
+
+    total_open  = len(todo_display)
     header_tag  = "LIVE · CAPACITY DETAIL" if is_m0 else "CAPACITY DETAIL"
     cap_label   = f"Hours Left" if is_m0 else "Capacity"
     cap_val     = f"{display_cap:.0f}h"
@@ -1928,7 +1960,7 @@ def _panel_body(dev_name, ym_str, view):
             html.Div(style={"flex": str(max(100 - ew - iw - ow, 0.01)),   "background": "rgba(255,255,255,0.07)", "height": "16px"}),
         ], style={"display": "flex", "borderRadius": "8px", "overflow": "hidden", "marginBottom": "16px"}),
         html.Div(
-            f"{total_open} OPEN ITEMS" if is_m0 else f"{total_open} ITEMS",
+            f"{total_open} OPEN ITEMS" + (f"  ·  {len(done_display)}✓  ·  {len(noest_display)}⚠" if (done_display or noest_display) else ""),
             style={"fontSize": "11px", "fontWeight": "700", "color": "#8892a4",
                    "textTransform": "uppercase", "letterSpacing": "1px", "marginBottom": "8px",
                    "borderTop": "1px solid rgba(255,255,255,0.07)", "paddingTop": "14px"},
@@ -1936,5 +1968,6 @@ def _panel_body(dev_name, ym_str, view):
         *enh_section,
         *iss_section,
         *done_section,
+        *noest_section,
         *_standalone_section(standalone_items, is_m0),
     ], style={"padding": "16px"})

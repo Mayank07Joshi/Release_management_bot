@@ -928,6 +928,7 @@ def layout(**_):
             dcc.Store(id="dp-panel-store"),
             dcc.Store(id="dp-panel-visible", data=False),
             dcc.Store(id="dp-pending",       data={}),
+            dcc.Store(id="dp-initial",       data={}),
             html.Div(id="dp-panel-content"),
         ], id="dp-panel-wrapper", style={
             "position": "fixed", "top": "0", "right": "0",
@@ -987,6 +988,7 @@ def _open_panel(clicks):
 
 @callback(
     Output("dp-panel-content", "children"),
+    Output("dp-initial",       "data"),
     Input("dp-panel-store",    "data"),
     Input("dp-pending",        "data"),
     State("dp-iter-map",       "data"),
@@ -1000,7 +1002,7 @@ def _render_panel(story_id, pending, iter_map_store):
             stories, _ = _load_data()
         except Exception:
             stories = []
-        return _build_balance_panel(stories)
+        return _build_balance_panel(stories), no_update
     today = date.today()
 
     with engine.connect() as conn:
@@ -1018,13 +1020,19 @@ def _render_panel(story_id, pending, iter_map_store):
             LEFT JOIN p_planning_gates g ON g.work_item_id = w.work_item_id
             WHERE w.work_item_id = :id
         """), {"id": story_id}).fetchone()
+        _rd_rows = conn.execute(text(
+            "SELECT DISTINCT release_date FROM work_items_main"
+            " WHERE release_date IS NOT NULL AND release_date != ''"
+            " ORDER BY release_date"
+        )).fetchall()
+    dp_rd_vals = [r.release_date for r in _rd_rows]
 
     if not row:
-        return html.Div("Story not found.", style={"padding": "20px", "color": _MT})
+        return html.Div("Story not found.", style={"padding": "20px", "color": _MT}), no_update
 
     p = _parse_iter(row.iteration_path or "")
     if not p:
-        return html.Div("No parseable iteration.", style={"padding": "20px", "color": _MT})
+        return html.Div("No parseable iteration.", style={"padding": "20px", "color": _MT}), no_update
 
     dev_year, dev_month = p
     dy, dm = _des_ym(dev_year, dev_month)
@@ -1088,7 +1096,7 @@ def _render_panel(story_id, pending, iter_map_store):
     eff_developer = pending.get("main_developer",  cur_developer)
     eff_owner     = pending.get("story_owner",     cur_owner)
     eff_release   = pending.get("release_date",
-                                cur_release if cur_release in _MONTH_OPTIONS else None)
+                                cur_release if cur_release in dp_rd_vals else None)
     eff_iter_key  = pending.get("iteration_key",   cur_iter_key)
     eff_priority  = pending.get("priority",        cur_priority)
     eff_type      = pending.get("type",            cur_cust_type)
@@ -1198,8 +1206,8 @@ def _render_panel(story_id, pending, iter_map_store):
             _sec("Release Date"),
             dcc.Dropdown(
                 id="dp-release-dd",
-                options=[{"label": m, "value": m} for m in _MONTH_OPTIONS],
-                value=eff_release,
+                options=[{"label": v, "value": v} for v in dp_rd_vals],
+                value=eff_release if eff_release in dp_rd_vals else None,
                 placeholder="Select release month…",
                 clearable=True,
                 className="dark-dropdown",
@@ -1270,7 +1278,7 @@ def _render_panel(story_id, pending, iter_map_store):
             }),
 
         ], style={"padding": "4px 16px 32px"}),
-    ])
+    ]), {"iteration_key": cur_iter_key, "release_date": cur_release or ""}
 
 
 @callback(
@@ -1385,11 +1393,14 @@ def _select_owner(clicks, pending):
     Output("dp-pending", "data", allow_duplicate=True),
     Input("dp-release-dd",  "value"),
     State("dp-pending",     "data"),
+    State("dp-initial",     "data"),
     prevent_initial_call=True,
 )
-def _select_release(rd, pending):
+def _select_release(rd, pending, initial):
     p = dict(pending or {})
     if p.get("release_date") == rd:
+        raise PreventUpdate
+    if rd == (initial or {}).get("release_date") and "release_date" not in p:
         raise PreventUpdate
     p["release_date"] = rd
     return p
@@ -1399,13 +1410,16 @@ def _select_release(rd, pending):
     Output("dp-pending", "data", allow_duplicate=True),
     Input("dp-iter-dropdown", "value"),
     State("dp-pending",       "data"),
+    State("dp-initial",       "data"),
     prevent_initial_call=True,
 )
-def _select_iteration_dd(iter_key, pending):
+def _select_iteration_dd(iter_key, pending, initial):
     if not iter_key:
         raise PreventUpdate
     p = dict(pending or {})
     if p.get("iteration_key") == iter_key:
+        raise PreventUpdate
+    if iter_key == (initial or {}).get("iteration_key") and "iteration_key" not in p:
         raise PreventUpdate
     p["iteration_key"] = iter_key
     return p
