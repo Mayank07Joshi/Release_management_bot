@@ -691,10 +691,11 @@ def _month_cell(story: dict, ym: tuple, today: date):
     color  = _STATUS_COLORS[status]
     r      = _rgb(color)
 
-    label       = story["designer"].split()[0] if story.get("designer") else "assign"
-    text_color  = _FG   if story.get("designer") else color
-    font_size   = "12px" if story.get("designer") else "11px"
-    font_weight = "700"  if story.get("designer") else "600"
+    has_designer = bool(story.get("designer"))
+    label       = story["designer"].split()[0] if has_designer else "assign"
+    text_color  = _FG
+    font_size   = "12px" if has_designer else "11px"
+    font_weight = "700"  if has_designer else "600"
 
     return html.Td(
         html.Span(label, style={
