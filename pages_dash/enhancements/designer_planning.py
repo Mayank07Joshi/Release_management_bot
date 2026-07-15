@@ -666,17 +666,28 @@ def _month_cell(story: dict, ym: tuple, today: date):
     is_des = (story["des_year"], story["des_month"]) == (year, month)
     is_dev = (story["dev_year"], story["dev_month"]) == (year, month)
 
+    # Overdue stories whose design-start month is before today won't appear in any
+    # visible column — bubble them into the current month cell instead.
+    is_overdue_bubble = (
+        not story["design_done"]
+        and (story["des_year"], story["des_month"]) < (today.year, today.month)
+        and (year, month) == (today.year, today.month)
+    )
+
     cell_style = {**_TD_B, "minWidth": "84px", "textAlign": "center"}
 
-    if is_dev and not is_des:
-        return html.Td(
-            html.Span("dev", style={"fontSize": "10px", "color": _DIM, "fontFamily": _MONO}),
-            style=cell_style,
-        )
-    if not is_des:
+    if not is_des and not is_overdue_bubble:
+        if is_dev:
+            return html.Td(
+                html.Span("dev", style={"fontSize": "10px", "color": _DIM, "fontFamily": _MONO}),
+                style=cell_style,
+            )
         return html.Td("", style=cell_style)
 
     status = _cell_status(story, today)
+    # Overdue-bubble always renders as overdue regardless of in_dev state
+    if is_overdue_bubble and not is_des:
+        status = "overdue"
     color  = _STATUS_COLORS[status]
     r      = _rgb(color)
 
