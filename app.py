@@ -477,6 +477,16 @@ if __name__ == "__main__":
         "cron", hour=0, minute=0, id="ado_sync_full",
         misfire_grace_time=300,
     )
+    scheduler.add_job(
+        lambda: run_sync(full=True),
+        "cron", hour=6, minute=0, id="ado_sync_full_am",
+        misfire_grace_time=300,
+    )
+    scheduler.add_job(
+        lambda: run_sync(full=True),
+        "cron", hour=16, minute=0, id="ado_sync_full_pm",
+        misfire_grace_time=300,
+    )
     scheduler.start()
     atexit.register(lambda: scheduler.shutdown(wait=False))
 
