@@ -1049,12 +1049,14 @@ def _save_release_date(val, story_id, initial):
 
 
 @callback(
-    Output("rs-panel-store", "data", allow_duplicate=True),
+    Output("rs-panel-store", "data",      allow_duplicate=True),
+    Output("notif-store",    "data",      allow_duplicate=True),
     Input("rs-save-btn",     "n_clicks"),
     State("rs-panel-store",  "data"),
     prevent_initial_call=True,
 )
 def _save_to_ado(n, story_id):
+    import time as _t
     if not n or not story_id:
         raise PreventUpdate
     with engine.connect() as conn:
@@ -1071,16 +1073,19 @@ def _save_to_ado(n, story_id):
     if row.release_date:   fields["release_date"]   = row.release_date
     if fields:
         write_fields(story_id, fields)
-    return story_id
+    notif = {"msg": f"Saved #{story_id} to ADO", "type": "success", "ts": _t.time()}
+    return story_id, notif
 
 
 @callback(
-    Output("rs-panel-visible", "data", allow_duplicate=True),
-    Input("rs-delete-btn",    "n_clicks"),
-    State("rs-panel-store",   "data"),
+    Output("rs-panel-visible", "data",      allow_duplicate=True),
+    Output("notif-store",      "data",      allow_duplicate=True),
+    Input("rs-delete-btn",     "n_clicks"),
+    State("rs-panel-store",    "data"),
     prevent_initial_call=True,
 )
 def _delete_row(n, story_id):
+    import time as _t
     if not n or not story_id:
         raise PreventUpdate
     with engine.begin() as conn:
@@ -1088,4 +1093,5 @@ def _delete_row(n, story_id):
                      {"id": story_id})
         conn.execute(text("DELETE FROM p_release_rows   WHERE work_item_id = :id"),
                      {"id": story_id})
-    return False
+    notif = {"msg": f"Entry #{story_id} deleted", "type": "info", "ts": _t.time()}
+    return False, notif

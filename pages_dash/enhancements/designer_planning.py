@@ -1525,6 +1525,7 @@ def _clear_pending(n):
 @callback(
     Output("dp-pending",     "data",  allow_duplicate=True),
     Output("dp-panel-store", "data",  allow_duplicate=True),
+    Output("notif-store",    "data",  allow_duplicate=True),
     Input("dp-move-btn",     "n_clicks"),
     State("dp-pending",      "data"),
     State("dp-panel-store",  "data"),
@@ -1532,6 +1533,7 @@ def _clear_pending(n):
     prevent_initial_call=True,
 )
 def _commit_all_changes(n, pending, story_id, iter_map_store):
+    import time as _t
     if not n or not pending or not story_id or story_id == "__balance__":
         raise PreventUpdate
     sid        = int(story_id)
@@ -1591,7 +1593,8 @@ def _commit_all_changes(n, pending, story_id, iter_map_store):
                 f"UPDATE work_items_main SET {', '.join(db_sets)} WHERE work_item_id=:id"
             ), db_params)
 
-    return {}, sid
+    notif = {"msg": f"Saved #{sid} to ADO", "type": "success", "ts": _t.time()}
+    return {}, sid, notif
 
 
 @callback(
@@ -1605,11 +1608,13 @@ def _open_balance_panel(_):
 
 
 @callback(
-    Output("dp-panel-store", "data", allow_duplicate=True),
+    Output("dp-panel-store", "data",      allow_duplicate=True),
+    Output("notif-store",    "data",      allow_duplicate=True),
     Input({"type": "dp-reassign-btn", "story": ALL, "to": ALL}, "n_clicks"),
     prevent_initial_call=True,
 )
 def _reassign_designer(clicks):
+    import time as _t
     if not any(clicks):
         raise PreventUpdate
     tid = ctx.triggered_id
@@ -1622,15 +1627,18 @@ def _reassign_designer(clicks):
         conn.execute(text(
             "UPDATE work_items_main SET main_designer=:d WHERE work_item_id=:id"
         ), {"d": new_designer, "id": story_id})
-    return "__balance__"
+    notif = {"msg": f"#{story_id} reassigned to {new_designer}", "type": "success", "ts": _t.time()}
+    return "__balance__", notif
 
 
 @callback(
-    Output("dp-panel-store", "data", allow_duplicate=True),
+    Output("dp-panel-store", "data",      allow_duplicate=True),
+    Output("notif-store",    "data",      allow_duplicate=True),
     Input({"type": "dp-unassign-btn", "story": ALL}, "n_clicks"),
     prevent_initial_call=True,
 )
 def _unassign_designer(clicks):
+    import time as _t
     if not any(clicks):
         raise PreventUpdate
     tid = ctx.triggered_id
@@ -1642,4 +1650,5 @@ def _unassign_designer(clicks):
         conn.execute(text(
             "UPDATE work_items_main SET main_designer=NULL WHERE work_item_id=:id"
         ), {"id": story_id})
-    return "__balance__"
+    notif = {"msg": f"#{story_id} designer unassigned", "type": "info", "ts": _t.time()}
+    return "__balance__", notif

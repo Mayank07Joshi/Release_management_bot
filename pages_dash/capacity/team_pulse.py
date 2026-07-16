@@ -2128,9 +2128,10 @@ def _panel_selection(panel_ctx, _item_clicks, _sel_all, _sel_clear,
 
 # ── Panel move items ──────────────────────────────────────────────────────────
 @callback(
-    Output("tp-panel-selection", "data", allow_duplicate=True),
-    Output("tp-moved-store",     "data", allow_duplicate=True),
+    Output("tp-panel-selection", "data",     allow_duplicate=True),
+    Output("tp-moved-store",     "data",     allow_duplicate=True),
     Output("tp-grid",            "children", allow_duplicate=True),
+    Output("notif-store",        "data",     allow_duplicate=True),
     Input("tp-move-btn", "n_clicks"),
     State("tp-panel-selection", "data"),
     State("tp-move-month",     "value"),
@@ -2144,6 +2145,7 @@ def _panel_selection(panel_ctx, _item_clicks, _sel_all, _sel_clear,
 )
 def _panel_move(n_clicks, selected_ids, month_idx, panel_ctx, moved_store,
                 team, horizon, source, platform):
+    import time as _t
     if not n_clicks or not selected_ids or month_idx is None:
         raise PreventUpdate
 
@@ -2191,7 +2193,8 @@ def _panel_move(n_clicks, selected_ids, month_idx, panel_ctx, moved_store,
     items = _load_items()
     grid  = _build_grid(items, team or "All", horizon or 365,
                         source or "All", platform or "All")
-    return [], updated, grid
+    notif = {"msg": f"Moved {len(ids)} item(s) to {label}", "type": "success", "ts": _t.time()}
+    return [], updated, grid, notif
 
 
 # ── Bulk release date set (Move Release Date button) ─────────────────────────
@@ -2432,6 +2435,7 @@ def _clear_tp_pending(n):
 @callback(
     Output("tp-item-pending", "data",  allow_duplicate=True),
     Output("tp-rd-refresh",   "data",  allow_duplicate=True),
+    Output("notif-store",     "data",  allow_duplicate=True),
     Input("tp-item-move-btn", "n_clicks"),
     State("tp-item-detail",   "data"),
     State("tp-item-pending",  "data"),
@@ -2515,7 +2519,8 @@ def _commit_tp_changes(n, item_id, pending):
             ), db_params)
 
     import time as _t
-    return {}, _t.time()
+    notif = {"msg": f"Saved #{wid} to ADO", "type": "success", "ts": _t.time()}
+    return {}, _t.time(), notif
 
 
 # ── Panel filter / sort ───────────────────────────────────────────────────────

@@ -12,21 +12,22 @@ _sync_running = False
 _sync_lock    = threading.Lock()
 _sync_start   = 0.0
 _sync_mode    = "incremental"   # "incremental" | "full"
+_sync_result  = None            # populated on completion, consumed by timer tick
 
 def _do_sync():
-    global _sync_running, _sync_mode
+    global _sync_running, _sync_mode, _sync_result
     try:
         from sync.ado_sync import run_sync
-        run_sync()
+        _sync_result = run_sync()
     finally:
         _sync_running = False
         _sync_mode    = "incremental"
 
 def _do_full_sync():
-    global _sync_running, _sync_mode
+    global _sync_running, _sync_mode, _sync_result
     try:
         from sync.ado_sync import run_sync
-        run_sync(full=True)
+        _sync_result = run_sync(full=True)
     finally:
         _sync_running = False
         _sync_mode    = "incremental"
@@ -277,14 +278,18 @@ app.layout = html.Div([
         id="main-content",
     ),
     # ── ADO write-back failure/success toasts + data freshness ───────────────
-    dcc.Interval(id="ado-failure-poll", interval=5000, n_intervals=0),
+    dcc.Interval(id="ado-failure-poll",    interval=5000,  n_intervals=0),
     dcc.Interval(id="data-freshness-poll", interval=30000, n_intervals=0),
-    dcc.Interval(id="sync-timer-tick", interval=1000, n_intervals=0, disabled=True),
+    dcc.Interval(id="sync-timer-tick",     interval=1000,  n_intervals=0, disabled=True),
+    dcc.Interval(id="notif-dismiss-tick",  interval=3500,  n_intervals=0, disabled=True),
+    dcc.Store(id="notif-store", data=None),
     html.Div(id="ado-failure-toast-container", style={
         "position": "fixed", "bottom": "24px", "right": "24px",
         "zIndex": 9999, "display": "flex", "flexDirection": "column", "gap": "10px",
         "maxWidth": "380px",
     }),
+    # ── Action confirmation toast (bottom-left) ───────────────────────────────
+    html.Div(id="notif-toast", style={"display": "none"}),
 ], className="app-wrapper")
 
 
@@ -414,17 +419,79 @@ def _manual_full_sync(n):
     Output("fullsync-now-btn", "children",  allow_duplicate=True),
     Output("fullsync-now-btn", "disabled",  allow_duplicate=True),
     Output("sync-timer-tick",  "disabled",  allow_duplicate=True),
+    Output("notif-store",      "data",      allow_duplicate=True),
     Input("sync-timer-tick", "n_intervals"),
     prevent_initial_call=True,
 )
 def _sync_timer_tick(n):
     import time as _time
+    global _sync_result
     if _sync_running:
         elapsed = int(_time.time() - _sync_start)
         if _sync_mode == "full":
-            return "↻ Sync", True, f"full sync… {elapsed}s", True, False
-        return f"syncing… {elapsed}s", True, "⟳ Full Sync", True, False
-    return "↻ Sync", False, "⟳ Full Sync", False, True
+            return "↻ Sync", True, f"full sync… {elapsed}s", True, False, no_update
+        return f"syncing… {elapsed}s", True, "⟳ Full Sync", True, False, no_update
+    if _sync_result:
+        r            = _sync_result
+        _sync_result = None
+        count   = r.get("count",     0)
+        elapsed = r.get("elapsed_s", 0)
+        mode    = r.get("mode",      "incremental")
+        label   = "Full sync" if mode == "full" else "Sync"
+        msg     = f"{label} complete — {count} item(s) updated in {elapsed}s"
+        notif   = {"msg": msg, "type": "success", "ts": _time.time()}
+        return "↻ Sync", False, "⟳ Full Sync", False, True, notif
+    return "↻ Sync", False, "⟳ Full Sync", False, True, no_update
+
+
+@app.callback(
+    Output("notif-toast",       "children"),
+    Output("notif-toast",       "style"),
+    Output("notif-dismiss-tick","disabled"),
+    Input("notif-store", "data"),
+    prevent_initial_call=True,
+)
+def _notif_render(data):
+    if not data:
+        raise dash.exceptions.PreventUpdate
+    msg   = data.get("msg",  "")
+    ntype = data.get("type", "success")
+    _palette = {
+        "success": ("rgba(52,211,153,0.15)",  "rgb(52,211,153)",  "rgba(52,211,153,0.35)"),
+        "error":   ("rgba(239,68,68,0.15)",   "rgb(239,68,68)",   "rgba(239,68,68,0.35)"),
+        "info":    ("rgba(245,158,11,0.15)",  "rgb(245,158,11)",  "rgba(245,158,11,0.35)"),
+    }
+    bg, fg, border = _palette.get(ntype, _palette["success"])
+    _icon = {"success": "✓", "error": "✗", "info": "i"}.get(ntype, "✓")
+    content = html.Div([
+        html.Span(_icon, style={
+            "fontSize": "13px", "fontWeight": "800", "color": fg,
+            "marginRight": "8px", "flexShrink": "0",
+        }),
+        html.Span(msg, style={
+            "fontSize": "12px", "color": "var(--text-primary)",
+            "fontWeight": "500", "lineHeight": "1.4",
+        }),
+    ], style={"display": "flex", "alignItems": "flex-start"})
+    style = {
+        "position": "fixed", "bottom": "24px", "left": "24px",
+        "background": bg, "border": f"1px solid {border}",
+        "borderRadius": "8px", "padding": "10px 16px",
+        "zIndex": "9998", "display": "flex", "alignItems": "center",
+        "boxShadow": "0 4px 24px rgba(0,0,0,0.45)",
+        "maxWidth": "360px", "minWidth": "220px",
+    }
+    return content, style, False  # False = enable dismiss timer
+
+
+@app.callback(
+    Output("notif-toast",       "style",   allow_duplicate=True),
+    Output("notif-dismiss-tick","disabled", allow_duplicate=True),
+    Input("notif-dismiss-tick", "n_intervals"),
+    prevent_initial_call=True,
+)
+def _notif_dismiss(_):
+    return {"display": "none"}, True
 
 
 app.clientside_callback(

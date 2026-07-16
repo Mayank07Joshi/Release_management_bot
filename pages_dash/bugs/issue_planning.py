@@ -1269,6 +1269,7 @@ def _dev_perm_change(tog_c, up_c, dn_c, dev_cfg):
     Output("ip-table-wrap",       "children", allow_duplicate=True),
     Output("ip-kpi-row",          "children", allow_duplicate=True),
     Output("ip-dev-load-section", "children", allow_duplicate=True),
+    Output("notif-store",         "data",     allow_duplicate=True),
     Input("ip-auto-assign-btn",   "n_clicks"),
     State("ip-issues-store",  "data"),
     State("ip-caps-store",    "data"),
@@ -1310,6 +1311,7 @@ def _auto_assign(n, issues, caps, dev_cfg, kpi_filt):
     if not assigned_ids:
         raise PreventUpdate
 
+    import time as _t
     new_issues = [
         dict(iss, developer=assigned_ids[iss["id"]]) if iss["id"] in assigned_ids else iss
         for iss in issues
@@ -1321,11 +1323,13 @@ def _auto_assign(n, issues, caps, dev_cfg, kpi_filt):
             write_fields(wid, {"assigned_to": dev})
     except Exception:
         pass
+    notif = {"msg": f"Auto-assigned {len(assigned_ids)} issue(s) to ADO", "type": "success", "ts": _t.time()}
     return (
         new_issues,
         _build_table(new_issues, kpi_filt),
         _build_kpi_row(new_issues),
         _build_dev_load(new_issues, dev_cfg, caps).children,
+        notif,
     )
 
 
@@ -1334,7 +1338,8 @@ def _auto_assign(n, issues, caps, dev_cfg, kpi_filt):
     Output("ip-table-wrap",       "children", allow_duplicate=True),
     Output("ip-kpi-row",          "children", allow_duplicate=True),
     Output("ip-dev-load-section", "children", allow_duplicate=True),
-    Input("ip-clear-btn",        "n_clicks"),
+    Output("notif-store",         "data",     allow_duplicate=True),
+    Input("ip-clear-btn",         "n_clicks"),
     State("ip-issues-store",  "data"),
     State("ip-caps-store",    "data"),
     State("ip-devcfg-store",  "data"),
@@ -1342,20 +1347,23 @@ def _auto_assign(n, issues, caps, dev_cfg, kpi_filt):
     prevent_initial_call=True,
 )
 def _clear_all(n, issues, caps, dev_cfg, kpi_filt):
+    import time as _t
     if not n:
         raise PreventUpdate
+    cleared = [iss for iss in issues if iss["developer"]]
     new_issues = [dict(iss, developer="") if iss["developer"] else iss for iss in issues]
     try:
         from sync.ado_write import write_fields
-        for iss in issues:
-            if iss["developer"]:
-                _update_issue_local(iss["id"], {"developer": ""})
-                write_fields(iss["id"], {"assigned_to": ""})
+        for iss in cleared:
+            _update_issue_local(iss["id"], {"developer": ""})
+            write_fields(iss["id"], {"assigned_to": ""})
     except Exception:
         pass
+    notif = {"msg": f"Cleared {len(cleared)} assignment(s) in ADO", "type": "info", "ts": _t.time()}
     return (
         new_issues,
         _build_table(new_issues, kpi_filt),
         _build_kpi_row(new_issues),
         _build_dev_load(new_issues, dev_cfg, caps).children,
+        notif,
     )
