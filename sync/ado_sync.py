@@ -138,6 +138,36 @@ def _fetch_changed_ids(wit_client, since: datetime) -> list:
     return ids
 
 
+def _fetch_all_open_task_ids(wit_client) -> list:
+    """
+    Always fetch ALL open Tasks from 2026 regardless of ChangedDate.
+
+    ADO does not update System.ChangedDate when a parent-child link is
+    added or removed, so incremental syncs miss reparented tasks.
+    Re-syncing all open tasks on every cycle is cheap (bounded set) and
+    guarantees parent_id is always current in work_items_main.
+    """
+    wiql = {
+        "query": f"""
+        SELECT [System.Id]
+        FROM WorkItems
+        WHERE [System.TeamProject] = '{_PROJECT}'
+          AND [System.WorkItemType] = 'Task'
+          AND [System.State] NOT IN ('Closed', 'Removed', 'Done')
+          AND [System.CreatedDate] >= '2026-01-01'
+        ORDER BY [System.Id]
+        """
+    }
+    try:
+        result = wit_client.query_by_wiql(wiql)
+        ids = [item.id for item in result.work_items]
+        log.info(f"ADO returned {len(ids)} open tasks (parent-link refresh)")
+        return ids
+    except Exception as exc:
+        log.warning(f"Open-task refresh query failed (non-fatal): {exc}")
+        return []
+
+
 def _fetch_details(wit_client, ids: list) -> list:
     """Fetch full work item details in batches of 200 (ADO API limit)."""
     all_items = []
@@ -644,6 +674,12 @@ def run_sync(full: bool = False) -> dict:
         )
 
         ids = _fetch_changed_ids(wit_client, since)
+
+        # Always merge in all open tasks so parent-link changes (which ADO
+        # does not reflect in System.ChangedDate) are never missed.
+        if not full:
+            task_ids = _fetch_all_open_task_ids(wit_client)
+            ids = list(dict.fromkeys(ids + task_ids))  # merge + deduplicate, preserve order
 
         if not ids:
             log.info("✅ No changes detected — DB is up to date")
