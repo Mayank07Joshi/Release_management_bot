@@ -11,14 +11,25 @@ import plotly.io as pio
 _sync_running = False
 _sync_lock    = threading.Lock()
 _sync_start   = 0.0
+_sync_mode    = "incremental"   # "incremental" | "full"
 
 def _do_sync():
-    global _sync_running
+    global _sync_running, _sync_mode
     try:
         from sync.ado_sync import run_sync
         run_sync()
     finally:
         _sync_running = False
+        _sync_mode    = "incremental"
+
+def _do_full_sync():
+    global _sync_running, _sync_mode
+    try:
+        from sync.ado_sync import run_sync
+        run_sync(full=True)
+    finally:
+        _sync_running = False
+        _sync_mode    = "incremental"
 
 # Make project root importable
 sys.path.insert(0, os.path.dirname(__file__))
@@ -212,6 +223,14 @@ sidebar = html.Div([
                 "padding": "3px 9px", "borderRadius": "6px",
                 "whiteSpace": "nowrap",
             }),
+            html.Button("⟳ Full Sync", id="fullsync-now-btn", n_clicks=0, style={
+                "background": "transparent",
+                "border": "1px solid rgba(255,255,255,0.08)",
+                "color": "rgb(245,158,11)", "cursor": "pointer",
+                "fontSize": "11px", "fontWeight": "600",
+                "padding": "3px 9px", "borderRadius": "6px",
+                "whiteSpace": "nowrap",
+            }),
         ], style={"display": "flex", "alignItems": "center", "gap": "8px", "marginBottom": "10px"}),
         html.Div([
             html.Div(id="topnav-avatar-display", style={"flex": "1", "minWidth": "0"}),
@@ -344,30 +363,57 @@ def _data_freshness(n, _path):
 
 
 @app.callback(
-    Output("sync-now-btn",    "children"),
-    Output("sync-now-btn",    "disabled"),
-    Output("sync-timer-tick", "disabled"),
+    Output("sync-now-btn",     "children"),
+    Output("sync-now-btn",     "disabled"),
+    Output("fullsync-now-btn", "disabled"),
+    Output("sync-timer-tick",  "disabled"),
     Input("sync-now-btn", "n_clicks"),
     prevent_initial_call=True,
 )
 def _manual_sync(n):
-    global _sync_running, _sync_start
+    global _sync_running, _sync_start, _sync_mode
     if not n:
         raise dash.exceptions.PreventUpdate
     with _sync_lock:
         if _sync_running:
             raise dash.exceptions.PreventUpdate
         _sync_running = True
+        _sync_mode    = "incremental"
         import time as _time
         _sync_start = _time.time()
     threading.Thread(target=_do_sync, daemon=True, name="manual-ado-sync").start()
-    return "syncing… 0s", True, False
+    return "syncing… 0s", True, True, False
 
 
 @app.callback(
-    Output("sync-now-btn",    "children",  allow_duplicate=True),
-    Output("sync-now-btn",    "disabled",  allow_duplicate=True),
-    Output("sync-timer-tick", "disabled",  allow_duplicate=True),
+    Output("fullsync-now-btn", "children"),
+    Output("fullsync-now-btn", "disabled",  allow_duplicate=True),
+    Output("sync-now-btn",     "disabled",  allow_duplicate=True),
+    Output("sync-timer-tick",  "disabled",  allow_duplicate=True),
+    Input("fullsync-now-btn", "n_clicks"),
+    prevent_initial_call=True,
+)
+def _manual_full_sync(n):
+    global _sync_running, _sync_start, _sync_mode
+    if not n:
+        raise dash.exceptions.PreventUpdate
+    with _sync_lock:
+        if _sync_running:
+            raise dash.exceptions.PreventUpdate
+        _sync_running = True
+        _sync_mode    = "full"
+        import time as _time
+        _sync_start = _time.time()
+    threading.Thread(target=_do_full_sync, daemon=True, name="manual-full-sync").start()
+    return "full sync… 0s", True, True, False
+
+
+@app.callback(
+    Output("sync-now-btn",     "children",  allow_duplicate=True),
+    Output("sync-now-btn",     "disabled",  allow_duplicate=True),
+    Output("fullsync-now-btn", "children",  allow_duplicate=True),
+    Output("fullsync-now-btn", "disabled",  allow_duplicate=True),
+    Output("sync-timer-tick",  "disabled",  allow_duplicate=True),
     Input("sync-timer-tick", "n_intervals"),
     prevent_initial_call=True,
 )
@@ -375,8 +421,10 @@ def _sync_timer_tick(n):
     import time as _time
     if _sync_running:
         elapsed = int(_time.time() - _sync_start)
-        return f"syncing… {elapsed}s", True, False
-    return "↻ Sync", False, True
+        if _sync_mode == "full":
+            return "↻ Sync", True, f"full sync… {elapsed}s", True, False
+        return f"syncing… {elapsed}s", True, "⟳ Full Sync", True, False
+    return "↻ Sync", False, "⟳ Full Sync", False, True
 
 
 app.clientside_callback(
