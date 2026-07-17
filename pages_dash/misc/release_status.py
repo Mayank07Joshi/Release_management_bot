@@ -371,10 +371,14 @@ def _build_pills(releases, selected):
 # ── Table ─────────────────────────────────────────────────────────────────────
 _SALMON = "rgb(240,137,122)"
 
+_ADO_BASE = "https://dev.azure.com/expenseondemand/Solo%20Expenses/_workitems/edit"
+
 def _build_table(stories, stage_data, row_data, selected_id=None):
     fixed_cols = [
-        ("Name of Story", {"minWidth": "200px", "position": "sticky", "left": "0px",
-                           "zIndex": "3", "background": _BG_HEAD, "textAlign": "center"}),
+        ("ID",           {"width": "58px",   "position": "sticky", "left": "0px",
+                          "zIndex": "3", "background": _BG_HEAD, "textAlign": "center"}),
+        ("Name of Story",{"minWidth": "200px","position": "sticky", "left": "58px",
+                          "zIndex": "3", "background": _BG_HEAD}),
         ("User Story Owner", {"minWidth": "85px"}),
         ("Developer",        {"minWidth": "85px"}),
         ("QA",               {"minWidth": "85px"}),
@@ -407,16 +411,26 @@ def _build_table(stories, stage_data, row_data, selected_id=None):
         }
 
         body_rows.append(html.Tr([
-            # Name of Story — ID inline + title, single sticky column
-            html.Td([
-                html.Span(f"#{wid} ",
-                          style={"fontFamily": _MONO, "fontSize": "10px",
-                                 "color": _INDIGO, "marginRight": "6px",
-                                 "fontWeight": "700"}),
+            # ID column — sticky, ADO link
+            html.Td(
+                html.A(f"#{wid}",
+                       href=f"{_ADO_BASE}/{wid}",
+                       target="_blank",
+                       style={"fontFamily": _MONO, "fontSize": "10px",
+                              "color": _INDIGO, "fontWeight": "700",
+                              "textDecoration": "none"},
+                       **{"className": "ado-vsts-link"}),
+                style={**_TD_B, "position": "sticky", "left": "0px", "zIndex": "2",
+                       "background": _BG_CARD, "textAlign": "center",
+                       "width": "58px", "whiteSpace": "nowrap"},
+            ),
+            # Name of Story — sticky, offset by ID column width
+            html.Td(
                 s["title"],
-            ], style={**_TD_B, "position": "sticky", "left": "0px",
-                      "zIndex": "2", "background": _BG_CARD,
-                      "fontWeight": "600", "whiteSpace": "normal", "maxWidth": "200px"}),
+                style={**_TD_B, "position": "sticky", "left": "58px",
+                       "zIndex": "2", "background": _BG_CARD,
+                       "fontWeight": "600", "whiteSpace": "normal", "maxWidth": "200px"},
+            ),
             html.Td(s["story_owner"] or "—",
                     style={**_TD_B, "color": _FG, "fontSize": "12px",
                            "whiteSpace": "nowrap", "maxWidth": "85px"}),
@@ -832,7 +846,7 @@ def layout(**_):
             "background": _BG_CARD,
         }),
 
-        # Legend
+        # Legend + search
         html.Div([
             *[html.Span([
                 html.Span(style={
@@ -844,9 +858,21 @@ def layout(**_):
                                       "marginRight": "14px"}),
             ]) for lbl, col in [("Done", _GREEN), ("WIP", _AMBER), ("Not started", _RED)]],
             html.Span("· each stage cell also carries a delivery date",
-                      style={"fontSize": "10.5px", "color": _DIM}),
+                      style={"fontSize": "10.5px", "color": _DIM, "flex": "1"}),
+            dcc.Input(
+                id="rs-search",
+                type="text",
+                placeholder="Search by ID or title…",
+                debounce=True,
+                style={
+                    "background": _BG_CARD, "border": f"1px solid {_BD}",
+                    "borderRadius": "7px", "color": _FG,
+                    "fontSize": "12px", "padding": "5px 11px",
+                    "outline": "none", "width": "220px",
+                },
+            ),
         ], style={"display": "flex", "alignItems": "center",
-                  "padding": "10px 24px", "flexWrap": "wrap"}),
+                  "padding": "10px 24px", "flexWrap": "wrap", "gap": "8px"}),
 
         # KPI strip
         html.Div(id="rs-kpi-strip"),
@@ -909,8 +935,9 @@ def _select_release(clicks):
     Input("rs-release-store",  "data"),
     Input("rs-panel-store",    "data"),
     Input("rs-panel-visible",  "data"),
+    Input("rs-search",         "value"),
 )
-def _render_table(release, selected_id, panel_visible):
+def _render_table(release, selected_id, panel_visible, search):
     if not release:
         return html.Div("Select a release above to view stories.",
                         style={"padding": "40px", "color": _MT, "textAlign": "center"})
@@ -920,6 +947,13 @@ def _render_table(release, selected_id, panel_visible):
     row_data   = _load_row_data(ids)
     if not stories:
         return html.Div(f"No active stories found for: {release}",
+                        style={"padding": "40px", "color": _MT, "textAlign": "center"})
+    q = (search or "").strip().lower()
+    if q:
+        stories = [s for s in stories
+                   if q in str(s["work_item_id"]) or q in s["title"].lower()]
+    if not stories and q:
+        return html.Div(f"No stories match \"{search}\".",
                         style={"padding": "40px", "color": _MT, "textAlign": "center"})
     effective_id = selected_id if panel_visible else None
     return _build_table(stories, stage_data, row_data, selected_id=effective_id)
