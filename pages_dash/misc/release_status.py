@@ -111,6 +111,99 @@ _MONTH_NUM = {
     'july':7,'august':8,'september':9,'october':10,'november':11,'december':12,
 }
 
+def _kpi_card(label, value, total, color):
+    pct = round(value / total * 100) if total else 0
+    return html.Div([
+        html.Div(str(value), style={
+            "fontSize": "30px", "fontWeight": "700", "color": color,
+            "lineHeight": "1",
+        }),
+        html.Div(f"of {total}  ·  {pct}%", style={
+            "fontSize": "10px", "color": _DIM, "marginTop": "3px",
+            "fontFamily": _MONO,
+        }),
+        html.Div(label, style={
+            "fontSize": "10px", "fontWeight": "700", "color": _MT,
+            "marginTop": "8px", "textTransform": "uppercase",
+            "letterSpacing": "0.6px",
+        }),
+    ], style={
+        "background": _BG_CARD,
+        "border": f"1px solid {_BD}",
+        "borderTop": f"3px solid {color}",
+        "borderRadius": "10px",
+        "padding": "16px 20px",
+        "flex": "1",
+        "minWidth": "130px",
+    })
+
+
+def _build_kpi_strip(stories: list, stage_data: dict) -> html.Div:
+    total = len(stories)
+    if not total:
+        return html.Div()
+
+    def _stage_done(wid, key):
+        return stage_data.get(wid, {}).get(key, {}).get("status") == "done"
+
+    dev_done   = sum(1 for s in stories if _stage_done(s["work_item_id"], "dev_status"))
+    qa_done    = sum(1 for s in stories if _stage_done(s["work_item_id"], "qa_sign_off"))
+    complete   = sum(1 for s in stories if (s.get("story_status") or "").strip() == "Complete")
+    live       = sum(1 for s in stories if _stage_done(s["work_item_id"], "live"))
+
+    # Size breakdown
+    size_counts = {}
+    for s in stories:
+        sz = (s.get("story_size") or "").strip().title() or "Unknown"
+        size_counts[sz] = size_counts.get(sz, 0) + 1
+
+    _size_order = ["Very Small", "Small", "Medium", "Big"]
+    size_pills = []
+    for sz in _size_order:
+        if sz not in size_counts:
+            continue
+        col = _SIZE_COLORS.get(sz, _MT)
+        size_pills.append(html.Span([
+            html.Span(sz, style={"color": col, "fontWeight": "600"}),
+            html.Span(f" {size_counts[sz]}", style={"color": _FG}),
+        ], style={"marginRight": "16px", "fontSize": "11px"}))
+    for sz, cnt in size_counts.items():
+        if sz not in _size_order:
+            size_pills.append(html.Span([
+                html.Span(sz, style={"color": _MT, "fontWeight": "600"}),
+                html.Span(f" {cnt}", style={"color": _FG}),
+            ], style={"marginRight": "16px", "fontSize": "11px"}))
+
+    return html.Div([
+        # KPI cards row
+        html.Div([
+            _kpi_card("Total Stories",    total,    total,   _INDIGO),
+            _kpi_card("Dev Complete",     dev_done, total,   _GREEN),
+            _kpi_card("QA Signed Off",    qa_done,  total,   _CYAN),
+            _kpi_card("Story Complete",   complete, total,   _AMBER),
+            _kpi_card("Live",             live,     total,   "rgb(167,139,250)"),
+        ], style={
+            "display": "flex", "gap": "12px", "flexWrap": "wrap",
+        }),
+        # Size strip
+        html.Div([
+            html.Span("Size breakdown  ", style={
+                "fontSize": "10px", "fontWeight": "700", "color": _DIM,
+                "textTransform": "uppercase", "letterSpacing": "0.5px",
+                "marginRight": "8px",
+            }),
+            *size_pills,
+        ], style={
+            "display": "flex", "alignItems": "center", "marginTop": "12px",
+            "flexWrap": "wrap",
+        }),
+    ], style={
+        "padding": "14px 24px 16px",
+        "borderBottom": f"1px solid {_BD}",
+        "background": _BG_PAGE,
+    })
+
+
 def _release_sort_key(r: str) -> tuple:
     parts = r.split()
     year   = int(parts[0]) if parts and parts[0].isdigit() else 9999
@@ -755,6 +848,9 @@ def layout(**_):
         ], style={"display": "flex", "alignItems": "center",
                   "padding": "10px 24px", "flexWrap": "wrap"}),
 
+        # KPI strip
+        html.Div(id="rs-kpi-strip"),
+
         # Table
         html.Div(id="rs-table-wrapper",
                  style={"padding": "0 24px 24px", "overflow": "auto"}),
@@ -827,6 +923,19 @@ def _render_table(release, selected_id, panel_visible):
                         style={"padding": "40px", "color": _MT, "textAlign": "center"})
     effective_id = selected_id if panel_visible else None
     return _build_table(stories, stage_data, row_data, selected_id=effective_id)
+
+
+@callback(
+    Output("rs-kpi-strip", "children"),
+    Input("rs-release-store", "data"),
+)
+def _render_kpi_strip(release):
+    if not release:
+        return []
+    stories    = _load_stories(release)
+    ids        = [s["work_item_id"] for s in stories]
+    stage_data = _load_stage_data(ids)
+    return _build_kpi_strip(stories, stage_data)
 
 
 @callback(
