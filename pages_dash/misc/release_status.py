@@ -39,9 +39,10 @@ _ST_COLOR = {
     "done":        "rgb(70,194,142)",
     "wip":         "rgb(224,162,60)",
     "not_started": "rgb(239,110,99)",
+    "n_a":         "rgb(148,163,184)",
     "":            "rgb(38,44,58)",
 }
-_ST_LABEL = {"done": "Done", "wip": "WIP", "not_started": "Not started", "": "—"}
+_ST_LABEL = {"done": "Done", "wip": "WIP", "not_started": "Not started", "n_a": "N/A", "": "—"}
 
 _MONO    = "'JetBrains Mono','SF Mono',monospace"
 _BG_PAGE = "rgb(10,13,21)"
@@ -291,9 +292,20 @@ def _size_badge(size_val):
     })
 
 
-def _stage_cell(status, stage_date):
+def _stage_cell(status, stage_date, wid=None, stage_key=None):
+    click_id = ({"type": "rs-row", "key": str(wid), "stage": stage_key or ""}
+                if wid else None)
+    click_style_extra = {"cursor": "pointer"} if click_id else {}
+    click_props = {"id": click_id, "n_clicks": 0} if click_id else {}
+
     if not status:
-        return html.Td("", style={**_TD_B, "minWidth": "110px"})
+        return html.Td("", style={**_TD_B, "minWidth": "110px",
+                                  **click_style_extra}, **click_props)
+    if status == "n_a":
+        return html.Td(
+            html.Div("N/A", style={"fontSize": "10px", "color": _DIM,
+                                   "fontWeight": "600", "fontStyle": "italic"}),
+            style={**_TD_B, "minWidth": "110px", **click_style_extra}, **click_props)
     color = _ST_COLOR.get(status, _ST_COLOR[""])
     r     = _rgb(color)
     return html.Td([
@@ -305,7 +317,8 @@ def _stage_cell(status, stage_date):
                         "fontWeight": "700", "marginTop": "2px"}),
     ], style={**_TD_B, "minWidth": "110px",
               "background": f"rgba({r},0.14)",
-              "boxShadow": f"rgba({r},0.333) 0px 0px 0px 1px inset"})
+              "boxShadow": f"rgba({r},0.333) 0px 0px 0px 1px inset",
+              **click_style_extra}, **click_props)
 
 
 def _tog(label, btn_id, active, color=_INDIGO):
@@ -351,6 +364,14 @@ def _sec(label):
     })
 
 
+def _lbl(t):
+    return html.Div(t, style={
+        "fontSize": "9.5px", "fontWeight": "700", "color": _DIM,
+        "textTransform": "uppercase", "letterSpacing": "0.5px",
+        "marginBottom": "5px",
+    })
+
+
 # ── Release pills ─────────────────────────────────────────────────────────────
 def _build_pills(releases, selected):
     if not releases:
@@ -373,11 +394,34 @@ _SALMON = "rgb(240,137,122)"
 
 _ADO_BASE = "https://dev.azure.com/expenseondemand/Solo%20Expenses/_workitems/edit"
 
-def _build_table(stories, stage_data, row_data, selected_id=None):
+def _build_table(stories, stage_data, row_data, selected_id=None, selected_ids=None):
+    sel_set = set(selected_ids or [])
+    all_ids = [s["work_item_id"] for s in stories]
+    all_checked = bool(all_ids) and set(all_ids) <= sel_set
+
+    # Select-all checkbox header
+    chk_th = html.Th(
+        html.Div(
+            "✓" if all_checked else "",
+            id="rs-select-all-btn",
+            n_clicks=0,
+            style={
+                "width": "16px", "height": "16px", "borderRadius": "4px",
+                "border": f"2px solid {_INDIGO if all_checked else _DIM}",
+                "background": f"rgba({_rgb(_INDIGO)},0.25)" if all_checked else "transparent",
+                "display": "flex", "alignItems": "center", "justifyContent": "center",
+                "color": _INDIGO, "fontSize": "10px", "fontWeight": "800",
+                "cursor": "pointer", "margin": "auto",
+            },
+        ),
+        style={**_TH_B, "width": "28px", "position": "sticky", "left": "0px",
+               "zIndex": "3", "background": _BG_HEAD, "textAlign": "center"},
+    )
+
     fixed_cols = [
-        ("ID",           {"width": "58px",   "position": "sticky", "left": "0px",
+        ("ID",           {"width": "58px",   "position": "sticky", "left": "28px",
                           "zIndex": "3", "background": _BG_HEAD, "textAlign": "center"}),
-        ("Name of Story",{"minWidth": "200px","position": "sticky", "left": "58px",
+        ("Name of Story",{"minWidth": "200px","position": "sticky", "left": "86px",
                           "zIndex": "3", "background": _BG_HEAD}),
         ("User Story Owner", {"minWidth": "85px"}),
         ("Developer",        {"minWidth": "85px"}),
@@ -387,7 +431,7 @@ def _build_table(stories, stage_data, row_data, selected_id=None):
         ("Release Date",     {"minWidth": "115px",
                               "background": "rgba(239,110,99,0.2)", "color": _SALMON}),
     ]
-    head_cells = [html.Th(c, style={**_TH_B, **ex}) for c, ex in fixed_cols]
+    head_cells = [chk_th] + [html.Th(c, style={**_TH_B, **ex}) for c, ex in fixed_cols]
     for _, lbl in _STAGES:
         head_cells.append(html.Th(lbl, style={**_TH_B, "minWidth": "96px"}))
     head_cells.append(html.Th("Comment", style={**_TH_B, "minWidth": "150px"}))
@@ -404,13 +448,31 @@ def _build_table(stories, stage_data, row_data, selected_id=None):
         sc       = _GREEN if s["story_status"] == "Complete" else _MT
 
         is_selected = (wid == selected_id)
-        row_style = {
-            "cursor": "pointer",
-            "background": "rgba(110,118,241,0.09)" if is_selected else "transparent",
-            "boxShadow": "inset 3px 0 0 rgb(110,118,241)" if is_selected else "none",
-        }
+        row_bg = "rgba(110,118,241,0.09)" if is_selected else "transparent"
+        row_shadow = "inset 3px 0 0 rgb(110,118,241)" if is_selected else "none"
+        row_style = {"background": row_bg, "boxShadow": row_shadow}
+
+        is_checked = wid in sel_set
+        chk_td = html.Td(
+            html.Div(
+                "✓" if is_checked else "",
+                id={"type": "rs-row-check", "key": str(wid)},
+                n_clicks=0,
+                style={
+                    "width": "16px", "height": "16px", "borderRadius": "4px",
+                    "border": f"2px solid {_INDIGO if is_checked else _DIM}",
+                    "background": f"rgba({_rgb(_INDIGO)},0.25)" if is_checked else "transparent",
+                    "display": "flex", "alignItems": "center", "justifyContent": "center",
+                    "color": _INDIGO, "fontSize": "10px", "fontWeight": "800",
+                    "cursor": "pointer", "margin": "auto",
+                },
+            ),
+            style={**_TD_B, "position": "sticky", "left": "0px", "zIndex": "2",
+                   "background": _BG_CARD, "width": "28px", "textAlign": "center"},
+        )
 
         body_rows.append(html.Tr([
+            chk_td,
             # ID column — sticky, ADO link
             html.Td(
                 html.A(f"#{wid}",
@@ -420,16 +482,19 @@ def _build_table(stories, stage_data, row_data, selected_id=None):
                               "color": _INDIGO, "fontWeight": "700",
                               "textDecoration": "none"},
                        **{"className": "ado-vsts-link"}),
-                style={**_TD_B, "position": "sticky", "left": "0px", "zIndex": "2",
+                style={**_TD_B, "position": "sticky", "left": "28px", "zIndex": "2",
                        "background": _BG_CARD, "textAlign": "center",
                        "width": "58px", "whiteSpace": "nowrap"},
             ),
-            # Name of Story — sticky, offset by ID column width
+            # Name of Story — sticky, offset by checkbox + ID width; click → open panel
             html.Td(
                 s["title"],
-                style={**_TD_B, "position": "sticky", "left": "58px",
+                id={"type": "rs-row", "key": str(wid), "stage": ""},
+                n_clicks=0,
+                style={**_TD_B, "position": "sticky", "left": "86px",
                        "zIndex": "2", "background": _BG_CARD,
-                       "fontWeight": "600", "whiteSpace": "normal", "maxWidth": "200px"},
+                       "fontWeight": "600", "whiteSpace": "normal", "maxWidth": "200px",
+                       "cursor": "pointer"},
             ),
             html.Td(s["story_owner"] or "—",
                     style={**_TD_B, "color": _FG, "fontSize": "12px",
@@ -455,7 +520,8 @@ def _build_table(stories, stage_data, row_data, selected_id=None):
                            "fontSize": "12px", "whiteSpace": "nowrap",
                            "maxWidth": "115px"}),
             *[_stage_cell(s_stages.get(k, {}).get("status", ""),
-                          s_stages.get(k, {}).get("date",   ""))
+                          s_stages.get(k, {}).get("date",   ""),
+                          wid=wid, stage_key=k)
               for k, _ in _STAGES],
             html.Td(
                 html.Span(comment[:40] + ("…" if len(comment) > 40 else ""),
@@ -464,8 +530,6 @@ def _build_table(stories, stage_data, row_data, selected_id=None):
                 style={**_TD_B, "minWidth": "140px"},
             ),
         ],
-            id={"type": "rs-row", "key": str(wid)},
-            n_clicks=0,
             style=row_style,
         ))
 
@@ -519,13 +583,6 @@ def _build_panel(wid: int):
     cur_own = row.story_owner    or ""
     cur_sts = row.story_status   or ""
 
-    def _lbl(t):
-        return html.Div(t, style={
-            "fontSize": "9.5px", "fontWeight": "700", "color": _DIM,
-            "textTransform": "uppercase", "letterSpacing": "0.5px",
-            "marginBottom": "5px",
-        })
-
     _inp_style = {
         "width": "100%", "padding": "8px 10px",
         "background": _BG_HEAD, "border": f"1px solid {_BD}",
@@ -538,10 +595,13 @@ def _build_panel(wid: int):
         cur_st = sd.get("status", "")
         cur_dt = sd.get("date",   "")
 
+        _NA_COLOR = "rgb(148,163,184)"
+
         def _sbtn(val, color):
             active = cur_st == val
             r = _rgb(color)
-            return html.Button("✓" if active else "",
+            icon = "—" if val == "n_a" else "✓"
+            return html.Button(icon if active else "",
                                id={"type": "rs-stage-btn", "stage": key, "val": val},
                                n_clicks=0, style={
                 "width": "22px", "height": "22px", "borderRadius": "50%",
@@ -553,6 +613,7 @@ def _build_panel(wid: int):
                 "lineHeight": "1",
             })
 
+        date_opacity = "0.35" if cur_st == "n_a" else "1"
         return html.Div([
             html.Span(label, style={"flex": "1", "fontSize": "12px",
                                     "color": _FG, "lineHeight": "1.3"}),
@@ -560,6 +621,7 @@ def _build_panel(wid: int):
                 _sbtn("done",        _GREEN),
                 _sbtn("wip",         _AMBER),
                 _sbtn("not_started", _RED),
+                _sbtn("n_a",         _NA_COLOR),
             ], style={"display": "flex", "gap": "5px"}),
             dcc.Input(type="text", value=cur_dt, debounce=True,
                       placeholder="YYYY-MM-DD",
@@ -569,6 +631,7 @@ def _build_panel(wid: int):
                           "background": _BG_HEAD, "border": f"1px solid {_BD}",
                           "color": _FG, "borderRadius": "6px",
                           "fontSize": "11px", "fontFamily": _MONO,
+                          "opacity": date_opacity,
                       }),
         ], style={
             "display": "flex", "alignItems": "center", "gap": "7px",
@@ -785,6 +848,197 @@ def _build_panel(wid: int):
     ])
 
 
+# ── Bulk edit panel ───────────────────────────────────────────────────────────
+def _build_bulk_panel(selected_ids: list, pending: dict):
+    n = len(selected_ids)
+    _NA_COLOR = "rgb(148,163,184)"
+    _divider = html.Div(style={"borderTop": f"1px solid {_BD_CELL}", "margin": "13px 0 10px"})
+
+    def _bulk_sbtn(stage_key, val, color):
+        active = pending.get(f"s_{stage_key}") == val
+        r = _rgb(color)
+        icon = "—" if val == "n_a" else "✓"
+        return html.Button(icon if active else "",
+                           id={"type": "rs-bulk-stage-btn", "stage": stage_key, "val": val},
+                           n_clicks=0, style={
+            "width": "22px", "height": "22px", "borderRadius": "50%",
+            "cursor": "pointer", "padding": "0",
+            "background": color if active else "transparent",
+            "border": f"2px solid {color}" if active else f"2px solid rgba({r},0.4)",
+            "display": "flex", "alignItems": "center", "justifyContent": "center",
+            "color": _BG_PAGE, "fontSize": "11px", "fontWeight": "800",
+            "lineHeight": "1",
+        })
+
+    def _bulk_stage_row(key, label):
+        d_opacity = "0.35" if pending.get(f"s_{key}") == "n_a" else "1"
+        return html.Div([
+            html.Span(label, style={"flex": "1", "fontSize": "12px",
+                                    "color": _FG, "lineHeight": "1.3"}),
+            html.Div([
+                _bulk_sbtn(key, "done",        _GREEN),
+                _bulk_sbtn(key, "wip",         _AMBER),
+                _bulk_sbtn(key, "not_started", _RED),
+                _bulk_sbtn(key, "n_a",         _NA_COLOR),
+            ], style={"display": "flex", "gap": "5px"}),
+            dcc.Input(type="text", value=pending.get(f"d_{key}", ""), debounce=True,
+                      placeholder="YYYY-MM-DD",
+                      id={"type": "rs-bulk-stage-date", "stage": key},
+                      style={
+                          "width": "122px", "padding": "5px 6px",
+                          "background": _BG_HEAD, "border": f"1px solid {_BD}",
+                          "color": _FG, "borderRadius": "6px",
+                          "fontSize": "11px", "fontFamily": _MONO,
+                          "opacity": d_opacity,
+                      }),
+        ], style={
+            "display": "flex", "alignItems": "center", "gap": "7px",
+            "padding": "6px 8px", "borderRadius": "7px",
+            "border": f"1px solid {_BD_CELL}",
+            "marginBottom": "4px",
+        })
+
+    cur_qa = pending.get("qa_person")
+    cur_sz = pending.get("story_size")
+
+    return html.Div([
+        # Header
+        html.Div([
+            html.Div([
+                html.Div("Bulk Edit", style={
+                    "fontSize": "9.5px", "fontWeight": "700", "color": _AMBER,
+                    "textTransform": "uppercase", "letterSpacing": "0.6px",
+                }),
+                html.Div(f"{n} {'story' if n == 1 else 'stories'} selected", style={
+                    "fontSize": "14px", "fontWeight": "700", "color": _FG,
+                    "marginTop": "4px",
+                }),
+                html.Div("Only filled fields are applied — blanks are skipped.",
+                         style={"fontSize": "11px", "color": _MT, "marginTop": "3px"}),
+            ], style={"flex": "1"}),
+            html.Div([
+                html.Button("Clear selection", id="rs-bulk-clear", n_clicks=0, style={
+                    "background": "transparent", "border": f"1px solid {_BD}",
+                    "color": _MT, "fontSize": "11px", "cursor": "pointer",
+                    "padding": "4px 10px", "borderRadius": "6px", "marginRight": "8px",
+                }),
+                html.Button("✕", id="rs-bulk-close", n_clicks=0, style={
+                    "background": "none", "border": "none", "color": _DIM,
+                    "fontSize": "20px", "cursor": "pointer", "padding": "0",
+                    "lineHeight": "1",
+                }),
+            ], style={"display": "flex", "alignItems": "center"}),
+        ], style={
+            "display": "flex", "alignItems": "flex-start",
+            "padding": "18px 20px 14px", "borderBottom": f"1px solid {_BD}",
+        }),
+
+        # Body
+        html.Div([
+            # QA
+            html.Div([
+                _lbl("QA Person"),
+                html.Div([
+                    _tog(q, {"type": "rs-bulk-qa-btn", "key": q},
+                         active=(q == cur_qa), color=_CYAN)
+                    for q in _QA_NAMES
+                ], style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
+            ], style={"marginBottom": "14px"}),
+
+            # Story Size
+            html.Div([
+                _lbl("Story Size"),
+                html.Div([
+                    _tog(sz, {"type": "rs-bulk-size-btn", "key": sz},
+                         active=(sz == cur_sz),
+                         color=_SIZE_COLORS.get(sz, _INDIGO))
+                    for sz in _SIZES
+                ], style={"display": "flex", "flexWrap": "wrap", "gap": "6px"}),
+            ], style={"marginBottom": "14px"}),
+
+            # Release Date
+            html.Div([
+                _lbl("Release Date"),
+                dcc.Dropdown(
+                    id="rs-bulk-release-dd",
+                    options=[{"label": r, "value": r} for r in _get_releases()],
+                    value=pending.get("release_date"),
+                    placeholder="Select release…",
+                    clearable=True,
+                    style={"fontSize": "12.5px"},
+                ),
+            ], style={"marginBottom": "14px"}),
+
+            # Apply button
+            html.Button(f"Apply to {n} {'story' if n == 1 else 'stories'}",
+                        id="rs-bulk-apply", n_clicks=0, style={
+                "width": "100%", "padding": "9px", "borderRadius": "8px",
+                "background": f"rgba({_rgb(_AMBER)},0.133)",
+                "border": f"1px solid rgba({_rgb(_AMBER)},0.5)",
+                "color": _AMBER, "cursor": "pointer",
+                "fontSize": "12px", "fontWeight": "700",
+                "marginBottom": "4px",
+            }),
+
+            _divider,
+
+            # Stages legend
+            html.Div([
+                html.Span("Stages · set status & date", style={
+                    "fontSize": "10px", "fontWeight": "700", "color": _DIM,
+                    "textTransform": "uppercase", "letterSpacing": "0.5px",
+                }),
+                html.Div([
+                    html.Span([
+                        html.Span(style={
+                            "width": "10px", "height": "10px", "borderRadius": "50%",
+                            "border": f"2px solid {c}", "display": "inline-block",
+                            "marginRight": "4px",
+                        }),
+                        html.Span(lbl, style={"fontSize": "10px", "color": _DIM}),
+                    ], style={"display": "inline-flex", "alignItems": "center",
+                              "marginLeft": "10px"})
+                    for lbl, c in [("Done", _GREEN), ("WIP", _AMBER),
+                                   ("Not started", _RED), ("N/A", _NA_COLOR)]
+                ], style={"display": "flex", "flexWrap": "wrap"}),
+            ], style={
+                "display": "flex", "justifyContent": "space-between",
+                "alignItems": "center", "marginBottom": "9px", "flexWrap": "wrap", "gap": "6px",
+            }),
+
+            # Stage rows
+            html.Div([_bulk_stage_row(k, lbl) for k, lbl in _STAGES]),
+
+            _divider,
+
+            # Comment
+            html.Div([
+                _lbl("Comment"),
+                dcc.Textarea(id="rs-bulk-comment-inp",
+                             value=pending.get("comment", ""),
+                             placeholder="Add a note to all selected stories…", style={
+                    "width": "100%", "minHeight": "60px",
+                    "background": _BG_HEAD, "border": f"1px solid {_BD}",
+                    "color": _FG, "borderRadius": "8px", "padding": "10px",
+                    "fontSize": "12px", "resize": "vertical",
+                    "boxSizing": "border-box",
+                }),
+            ], style={"marginBottom": "14px"}),
+
+            # Selected IDs summary
+            html.Div([
+                _lbl("Selected"),
+                html.Div(
+                    ", ".join(f"#{i}" for i in selected_ids[:20]) +
+                    (f" … +{len(selected_ids) - 20} more" if len(selected_ids) > 20 else ""),
+                    style={"fontSize": "11px", "color": _MT, "fontFamily": _MONO,
+                           "lineHeight": "1.6"},
+                ),
+            ]),
+        ], style={"padding": "18px 20px 28px"}),
+    ])
+
+
 # ── Layout ────────────────────────────────────────────────────────────────────
 def layout(**_):
     releases = _get_releases()
@@ -795,6 +1049,8 @@ def layout(**_):
         dcc.Store(id="rs-panel-store"),
         dcc.Store(id="rs-panel-visible", data=False),
         dcc.Store(id="rs-initial", data={}),
+        dcc.Store(id="rs-selected-ids", data=[]),
+        dcc.Store(id="rs-bulk-pending", data={}),
 
         # Header
         html.Div([
@@ -902,8 +1158,10 @@ def layout(**_):
 @callback(
     Output("rs-panel-wrapper", "style"),
     Input("rs-panel-visible",  "data"),
+    Input("rs-selected-ids",   "data"),
 )
-def _panel_visibility(visible):
+def _panel_visibility(visible, selected_ids):
+    show = bool(visible) or bool(selected_ids)
     base = {
         "position": "fixed", "top": "0", "right": "0",
         "height": "100vh", "width": "760px",
@@ -911,7 +1169,7 @@ def _panel_visibility(visible):
         "overflowY": "auto", "zIndex": "41",
         "boxShadow": "rgba(0,0,0,0.467) -8px 0px 24px",
     }
-    return {**base, "display": "block" if visible else "none"}
+    return {**base, "display": "block" if show else "none"}
 
 
 @callback(
@@ -936,8 +1194,9 @@ def _select_release(clicks):
     Input("rs-panel-store",    "data"),
     Input("rs-panel-visible",  "data"),
     Input("rs-search",         "value"),
+    Input("rs-selected-ids",   "data"),
 )
-def _render_table(release, selected_id, panel_visible, search):
+def _render_table(release, selected_id, panel_visible, search, selected_ids):
     if not release:
         return html.Div("Select a release above to view stories.",
                         style={"padding": "40px", "color": _MT, "textAlign": "center"})
@@ -956,7 +1215,8 @@ def _render_table(release, selected_id, panel_visible, search):
         return html.Div(f"No stories match \"{search}\".",
                         style={"padding": "40px", "color": _MT, "textAlign": "center"})
     effective_id = selected_id if panel_visible else None
-    return _build_table(stories, stage_data, row_data, selected_id=effective_id)
+    return _build_table(stories, stage_data, row_data,
+                        selected_id=effective_id, selected_ids=selected_ids)
 
 
 @callback(
@@ -976,7 +1236,7 @@ def _render_kpi_strip(release):
     Output("rs-panel-store",   "data"),
     Output("rs-panel-visible", "data"),
     Output("rs-initial",       "data"),
-    Input({"type": "rs-row", "key": ALL}, "n_clicks"),
+    Input({"type": "rs-row", "key": ALL, "stage": ALL}, "n_clicks"),
     prevent_initial_call=True,
 )
 def _open_panel(clicks):
@@ -1017,9 +1277,13 @@ def _close_panel(n):
 @callback(
     Output("rs-panel-content", "children"),
     Input("rs-panel-store",    "data"),
+    Input("rs-selected-ids",   "data"),
+    Input("rs-bulk-pending",   "data"),
     prevent_initial_call=True,
 )
-def _render_panel(story_id):
+def _render_panel(story_id, selected_ids, bulk_pending):
+    if selected_ids:
+        return _build_bulk_panel(selected_ids, bulk_pending or {})
     if story_id is None:
         raise PreventUpdate
     return _build_panel(story_id)
@@ -1238,3 +1502,237 @@ def _delete_row(n, story_id):
                      {"id": story_id})
     notif = {"msg": f"Entry #{story_id} deleted", "type": "info", "ts": _t.time()}
     return False, notif
+
+
+# ── Bulk select callbacks ─────────────────────────────────────────────────────
+
+@callback(
+    Output("rs-selected-ids", "data", allow_duplicate=True),
+    Input({"type": "rs-row-check", "key": ALL}, "n_clicks"),
+    State("rs-selected-ids", "data"),
+    prevent_initial_call=True,
+)
+def _toggle_row_check(clicks, selected_ids):
+    if not any(clicks):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid:
+        raise PreventUpdate
+    wid = int(tid["key"])
+    sel = list(selected_ids or [])
+    if wid in sel:
+        sel.remove(wid)
+    else:
+        sel.append(wid)
+    return sel
+
+
+@callback(
+    Output("rs-selected-ids", "data", allow_duplicate=True),
+    Input("rs-select-all-btn", "n_clicks"),
+    State("rs-release-store",  "data"),
+    State("rs-search",         "value"),
+    State("rs-selected-ids",   "data"),
+    prevent_initial_call=True,
+)
+def _select_all_rows(n, release, search, selected_ids):
+    if not n or not release:
+        raise PreventUpdate
+    stories = _load_stories(release)
+    q = (search or "").strip().lower()
+    if q:
+        stories = [s for s in stories
+                   if q in str(s["work_item_id"]) or q in s["title"].lower()]
+    all_ids = [s["work_item_id"] for s in stories]
+    if set(all_ids) <= set(selected_ids or []):
+        return []
+    return all_ids
+
+
+@callback(
+    Output("rs-selected-ids",  "data", allow_duplicate=True),
+    Output("rs-bulk-pending",  "data", allow_duplicate=True),
+    Input("rs-bulk-clear",     "n_clicks"),
+    Input("rs-bulk-close",     "n_clicks"),
+    prevent_initial_call=True,
+)
+def _bulk_close(n_clear, n_close):
+    if not n_clear and not n_close:
+        raise PreventUpdate
+    return [], {}
+
+
+# ── Bulk pending-store callbacks ──────────────────────────────────────────────
+
+@callback(
+    Output("rs-bulk-pending", "data", allow_duplicate=True),
+    Input({"type": "rs-bulk-stage-btn", "stage": ALL, "val": ALL}, "n_clicks"),
+    State("rs-bulk-pending", "data"),
+    prevent_initial_call=True,
+)
+def _bulk_stage_click(clicks, pending):
+    if not any(clicks):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid:
+        raise PreventUpdate
+    p = dict(pending or {})
+    p[f"s_{tid['stage']}"] = tid["val"]
+    return p
+
+
+@callback(
+    Output("rs-bulk-pending", "data", allow_duplicate=True),
+    Input({"type": "rs-bulk-stage-date", "stage": ALL}, "value"),
+    State("rs-bulk-pending", "data"),
+    prevent_initial_call=True,
+)
+def _bulk_stage_date(dates, pending):
+    tid = ctx.triggered_id
+    if not tid:
+        raise PreventUpdate
+    stage_key = tid["stage"]
+    try:
+        val = dates[_STAGE_KEYS.index(stage_key)]
+    except (ValueError, IndexError):
+        raise PreventUpdate
+    if not val:
+        raise PreventUpdate
+    p = dict(pending or {})
+    p[f"d_{stage_key}"] = val
+    return p
+
+
+@callback(
+    Output("rs-bulk-pending", "data", allow_duplicate=True),
+    Input({"type": "rs-bulk-qa-btn", "key": ALL}, "n_clicks"),
+    State("rs-bulk-pending", "data"),
+    prevent_initial_call=True,
+)
+def _bulk_qa_click(clicks, pending):
+    if not any(clicks):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid:
+        raise PreventUpdate
+    p = dict(pending or {})
+    # toggle off if same clicked again
+    if p.get("qa_person") == tid["key"]:
+        p.pop("qa_person", None)
+    else:
+        p["qa_person"] = tid["key"]
+    return p
+
+
+@callback(
+    Output("rs-bulk-pending", "data", allow_duplicate=True),
+    Input({"type": "rs-bulk-size-btn", "key": ALL}, "n_clicks"),
+    State("rs-bulk-pending", "data"),
+    prevent_initial_call=True,
+)
+def _bulk_size_click(clicks, pending):
+    if not any(clicks):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid:
+        raise PreventUpdate
+    p = dict(pending or {})
+    if p.get("story_size") == tid["key"]:
+        p.pop("story_size", None)
+    else:
+        p["story_size"] = tid["key"]
+    return p
+
+
+@callback(
+    Output("rs-bulk-pending", "data", allow_duplicate=True),
+    Input("rs-bulk-release-dd", "value"),
+    State("rs-bulk-pending",    "data"),
+    prevent_initial_call=True,
+)
+def _bulk_release_change(val, pending):
+    p = dict(pending or {})
+    if val:
+        p["release_date"] = val
+    else:
+        p.pop("release_date", None)
+    return p
+
+
+# ── Bulk apply ────────────────────────────────────────────────────────────────
+
+@callback(
+    Output("rs-selected-ids",    "data",      allow_duplicate=True),
+    Output("rs-bulk-pending",    "data",      allow_duplicate=True),
+    Output("notif-store",        "data",      allow_duplicate=True),
+    Input("rs-bulk-apply",       "n_clicks"),
+    State("rs-selected-ids",     "data"),
+    State("rs-bulk-pending",     "data"),
+    State("rs-bulk-comment-inp", "value"),
+    prevent_initial_call=True,
+)
+def _apply_bulk_changes(n, selected_ids, pending, comment_val):
+    import time as _t, threading
+    if not n or not selected_ids:
+        raise PreventUpdate
+
+    p = dict(pending or {})
+    if comment_val:
+        p["comment"] = comment_val
+
+    qa_val  = p.get("qa_person")
+    cmt_val = p.get("comment")
+    sz_val  = p.get("story_size")
+    rd_val  = p.get("release_date")
+
+    with engine.begin() as conn:
+        for wid in selected_ids:
+            if sz_val:
+                conn.execute(
+                    text("UPDATE work_items_main SET story_size=:s WHERE work_item_id=:id"),
+                    {"s": sz_val, "id": wid})
+            if rd_val:
+                conn.execute(
+                    text("UPDATE work_items_main SET release_date=:d WHERE work_item_id=:id"),
+                    {"d": rd_val, "id": wid})
+            if qa_val or cmt_val:
+                conn.execute(text("""
+                    INSERT INTO p_release_rows (work_item_id, qa_person, comment, updated_at)
+                    VALUES (:id, COALESCE(:qa,''), COALESCE(:c,''), NOW())
+                    ON CONFLICT (work_item_id) DO UPDATE
+                    SET qa_person  = CASE WHEN :qa IS NOT NULL THEN :qa
+                                         ELSE p_release_rows.qa_person END,
+                        comment    = CASE WHEN :c  IS NOT NULL THEN :c
+                                         ELSE p_release_rows.comment END,
+                        updated_at = NOW()
+                """), {"id": wid, "qa": qa_val, "c": cmt_val})
+            for stage_key in _STAGE_KEYS:
+                status   = p.get(f"s_{stage_key}")
+                date_val = p.get(f"d_{stage_key}")
+                if status or date_val:
+                    conn.execute(text("""
+                        INSERT INTO p_release_stages (work_item_id, stage_key, status, stage_date)
+                        VALUES (:id, :key, COALESCE(:status,'not_started'), :date)
+                        ON CONFLICT (work_item_id, stage_key) DO UPDATE
+                            SET status     = COALESCE(:status, p_release_stages.status),
+                                stage_date = COALESCE(:date,   p_release_stages.stage_date)
+                    """), {"id": wid, "key": stage_key, "status": status, "date": date_val})
+
+    # Write ADO fields in background (best-effort, don't block UI)
+    ado_fields = {}
+    if sz_val: ado_fields["story_size"]  = sz_val
+    if rd_val: ado_fields["release_date"] = rd_val
+    if ado_fields:
+        ids_snap = list(selected_ids)
+        def _bg_ado(ids, fields):
+            for wid in ids:
+                try:
+                    write_fields(wid, fields)
+                except Exception:
+                    pass
+        threading.Thread(target=_bg_ado, args=(ids_snap, ado_fields), daemon=True).start()
+
+    ns = len(selected_ids)
+    notif = {"msg": f"Applied to {ns} {'story' if ns == 1 else 'stories'}",
+             "type": "success", "ts": _t.time()}
+    return [], {}, notif

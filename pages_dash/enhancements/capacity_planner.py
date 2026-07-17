@@ -1624,7 +1624,25 @@ def _open_panel(clicks, ids):
     tid = ctx.triggered_id
     if not tid or not isinstance(tid, dict):
         raise PreventUpdate
+    # Guard: n_clicks=0 means initial mount / navigation artifact, not a real click
+    click_val = next((c for c, i in zip(clicks, ids) if i == tid), 0)
+    if not click_val:
+        raise PreventUpdate
     return True, tid["dev"], tid["month"], {"pri": "all", "srt": "pri"}
+
+
+@callback(
+    Output("dcap-panel",     "is_open",  allow_duplicate=True),
+    Output("dcap-sel-dev",   "data",     allow_duplicate=True),
+    Output("dcap-sel-month", "data",     allow_duplicate=True),
+    Input("url-location",    "pathname"),
+    prevent_initial_call=True,
+)
+def _close_panel_on_navigate(_pathname):
+    # Both /dev-capacity and /planning embed the same dcap-panel component.
+    # React reuses the component between navigations, preserving is_open=True.
+    # Explicitly reset on every URL change so the panel starts closed.
+    return False, None, None
 
 
 def _standalone_section(items: list, is_m0: bool) -> list:

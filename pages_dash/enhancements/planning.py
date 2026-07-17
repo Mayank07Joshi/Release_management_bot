@@ -96,7 +96,11 @@ _CLOSED_STATES = {
 }
 
 # ─── Matrix column order ────────────────────────────────────────────────────────
-MATRIX_MONTHS = ["M0", "M1", "M2", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+# Computed at call time: M0/M1/M2 + calendar months strictly after M2 (no duplicates)
+def _matrix_months() -> list:
+    cur_m = date.today().month
+    rest = [_CAL[m] for m in range(min(cur_m + 3, 13), 13)]
+    return ["M0", "M1", "M2"] + rest
 
 CELL_COLORS = {
     "not_started":  {"bg": "#2e0e0e", "text": R, "border": R},
@@ -412,6 +416,7 @@ def _load_planning_data():
     })
 
     # ── By-developer matrix ───────────────────────────────────────────────────
+    MATRIX_MONTHS = _matrix_months()
     _SP = {
         "story_frozen": 0, "draft": 1, "not_started": 2,
     }
@@ -896,6 +901,8 @@ def _pagination_bar(page: int, total_pages: int,
 
 # ─── Matrix builders ────────────────────────────────────────────────────────────
 def _build_dev_matrix(dev_matrix: dict, today_month: int) -> html.Table:
+    MATRIX_MONTHS = _matrix_months()
+    _rest_count   = len(MATRIX_MONTHS) - 3  # columns after M2
     ml = {
         "M0": f"M0 · {_CAL[today_month]}",
         "M1": f"M1 · {_CAL[min(today_month+1, 12)]}",
@@ -951,7 +958,7 @@ def _build_dev_matrix(dev_matrix: dict, today_month: int) -> html.Table:
         ))
         rows.append(html.Tr(cells, style={"background": CD}))
 
-    separator = html.Tr([
+    _sep_cells = [
         html.Td(),
         html.Td("← 1+2 PLANNING WINDOW →", colSpan=3, style={
             "textAlign": "center", "fontSize": "10px", "color": P,
@@ -961,14 +968,16 @@ def _build_dev_matrix(dev_matrix: dict, today_month: int) -> html.Table:
             "borderTop":   f"2px solid {_WIN_BORDER}",
             "borderRight": f"2px solid {_WIN_BORDER}",
         }),
-        html.Td("← REST OF 2026 →", colSpan=6, style={
+    ]
+    if _rest_count > 0:
+        _sep_cells.append(html.Td("← REST OF 2026 →", colSpan=_rest_count, style={
             "textAlign": "center", "fontSize": "10px", "color": MT,
             "fontWeight": "700", "letterSpacing": "0.5px",
             "padding": "6px", "background": "rgba(255,255,255,0.02)",
             "borderBottom": f"1px solid {BD}",
-        }),
-        html.Td(),
-    ])
+        }))
+    _sep_cells.append(html.Td())
+    separator = html.Tr(_sep_cells)
     return html.Table(
         [html.Thead([separator, html.Tr(col_headers)]), html.Tbody(rows)],
         className="dev-matrix",
@@ -977,6 +986,8 @@ def _build_dev_matrix(dev_matrix: dict, today_month: int) -> html.Table:
 
 
 def _build_story_matrix(story_matrix: list) -> html.Table:
+    MATRIX_MONTHS = _matrix_months()
+    _rest_count   = len(MATRIX_MONTHS) - 3
     col_headers = [
         html.Th("Story / Title + BA", style={**_TH_S, "minWidth": "220px"}),
         html.Th("Size",               style={**_TH_S, "width": "60px"}),
@@ -1001,6 +1012,12 @@ def _build_story_matrix(story_matrix: list) -> html.Table:
     rows = []
     for sm in story_matrix:
         size_tag = _tag(sm["size"], _size_clr(sm["size"])) if sm["size"] else html.Span()
+        id_link  = html.A(
+            f"#{sm['id']}",
+            href=f"{ADO_BASE_URL}{sm['id']}", target="_blank",
+            style={"color": P, "fontSize": "10px", "fontWeight": "700",
+                   "textDecoration": "none", "letterSpacing": "0.3px", "flexShrink": "0"},
+        )
         ba_chip  = html.Span(
             f"● {sm['ba']}  ·  {sm['ba_code']}",
             style={"fontSize": "10px", "color": P, "display": "block", "marginTop": "3px"},
@@ -1010,8 +1027,11 @@ def _build_story_matrix(story_matrix: list) -> html.Table:
                 html.Div(
                     [_tag(sm["pri"], _pri_clr(sm["pri"])),
                      _tag(sm["type"], _type_clr(sm["type"])),
-                     html.Span(sm["title"], style={"color": TX, "fontSize": "12px",
-                                                    "fontWeight": "600"})],
+                     id_link,
+                     html.A(sm["title"],
+                            href=f"{ADO_BASE_URL}{sm['id']}", target="_blank",
+                            style={"color": TX, "fontSize": "12px", "fontWeight": "600",
+                                   "textDecoration": "none"})],
                     style={"display": "flex", "alignItems": "center",
                            "flexWrap": "wrap", "gap": "4px"},
                 ),
@@ -1023,7 +1043,7 @@ def _build_story_matrix(story_matrix: list) -> html.Table:
             cells.append(_story_matrix_cell(sm.get(mk), mk))
         rows.append(html.Tr(cells, style={"background": CD}))
 
-    separator = html.Tr([
+    _sep_cells = [
         html.Td(), html.Td(),
         html.Td("← 1+2 PLANNING WINDOW →", colSpan=3, style={
             "textAlign": "center", "fontSize": "10px", "color": P,
@@ -1033,12 +1053,14 @@ def _build_story_matrix(story_matrix: list) -> html.Table:
             "borderTop":   f"2px solid {_WIN_BORDER}",
             "borderRight": f"2px solid {_WIN_BORDER}",
         }),
-        html.Td("← REST OF 2026 →", colSpan=6, style={
+    ]
+    if _rest_count > 0:
+        _sep_cells.append(html.Td("← REST OF 2026 →", colSpan=_rest_count, style={
             "textAlign": "center", "fontSize": "10px", "color": MT,
             "fontWeight": "700", "padding": "6px",
             "background": "rgba(255,255,255,0.02)", "borderBottom": f"1px solid {BD}",
-        }),
-    ])
+        }))
+    separator = html.Tr(_sep_cells)
     return html.Table(
         [html.Thead([separator, html.Tr(col_headers)]), html.Tbody(rows)],
         className="story-matrix",
@@ -4277,6 +4299,7 @@ def _update_size_chips(active, chip_ids):
 def _filter_story_matrix(type_f, size_f, gates, story_matrix):
     if not story_matrix:
         return []
+    MATRIX_MONTHS = _matrix_months()
     filtered = story_matrix
     if type_f and type_f != "All":
         want = "ENH" if type_f == "Enhancements" else "ISSUE"
@@ -4313,6 +4336,7 @@ _SP = {
 def _live_dev_matrix(gates, dev_stories):
     if not dev_stories:
         return no_update
+    MATRIX_MONTHS = _matrix_months()
     dev_matrix: dict = {}
     for ds in dev_stories:
         dname = ds["dev"]
