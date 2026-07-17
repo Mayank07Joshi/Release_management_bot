@@ -1,7 +1,13 @@
-"""One-time import: Enhancement_Tracking CSV → p_release_stages + p_release_rows.
+"""Import/refresh: Enhancement_Tracking CSV → p_release_stages + p_release_rows.
 
 Parses the free-text stage cells (dates, ETAs, Complete flags) and upserts
 into the two p_release_* tables that back the Release Status page.
+
+Rules:
+  - Full overwrite: CSV is the source of truth for all stage data and comments.
+  - qa_person is NOT updated — that value is managed by VSTS sync.
+  - Composite IDs like "36381/38449" are split and imported for both items.
+  - Only stories that already exist in work_items_main are imported.
 
 Usage:
   python scripts/import_release_stages.py
@@ -88,8 +94,11 @@ def _parse_cell(raw: str) -> tuple[str, date | None]:
     # Collapse internal newlines/extra whitespace to a single space
     cell = " ".join(raw.split()).strip()
 
-    if not cell or cell.upper() in ("NA", "N/A", "-", "—"):
+    if not cell:
         return "not_started", None
+
+    if cell.upper() in ("NA", "N/A", "-", "—") or re.match(r'^not\s+required$', cell, re.IGNORECASE):
+        return "n_a", None
 
     cl = cell.lower()
 
@@ -132,13 +141,11 @@ def _parse_cell(raw: str) -> tuple[str, date | None]:
     return "wip", None
 
 
-# ── ID validation ─────────────────────────────────────────────────────────────
+# ── ID parsing ────────────────────────────────────────────────────────────────
 
-def _to_int_id(raw: str) -> int | None:
-    raw = raw.strip()
-    if re.match(r'^\d+$', raw):
-        return int(raw)
-    return None   # skip composite IDs like "36381/38449"
+def _parse_ids(raw: str) -> list[int]:
+    """Return list of integer IDs from a cell like '36381/38449' or '35468'."""
+    return [int(p) for p in re.split(r'[/,]', raw.strip()) if re.match(r'^\d+$', p.strip())]
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -154,60 +161,73 @@ def run(csv_path: Path, dry_run: bool) -> None:
 
     log.info("Loaded %d rows from %s", len(rows), csv_path.name)
 
-    stages_written = rows_written = skipped = 0
-    parse_errors: list[str] = []
+    # Load valid IDs from work_items_main so we only upsert known stories
+    with engine.connect() as conn:
+        known_ids = set(
+            r[0] for r in conn.execute(
+                text("SELECT work_item_id FROM work_items_main")
+            ).fetchall()
+        )
+    log.info("%d stories in work_items_main", len(known_ids))
+
+    stages_written = rows_written = skipped_missing = skipped_bad = 0
 
     with engine.begin() as conn:
         for row in rows:
             # Normalise all header keys (strip whitespace)
             row = {k.strip(): v for k, v in row.items()}
 
-            wid = _to_int_id(row.get("ID", ""))
-            if wid is None:
+            wids = _parse_ids(row.get("ID", ""))
+            if not wids:
                 log.warning("  Skip bad ID: %r", row.get("ID", ""))
-                skipped += 1
+                skipped_bad += 1
                 continue
 
-            # ── p_release_rows: QA person + comment ──────────────────────────
-            qa      = row.get("QA's Assigned", "").strip()
             comment = row.get("Comment", "").strip()
 
-            if qa or comment:
+            for wid in wids:
+                if wid not in known_ids:
+                    log.debug("  Skip #%d — not in work_items_main", wid)
+                    skipped_missing += 1
+                    continue
+
+                # ── p_release_rows: comment only (qa_person left to VSTS) ────
                 if not dry_run:
                     conn.execute(text("""
-                        INSERT INTO p_release_rows (work_item_id, qa_person, comment)
-                        VALUES (:id, :qa, :comment)
+                        INSERT INTO p_release_rows (work_item_id, qa_person, comment, updated_at)
+                        VALUES (:id, '', :comment, NOW())
                         ON CONFLICT (work_item_id) DO UPDATE
-                            SET qa_person  = EXCLUDED.qa_person,
-                                comment    = EXCLUDED.comment,
+                            SET comment    = EXCLUDED.comment,
                                 updated_at = NOW()
-                    """), {"id": wid, "qa": qa, "comment": comment})
+                    """), {"id": wid, "comment": comment})
                 rows_written += 1
 
-            # ── p_release_stages: 12 pipeline stages ─────────────────────────
-            for col, stage_key in STAGE_COLS:
-                raw = row.get(col, "") or ""
-                status, stage_date = _parse_cell(raw)
+                # ── p_release_stages: 12 pipeline stages ─────────────────────
+                for col, stage_key in STAGE_COLS:
+                    raw = row.get(col, "") or ""
+                    status, stage_date = _parse_cell(raw)
 
-                if not dry_run:
-                    conn.execute(text("""
-                        INSERT INTO p_release_stages
-                               (work_item_id, stage_key, status, stage_date)
-                        VALUES (:id, :key, :status, :date)
-                        ON CONFLICT (work_item_id, stage_key) DO UPDATE
-                            SET status     = EXCLUDED.status,
-                                stage_date = EXCLUDED.stage_date
-                    """), {"id": wid, "key": stage_key,
-                           "status": status, "date": stage_date})
-                stages_written += 1
+                    if not dry_run:
+                        conn.execute(text("""
+                            INSERT INTO p_release_stages
+                                   (work_item_id, stage_key, status, stage_date)
+                            VALUES (:id, :key, :status, :date)
+                            ON CONFLICT (work_item_id, stage_key) DO UPDATE
+                                SET status     = EXCLUDED.status,
+                                    stage_date = EXCLUDED.stage_date
+                        """), {"id": wid, "key": stage_key,
+                               "status": status, "date": stage_date})
+                    stages_written += 1
+
+                title = row.get("Title", "")[:70]
+                log.info("  OK  #%d  %s", wid, title)
 
     mode = "DRY RUN — " if dry_run else ""
     log.info(
-        "%sComplete. %d stage rows, %d release rows upserted. %d rows skipped.",
-        mode, stages_written, rows_written, skipped,
+        "%sComplete. %d stage rows, %d comment rows written. "
+        "Skipped: %d not in DB, %d bad ID.",
+        mode, stages_written, rows_written, skipped_missing, skipped_bad,
     )
-    if parse_errors:
-        log.warning("Parse issues:\n  %s", "\n  ".join(parse_errors))
 
 
 if __name__ == "__main__":
