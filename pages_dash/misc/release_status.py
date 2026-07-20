@@ -394,7 +394,74 @@ _SALMON = "rgb(240,137,122)"
 
 _ADO_BASE = "https://dev.azure.com/expenseondemand/Solo%20Expenses/_workitems/edit"
 
-def _build_table(stories, stage_data, row_data, selected_id=None, selected_ids=None):
+# ── Sort helpers ──────────────────────────────────────────────────────────────
+_REL_MONTHS = {
+    "January":1,"February":2,"March":3,"April":4,"May":5,"June":6,
+    "July":7,"August":8,"September":9,"October":10,"November":11,"December":12,
+}
+_SIZE_RANK = {"Big": 0, "Medium": 1, "Small": 2, "Very Small": 3}
+_ST_RANK   = {"done": 0, "wip": 1, "not_started": 2, "n_a": 3}
+
+
+def _sort_th(lbl, col_key, sort_col, sort_dir):
+    """Sortable <th> inner content: label + indicator chip."""
+    if sort_col == col_key:
+        ind, ind_c = ("↑", _INDIGO) if sort_dir == "asc" else ("↓", _INDIGO)
+    else:
+        ind, ind_c = "⇅", _BD
+    return html.Div(
+        [html.Span(lbl),
+         html.Span(ind, style={"fontSize": "8px", "color": ind_c,
+                               "marginLeft": "3px", "lineHeight": "1"})],
+        id={"type": "rs-sort-th", "col": col_key},
+        n_clicks=0,
+        style={"display": "inline-flex", "alignItems": "center",
+               "cursor": "pointer", "userSelect": "none", "gap": "1px"},
+    )
+
+
+def _sort_stories(stories, stage_data, row_data, col, direction):
+    """Return stories sorted by col/direction; no-op when col or direction is None."""
+    if not col or not direction:
+        return stories
+
+    def _rel_date_key(s):
+        parts = (s.get("release_date") or "").strip().split()
+        year = int(parts[0]) if parts and parts[0].isdigit() else 9999
+        mon  = _REL_MONTHS.get(parts[1], 0) if len(parts) > 1 else 0
+        return (year, mon)
+
+    if col == "work_item_id":
+        key_fn = lambda s: s["work_item_id"]
+    elif col == "title":
+        key_fn = lambda s: (s.get("title") or "").lower()
+    elif col == "story_owner":
+        key_fn = lambda s: (s.get("story_owner") or "").lower()
+    elif col == "main_developer":
+        key_fn = lambda s: (s.get("main_developer") or "").lower()
+    elif col == "qa_person":
+        key_fn = lambda s: (row_data.get(s["work_item_id"], {}).get("qa", "") or "").lower()
+    elif col == "story_size":
+        key_fn = lambda s: _SIZE_RANK.get((s.get("story_size") or "").strip().title(), 99)
+    elif col == "story_status":
+        key_fn = lambda s: (s.get("story_status") or "").lower()
+    elif col == "release_date":
+        key_fn = _rel_date_key
+    elif col.startswith("stage_"):
+        sk = col[6:]
+        def _stage_key(s):
+            info   = stage_data.get(s["work_item_id"], {}).get(sk, {})
+            status = info.get("status") or "not_started"
+            return (_ST_RANK.get(status, 4), str(info.get("date") or ""))
+        key_fn = _stage_key
+    else:
+        return stories
+
+    return sorted(stories, key=key_fn, reverse=(direction == "desc"))
+
+
+def _build_table(stories, stage_data, row_data, selected_id=None, selected_ids=None,
+                 sort_col=None, sort_dir=None):
     sel_set = set(selected_ids or [])
     all_ids = [s["work_item_id"] for s in stories]
     all_checked = bool(all_ids) and set(all_ids) <= sel_set
@@ -418,22 +485,29 @@ def _build_table(stories, stage_data, row_data, selected_id=None, selected_ids=N
                "zIndex": "3", "background": _BG_HEAD, "textAlign": "center"},
     )
 
+    # (label, sort_col_key, extra_th_styles)
     fixed_cols = [
-        ("ID",           {"width": "58px",   "position": "sticky", "left": "28px",
-                          "zIndex": "3", "background": _BG_HEAD, "textAlign": "center"}),
-        ("Name of Story",{"minWidth": "200px","position": "sticky", "left": "86px",
-                          "zIndex": "3", "background": _BG_HEAD}),
-        ("User Story Owner", {"minWidth": "85px"}),
-        ("Developer",        {"minWidth": "85px"}),
-        ("QA",               {"minWidth": "85px"}),
-        ("Story Size",       {"minWidth": "78px"}),
-        ("Story Status",     {"minWidth": "95px"}),
-        ("Release Date",     {"minWidth": "115px",
-                              "background": "rgba(239,110,99,0.2)", "color": _SALMON}),
+        ("ID",               "work_item_id",   {"width": "58px",    "position": "sticky", "left": "28px",
+                                                 "zIndex": "3", "background": _BG_HEAD, "textAlign": "center"}),
+        ("Name of Story",    "title",          {"minWidth": "200px", "position": "sticky", "left": "86px",
+                                                 "zIndex": "3", "background": _BG_HEAD}),
+        ("User Story Owner", "story_owner",    {"minWidth": "85px"}),
+        ("Developer",        "main_developer", {"minWidth": "85px"}),
+        ("QA",               "qa_person",      {"minWidth": "85px"}),
+        ("Story Size",       "story_size",     {"minWidth": "78px"}),
+        ("Story Status",     "story_status",   {"minWidth": "95px"}),
+        ("Release Date",     "release_date",   {"minWidth": "115px",
+                                                 "background": "rgba(239,110,99,0.2)", "color": _SALMON}),
     ]
-    head_cells = [chk_th] + [html.Th(c, style={**_TH_B, **ex}) for c, ex in fixed_cols]
-    for _, lbl in _STAGES:
-        head_cells.append(html.Th(lbl, style={**_TH_B, "minWidth": "96px"}))
+    head_cells = [chk_th] + [
+        html.Th(_sort_th(lbl, ck, sort_col, sort_dir), style={**_TH_B, **ex})
+        for lbl, ck, ex in fixed_cols
+    ]
+    for sk, lbl in _STAGES:
+        head_cells.append(html.Th(
+            _sort_th(lbl, f"stage_{sk}", sort_col, sort_dir),
+            style={**_TH_B, "minWidth": "96px"},
+        ))
     head_cells.append(html.Th("Comment", style={**_TH_B, "minWidth": "150px"}))
 
     body_rows = []
@@ -496,9 +570,11 @@ def _build_table(stories, stage_data, row_data, selected_id=None, selected_ids=N
                        "fontWeight": "600", "whiteSpace": "normal", "maxWidth": "200px",
                        "cursor": "pointer"},
             ),
-            html.Td(s["story_owner"] or "—",
-                    style={**_TD_B, "color": _FG, "fontSize": "12px",
-                           "whiteSpace": "nowrap", "maxWidth": "85px"}),
+            html.Td(
+                html.Div(s["story_owner"] or "—",
+                         style={"overflow": "hidden", "textOverflow": "ellipsis",
+                                "whiteSpace": "nowrap"}),
+                style={**_TD_B, "color": _FG, "fontSize": "12px", "maxWidth": "85px"}),
             html.Td(
                 s["main_developer"].split()[0] if s["main_developer"] else "—",
                 style={**_TD_B, "color": _FG, "fontSize": "12px",
@@ -515,10 +591,12 @@ def _build_table(stories, stage_data, row_data, selected_id=None, selected_ids=N
                 html.Span(s["story_status"] or "—",
                           style={"fontSize": "11px", "fontWeight": "700", "color": sc}),
                 style={**_TD_B, "textAlign": "center"}),
-            html.Td(s["release_date"] or "—",
-                    style={**_TD_B, "color": _FG, "fontFamily": _MONO,
-                           "fontSize": "12px", "whiteSpace": "nowrap",
-                           "maxWidth": "115px"}),
+            html.Td(
+                html.Div(s["release_date"] or "—",
+                         style={"overflow": "hidden", "textOverflow": "ellipsis",
+                                "whiteSpace": "nowrap"}),
+                style={**_TD_B, "color": _FG, "fontFamily": _MONO,
+                       "fontSize": "12px", "maxWidth": "115px"}),
             *[_stage_cell(s_stages.get(k, {}).get("status", ""),
                           s_stages.get(k, {}).get("date",   ""),
                           wid=wid, stage_key=k)
@@ -1050,7 +1128,8 @@ def layout(**_):
         dcc.Store(id="rs-panel-visible", data=False),
         dcc.Store(id="rs-initial", data={}),
         dcc.Store(id="rs-selected-ids", data=[]),
-        dcc.Store(id="rs-bulk-pending", data={}),
+        dcc.Store(id="rs-bulk-pending",  data={}),
+        dcc.Store(id="rs-sort-store",   data={"col": None, "dir": None}),
 
         # Header
         html.Div([
@@ -1195,8 +1274,9 @@ def _select_release(clicks):
     Input("rs-panel-visible",  "data"),
     Input("rs-search",         "value"),
     Input("rs-selected-ids",   "data"),
+    Input("rs-sort-store",     "data"),
 )
-def _render_table(release, selected_id, panel_visible, search, selected_ids):
+def _render_table(release, selected_id, panel_visible, search, selected_ids, sort_state):
     if not release:
         return html.Div("Select a release above to view stories.",
                         style={"padding": "40px", "color": _MT, "textAlign": "center"})
@@ -1214,9 +1294,36 @@ def _render_table(release, selected_id, panel_visible, search, selected_ids):
     if not stories and q:
         return html.Div(f"No stories match \"{search}\".",
                         style={"padding": "40px", "color": _MT, "textAlign": "center"})
+    sort_col = (sort_state or {}).get("col")
+    sort_dir = (sort_state or {}).get("dir")
+    stories  = _sort_stories(stories, stage_data, row_data, sort_col, sort_dir)
     effective_id = selected_id if panel_visible else None
     return _build_table(stories, stage_data, row_data,
-                        selected_id=effective_id, selected_ids=selected_ids)
+                        selected_id=effective_id, selected_ids=selected_ids,
+                        sort_col=sort_col, sort_dir=sort_dir)
+
+
+@callback(
+    Output("rs-sort-store", "data"),
+    Input({"type": "rs-sort-th", "col": ALL}, "n_clicks"),
+    State("rs-sort-store", "data"),
+    prevent_initial_call=True,
+)
+def _update_sort(all_clicks, current):
+    if not any(all_clicks):
+        raise PreventUpdate
+    tid = ctx.triggered_id
+    if not tid or not isinstance(tid, dict):
+        raise PreventUpdate
+    col     = tid["col"]
+    current = current or {}
+    cur_col = current.get("col")
+    cur_dir = current.get("dir")
+    if cur_col == col:
+        new_dir = "desc" if cur_dir == "asc" else (None if cur_dir == "desc" else "asc")
+    else:
+        new_dir = "asc"
+    return {"col": col if new_dir else None, "dir": new_dir}
 
 
 @callback(
