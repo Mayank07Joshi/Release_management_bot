@@ -463,13 +463,6 @@ def _build_st_table(rows, sort_col, sort_dir, filters):
         sz_col       = _ST_SIZE_COLOR.get(size, MT)
         design_icon  = _ST_DESIGN_ICON.get(design, "")
 
-        _date_input_style = {
-            "background": "transparent", "border": f"1px solid {BD}",
-            "borderRadius": "4px", "fontSize": "11px",
-            "fontFamily": "monospace", "padding": "2px 4px",
-            "cursor": "pointer", "width": "112px", "outline": "none",
-        }
-
         body_rows.append(html.Tr([
             html.Td(html.A(str(wid), href=f"{ADO_BASE_URL}{wid}", target="_blank",
                            style={"color": P, "textDecoration": "none",
@@ -485,18 +478,22 @@ def _build_st_table(rows, sort_col, sort_dir, filters):
             html.Td(size, style={**_TD, "color": sz_col, "fontWeight": "600", "whiteSpace": "nowrap"}),
             _chip(status, st_fg, st_bg),
             html.Td(stype, style={**_TD, "color": MT, "fontSize": "11px"}),
-            html.Td(dcc.Input(
-                type="date", debounce=True,
-                value=est_s_val,
+            html.Td(dcc.DatePickerSingle(
                 id={"type": "st-date-input", "col": "est_start_date", "wid": wid},
-                style={**_date_input_style, "color": B if est_s_val else MT},
-            ), style={**_TD, "padding": "4px 6px"}),
-            html.Td(dcc.Input(
-                type="date", debounce=True,
-                value=est_e_val,
+                date=est_s_val or None,
+                display_format="DD MMM YYYY",
+                placeholder="Set date…",
+                clearable=True,
+                style={"transform": "scale(0.85)", "transformOrigin": "left center"},
+            ), style={**_TD, "padding": "2px 6px"}),
+            html.Td(dcc.DatePickerSingle(
                 id={"type": "st-date-input", "col": "est_end_date", "wid": wid},
-                style={**_date_input_style, "color": B if est_e_val else MT},
-            ), style={**_TD, "padding": "4px 6px"}),
+                date=est_e_val or None,
+                display_format="DD MMM YYYY",
+                placeholder="Set date…",
+                clearable=True,
+                style={"transform": "scale(0.85)", "transformOrigin": "left center"},
+            ), style={**_TD, "padding": "2px 6px"}),
             html.Td(est_h, style={**_TD, "textAlign": "right", "fontFamily": "monospace",
                                   "color": TX if est_h != "—" else MT}),
             html.Td(act_h, style={**_TD, "textAlign": "right", "fontFamily": "monospace",
@@ -3943,10 +3940,10 @@ def _update_st_sort(all_clicks, current):
 # ── Story Tracking — save date edits ─────────────────────────────────────────
 @callback(
     Output("st-save-ts", "data"),
-    Input({"type": "st-date-input", "col": ALL, "wid": ALL}, "value"),
+    Input({"type": "st-date-input", "col": ALL, "wid": ALL}, "date"),
     prevent_initial_call=True,
 )
-def _save_st_date_cb(values):
+def _save_st_date_cb(dates):
     import time as _time
     tid = ctx.triggered_id
     if not tid or not isinstance(tid, dict):
