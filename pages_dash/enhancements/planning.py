@@ -3393,14 +3393,7 @@ def _build_full_layout():
     ])
 
     # ── Sprint info strip (dynamic) ──────────────────────────────────────────
-    from calendar import monthrange as _mr
-    from config.dev_capacity import DEFAULT_CAPACITY_H as _dch
     import sys as _sys
-    _ld = _mr(_today.year, _today.month)[1]
-    _sprint_info = (
-        f"{_today.strftime('%b %Y')} · Sprint 1 · "
-        f"Day {_today.day} of {_ld} · Default: {_dch}h/person"
-    )
     _fm  = _sys.modules.get("pages_dash.trends.focus")
     _cm  = _sys.modules.get("pages_dash.enhancements.capacity_planner")
     _focus_section  = _fm.focus_tab_content()  if _fm  else html.Div("VSTS Focus Area loading…",   style={"padding": "20px", "color": MT})
@@ -3413,38 +3406,6 @@ def _build_full_layout():
         ticket_log_modal,
         tracker_modal,
         matrix_panel,
-
-        # Page header
-        html.Div([
-            html.Div([
-                html.Div("EOD · PLANNING", style={
-                    "fontSize": "11px", "fontWeight": "700", "color": P,
-                    "letterSpacing": "1px", "textTransform": "uppercase", "marginBottom": "4px",
-                }),
-                html.Div("Planning Tool · Story Readiness & Story Tracking", style={
-                    "fontSize": "20px", "fontWeight": "800", "color": TX,
-                }),
-                html.Div(
-                    "KPI-01 M1 Readiness · KPI-02 M2 Coverage · "
-                    "KPI-03 Long-Horizon Pipeline Health · Click any cell for more detail",
-                    style={"fontSize": "11px", "color": MT, "marginTop": "4px"},
-                ),
-                html.Div(
-                    "ℹ Months M0 / M1 / M2 = iteration months (sprint cadence). "
-                    "M0 = current sprint, M1 = next, M2 = sprint after.",
-                    style={"fontSize": "10px", "color": MT, "marginTop": "3px",
-                           "fontStyle": "italic"},
-                ),
-            ]),
-            html.Div(_sprint_info, style={
-                "fontSize": "11px", "color": MT, "whiteSpace": "nowrap",
-                "alignSelf": "flex-start", "marginTop": "2px",
-                "background": "var(--bg-hover)",
-                "border": f"1px solid {BD}",
-                "borderRadius": "8px", "padding": "6px 14px",
-            }),
-        ], style={"display": "flex", "justifyContent": "space-between",
-                  "alignItems": "flex-start", "marginBottom": "20px"}),
 
         # ── Main tab navigation ────────────────────────────────────────────────
         html.Div([

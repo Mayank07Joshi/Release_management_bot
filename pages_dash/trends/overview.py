@@ -194,23 +194,20 @@ def layout(**_):
         # ── Page header bar ──────────────────────────────────────────────────
         html.Div([
             html.Div([
-                html.Div([
-                    html.H1("Overview", style={
-                        "fontSize": "21px", "fontWeight": "700", "margin": "0",
-                        "color": "rgb(234,236,242)",
-                    }),
-                    html.Span("Built", style={
-                        "fontSize": "10px", "fontWeight": "700",
-                        "padding": "3px 9px", "borderRadius": "20px",
-                        "textTransform": "uppercase", "letterSpacing": "0.5px",
-                        "background": "rgba(70,194,142,0.118)",
-                        "color": C_GREEN,
-                        "border": "1px solid rgba(70,194,142,0.333)",
-                    }),
-                ], style={"display": "flex", "alignItems": "center", "gap": "12px"}),
-                html.Div("Monday-morning glance across every stream", style={
-                    "fontSize": "12.5px", "color": _MT, "marginTop": "6px",
+                html.Div("EOD · PLANNING", style={
+                    "fontSize": "11px", "fontWeight": "700",
+                    "color": C_INDIGO, "letterSpacing": "1px",
+                    "textTransform": "uppercase", "marginBottom": "4px",
                 }),
+                html.H1("Planning Tool", style={
+                    "fontSize": "21px", "fontWeight": "800", "margin": "0",
+                    "color": "rgb(234,236,242)",
+                }),
+                html.Div(
+                    "Story Readiness · Story Tracking · Delivery Timeline · "
+                    "Designer Planning · Release Status",
+                    style={"fontSize": "12px", "color": _MT, "marginTop": "5px"},
+                ),
             ]),
             html.Div(sprint_ctx, style={
                 "fontSize": "11px", "color": _DIM, "fontFamily": _MONO,
