@@ -191,7 +191,40 @@ def _build_sidebar_nav(pathname):
     return items
 
 
+_SIDEBAR_EXPANDED = {
+    "width": "232px", "minWidth": "232px",
+    "background": "rgb(18,22,31)",
+    "height": "100vh",
+    "position": "fixed", "left": "0", "top": "0",
+    "display": "flex", "flexDirection": "column",
+    "borderRight": "1px solid rgb(38,44,58)",
+    "padding": "18px 12px",
+    "boxSizing": "border-box",
+    "zIndex": "100",
+    "overflowY": "auto",
+    "overflowX": "hidden",
+    "transition": "width 0.2s ease",
+}
+_SIDEBAR_COLLAPSED = {
+    **_SIDEBAR_EXPANDED,
+    "width": "52px", "minWidth": "52px",
+    "padding": "18px 6px",
+}
+
 sidebar = html.Div([
+    # ── Collapse toggle ────────────────────────────────────────────────────────
+    html.Div(
+        html.Button("«", id="sidebar-toggle-btn", n_clicks=0, style={
+            "background": "transparent",
+            "border": "1px solid rgba(255,255,255,0.08)",
+            "color": "rgb(139,146,164)", "cursor": "pointer",
+            "fontSize": "13px", "padding": "3px 7px",
+            "borderRadius": "6px", "lineHeight": "1",
+        }),
+        style={"display": "flex", "justifyContent": "flex-end",
+               "marginBottom": "10px", "flexShrink": "0"},
+    ),
+
     # ── Branding ───────────────────────────────────────────────────────────────
     html.Div([
         html.Div("EOD · PLANNING", style={
@@ -201,7 +234,7 @@ sidebar = html.Div([
         html.Div("Product workspace", style={
             "fontSize": "12.5px", "color": "rgb(139,146,164)", "marginTop": "3px",
         }),
-    ], style={"padding": "0px 8px 14px", "flexShrink": "0"}),
+    ], id="sidebar-brand", style={"padding": "0px 8px 14px", "flexShrink": "0"}),
 
     # ── Nav (updated by callback on every URL change) ──────────────────────────
     html.Div(id="sidebar-nav", style={
@@ -245,23 +278,12 @@ sidebar = html.Div([
                         }),
         ], style={"display": "flex", "alignItems": "center",
                   "justifyContent": "space-between", "gap": "8px"}),
-    ], style={
+    ], id="sidebar-bottom", style={
         "padding": "12px 8px",
         "borderTop": "1px solid rgb(30,36,51)",
         "flexShrink": "0",
     }),
-], id="sidebar", style={
-    "width": "232px", "minWidth": "232px",
-    "background": "rgb(18,22,31)",
-    "height": "100vh",
-    "position": "fixed", "left": "0", "top": "0",
-    "display": "flex", "flexDirection": "column",
-    "borderRight": "1px solid rgb(38,44,58)",
-    "padding": "18px 12px",
-    "boxSizing": "border-box",
-    "zIndex": "100",
-    "overflowY": "auto",
-})
+], id="sidebar", style=_SIDEBAR_EXPANDED)
 
 # ── Auth setup ────────────────────────────────────────────────────────────────
 app.server.secret_key = os.environ.get("SECRET_KEY", "dev-secret-change-in-prod-!@#$%")
@@ -270,7 +292,8 @@ register_auth_routes(app.server)
 
 app.layout = html.Div([
     dcc.Location(id="url-location"),
-    dcc.Store(id="theme-store", storage_type="local", data="dark"),
+    dcc.Store(id="theme-store",      storage_type="local", data="dark"),
+    dcc.Store(id="sidebar-collapsed", storage_type="local", data=False),
     sidebar,
     html.Div(
         dash.page_container,
@@ -299,6 +322,54 @@ app.layout = html.Div([
 )
 def _update_sidebar_nav(pathname):
     return _build_sidebar_nav(pathname)
+
+
+@app.callback(
+    Output("sidebar-collapsed", "data"),
+    Input("sidebar-toggle-btn", "n_clicks"),
+    State("sidebar-collapsed",  "data"),
+    prevent_initial_call=True,
+)
+def _toggle_sidebar(_, collapsed):
+    return not (collapsed or False)
+
+
+@app.callback(
+    Output("sidebar",        "style"),
+    Output("sidebar-brand",  "style"),
+    Output("sidebar-nav",    "style"),
+    Output("sidebar-bottom", "style"),
+    Output("main-content",   "style"),
+    Output("sidebar-toggle-btn", "children"),
+    Input("sidebar-collapsed", "data"),
+)
+def _apply_sidebar_state(collapsed):
+    _NAV_BASE = {
+        "flex": "1", "overflowY": "auto", "overflowX": "hidden",
+        "display": "flex", "flexDirection": "column", "gap": "4px",
+    }
+    _BOTTOM_BASE = {
+        "padding": "12px 8px",
+        "borderTop": "1px solid rgb(30,36,51)",
+        "flexShrink": "0",
+    }
+    if collapsed:
+        return (
+            _SIDEBAR_COLLAPSED,
+            {"display": "none"},
+            {**_NAV_BASE, "display": "none"},
+            {**_BOTTOM_BASE, "display": "none"},
+            {"marginLeft": "52px"},
+            "»",
+        )
+    return (
+        _SIDEBAR_EXPANDED,
+        {"padding": "0px 8px 14px", "flexShrink": "0"},
+        _NAV_BASE,
+        _BOTTOM_BASE,
+        {"marginLeft": "232px"},
+        "«",
+    )
 
 
 @app.callback(

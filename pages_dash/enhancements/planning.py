@@ -3421,7 +3421,7 @@ def _build_full_layout():
                     "fontSize": "11px", "fontWeight": "700", "color": P,
                     "letterSpacing": "1px", "textTransform": "uppercase", "marginBottom": "4px",
                 }),
-                html.Div("Planning Tool · Story Readiness, Estimation & Capacity", style={
+                html.Div("Planning Tool · Story Readiness & Story Tracking", style={
                     "fontSize": "20px", "fontWeight": "800", "color": TX,
                 }),
                 html.Div(
