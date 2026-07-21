@@ -347,7 +347,10 @@ def _st_sort_th(lbl, col_key, sort_col, sort_dir):
     )
 
 
-def _build_st_table(rows, sort_col, sort_dir, filters):
+_ST_PAGE_SIZE = 50
+
+
+def _build_st_table(rows, sort_col, sort_dir, filters, page=0):
     """Render the story tracking HTML table with filters and sort applied."""
     # ── Filter ────────────────────────────────────────────────────────────────
     if filters:
@@ -433,6 +436,12 @@ def _build_st_table(rows, sort_col, sort_dir, filters):
         html.Th(_st_sort_th(lbl, ck, sort_col, sort_dir), style={**_TH, **ex})
         for lbl, ck, ex in cols
     ])
+
+    # ── Pagination slice (after filter+sort, before HTML build) ──────────────
+    total_filtered = len(rows)
+    total_pages    = max(1, (total_filtered + _ST_PAGE_SIZE - 1) // _ST_PAGE_SIZE)
+    page           = max(0, min(page or 0, total_pages - 1))
+    rows           = rows[page * _ST_PAGE_SIZE : (page + 1) * _ST_PAGE_SIZE]
 
     def _chip(text, fg, bg):
         return html.Td(html.Span(text, style={
@@ -523,13 +532,40 @@ def _build_st_table(rows, sort_col, sort_dir, filters):
             style={**_TD, "color": MT, "textAlign": "center", "padding": "32px"},
         )])]
 
-    return html.Div(
-        html.Table(
-            [html.Thead(header), html.Tbody(body_rows)],
-            style={"width": "100%", "borderCollapse": "collapse"},
+    pagination = html.Div([
+        html.Button("← Prev", id="st-page-prev", n_clicks=0, disabled=(page == 0), style={
+            "background": P_DIM if page > 0 else BD, "color": P if page > 0 else MT,
+            "border": f"1px solid {BD}", "borderRadius": "6px",
+            "padding": "4px 14px", "cursor": "pointer" if page > 0 else "default",
+            "fontSize": "12px", "fontWeight": "600",
+        }),
+        html.Span(
+            f"Page {page + 1} of {total_pages}  ·  {total_filtered} stories",
+            style={"fontSize": "11px", "color": MT},
         ),
-        style={"overflowX": "auto", "overflowY": "auto", "maxHeight": "65vh"},
-    )
+        html.Button("Next →", id="st-page-next", n_clicks=0, disabled=(page >= total_pages - 1), style={
+            "background": P_DIM if page < total_pages - 1 else BD,
+            "color": P if page < total_pages - 1 else MT,
+            "border": f"1px solid {BD}", "borderRadius": "6px",
+            "padding": "4px 14px",
+            "cursor": "pointer" if page < total_pages - 1 else "default",
+            "fontSize": "12px", "fontWeight": "600",
+        }),
+    ], style={
+        "display": "flex", "alignItems": "center", "justifyContent": "center",
+        "gap": "16px", "padding": "10px", "borderTop": f"1px solid {BD}",
+    })
+
+    return html.Div([
+        html.Div(
+            html.Table(
+                [html.Thead(header), html.Tbody(body_rows)],
+                style={"width": "100%", "borderCollapse": "collapse"},
+            ),
+            style={"overflowX": "auto", "overflowY": "auto", "maxHeight": "60vh"},
+        ),
+        pagination,
+    ])
 
 
 def _build_story_tracking_tab() -> html.Div:
@@ -579,6 +615,7 @@ def _build_story_tracking_tab() -> html.Div:
     return html.Div([
         dcc.Store(id="st-sort-store", data={"col": None, "dir": None}),
         dcc.Store(id="st-save-ts",   data=0),
+        dcc.Store(id="st-page-store", data=0),
         html.Div(id="st-header",  style={"marginBottom": "14px"}),
         html.Div(id="st-kpi-row", style={"display": "flex", "gap": "10px", "marginBottom": "14px"}),
         filter_bar,
@@ -3993,10 +4030,9 @@ def _save_st_date_cb(values):
     return int(_time.time())
 
 
-# ── Story Tracking — re-render table on tab activation / sort / filter / save ─
+# ── Story Tracking — reset page to 0 when filters or sort change ─────────────
 @callback(
-    Output("st-table-wrapper", "children"),
-    Input("plan-main-tab",    "data"),
+    Output("st-page-store",   "data"),
     Input("st-sort-store",    "data"),
     Input("st-flt-priority",  "value"),
     Input("st-flt-status",    "value"),
@@ -4004,10 +4040,46 @@ def _save_st_date_cb(values):
     Input("st-flt-area",      "value"),
     Input("st-flt-owner",     "value"),
     Input("st-flt-state",     "value"),
-    Input("st-save-ts",       "data"),
     prevent_initial_call=True,
 )
-def _render_st_table(tab, sort_state, pri, status, size, area, owner, state, _save_ts):
+def _reset_st_page(*_):
+    return 0
+
+
+# ── Story Tracking — prev / next page ────────────────────────────────────────
+@callback(
+    Output("st-page-store", "data", allow_duplicate=True),
+    Input("st-page-prev",   "n_clicks"),
+    Input("st-page-next",   "n_clicks"),
+    State("st-page-store",  "data"),
+    prevent_initial_call=True,
+)
+def _change_st_page(prev_clicks, next_clicks, page):
+    page = page or 0
+    tid  = ctx.triggered_id
+    if tid == "st-page-prev":
+        return max(0, page - 1)
+    if tid == "st-page-next":
+        return page + 1   # _render_st_table clamps to valid range
+    raise dash.exceptions.PreventUpdate
+
+
+# ── Story Tracking — re-render table (triggered only through st-page-store) ──
+@callback(
+    Output("st-table-wrapper", "children"),
+    Input("st-page-store",    "data"),
+    Input("plan-main-tab",    "data"),
+    Input("st-save-ts",       "data"),
+    State("st-sort-store",    "data"),
+    State("st-flt-priority",  "value"),
+    State("st-flt-status",    "value"),
+    State("st-flt-size",      "value"),
+    State("st-flt-area",      "value"),
+    State("st-flt-owner",     "value"),
+    State("st-flt-state",     "value"),
+    prevent_initial_call=True,
+)
+def _render_st_table(page, tab, _save_ts, sort_state, pri, status, size, area, owner, state):
     if tab and tab != "tracking":
         raise dash.exceptions.PreventUpdate
     rows = _load_story_tracking_data()
@@ -4022,7 +4094,7 @@ def _render_st_table(tab, sort_state, pri, status, size, area, owner, state, _sa
     sort_col = (sort_state or {}).get("col")
     sort_dir = (sort_state or {}).get("dir")
     return html.Div(
-        _build_st_table(rows, sort_col, sort_dir, filters),
+        _build_st_table(rows, sort_col, sort_dir, filters, page=page or 0),
         style={"background": CD, "border": f"1px solid {BD}",
                "borderRadius": "12px", "overflow": "hidden"},
     )
