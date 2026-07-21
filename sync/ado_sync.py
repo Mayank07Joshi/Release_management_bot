@@ -66,6 +66,9 @@ _FIELDS = [
     "Microsoft.VSTS.Common.ActivatedDate",
     "Custom.StorySize",
     "Custom.StoryStatus",
+    "Custom.MainQA",
+    "Custom.Design",
+    "Custom.StoryType",
 ]
 
 # ── Engine (singleton) ────────────────────────────────────────────────────────
@@ -227,6 +230,9 @@ def _transform(work_items) -> pd.DataFrame:
             "activated_date":    f.get("Microsoft.VSTS.Common.ActivatedDate"),
             "story_size":        f.get("Custom.StorySize", ""),
             "story_status":      f.get("Custom.StoryStatus", ""),
+            "main_qa":           _get_person_name(f.get("Custom.MainQA")),
+            "design_type":       f.get("Custom.Design", ""),
+            "story_type":        f.get("Custom.StoryType", ""),
         })
 
     if not rows:
@@ -659,6 +665,9 @@ def run_sync(full: bool = False) -> dict:
             "ALTER TABLE work_items_main ADD COLUMN IF NOT EXISTS story_size     VARCHAR(50)  DEFAULT ''",
             "ALTER TABLE work_items_main ADD COLUMN IF NOT EXISTS story_status   VARCHAR(50)  DEFAULT ''",
             "ALTER TABLE work_items_main ADD COLUMN IF NOT EXISTS story_owner    VARCHAR(100) DEFAULT ''",
+            "ALTER TABLE work_items_main ADD COLUMN IF NOT EXISTS main_qa        VARCHAR(100) DEFAULT ''",
+            "ALTER TABLE work_items_main ADD COLUMN IF NOT EXISTS design_type    VARCHAR(50)  DEFAULT ''",
+            "ALTER TABLE work_items_main ADD COLUMN IF NOT EXISTS story_type     VARCHAR(50)  DEFAULT ''",
         ]
         try:
             with engine.begin() as conn:

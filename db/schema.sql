@@ -211,19 +211,13 @@ CREATE TABLE IF NOT EXISTS p_planning_log (
 CREATE INDEX IF NOT EXISTS idx_planning_log_item  ON p_planning_log (work_item_id);
 CREATE INDEX IF NOT EXISTS idx_planning_log_month ON p_planning_log (month_key);
 
--- ── Story Tracking (BA planning tracker — Story Tracking tab from Excel) ────
--- Stores BA-managed planning fields not present in ADO / work_items_main.
+-- ── Story Tracking (planning dates — all other fields come from ADO sync) ────
+-- Stores only the two BA-set planning dates; size/status/type/qa/design all
+-- live in work_items_main (synced from ADO Custom fields).
 CREATE TABLE IF NOT EXISTS p_story_tracking (
     work_item_id   INTEGER PRIMARY KEY,
     est_start_date DATE,
     est_end_date   DATE,
-    est_hours      NUMERIC(8,2),
-    actual_hours   NUMERIC(8,2),
-    story_size     TEXT,         -- Big | Medium | Small | Very small
-    story_status   TEXT,         -- Complete | Incomplete | Inprogress | Not Required
-    story_type     TEXT,         -- User story | Use case
-    design_type    TEXT,         -- New Design | Old Design
-    responsible_qa TEXT,
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

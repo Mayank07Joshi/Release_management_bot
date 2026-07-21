@@ -247,7 +247,7 @@ def _load_bug_data() -> list[dict]:
 
 
 def _load_story_tracking_data() -> list[dict]:
-    """Load BA story tracking rows joined with work_items_main (5-min cache)."""
+    """Load all Enhancements with tracking dates + task-hour aggregates (5-min cache)."""
     import time as _time
     from data.loader import engine as _engine
     from sqlalchemy import text as _text
@@ -258,16 +258,42 @@ def _load_story_tracking_data() -> list[dict]:
 
     try:
         with _engine.connect() as conn:
+            # Ensure p_story_tracking exists with the slim schema
+            conn.execute(_text("""
+                CREATE TABLE IF NOT EXISTS p_story_tracking (
+                    work_item_id   INTEGER PRIMARY KEY,
+                    est_start_date DATE,
+                    est_end_date   DATE,
+                    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """))
+            conn.commit()
             rows = conn.execute(_text("""
                 SELECT
-                    w.work_item_id, w.title, w.story_owner, w.area,
-                    w.function, w.priority, w.main_developer, w.main_designer,
-                    w.state, w.release_date,
-                    t.est_start_date, t.est_end_date, t.est_hours, t.actual_hours,
-                    t.story_size, t.story_status, t.story_type, t.design_type,
-                    t.responsible_qa
-                FROM p_story_tracking t
-                JOIN work_items_main w USING (work_item_id)
+                    w.work_item_id,
+                    w.title,
+                    w.story_owner,
+                    w.area,
+                    w.function,
+                    w.priority,
+                    w.main_developer,
+                    w.main_designer,
+                    w.state,
+                    w.release_date,
+                    w.story_size,
+                    w.story_status,
+                    w.story_type,
+                    w.main_qa,
+                    w.design_type,
+                    t.est_start_date,
+                    t.est_end_date,
+                    COALESCE(e.task_est_sum, 0) AS est_hours,
+                    COALESCE(g.t_done,       0) AS actual_hours
+                FROM work_items_main w
+                LEFT JOIN p_story_tracking    t USING (work_item_id)
+                LEFT JOIN agg_story_estimation e USING (work_item_id)
+                LEFT JOIN agg_gantt_items      g USING (work_item_id)
+                WHERE w.work_item_type = 'Enhancement'
                 ORDER BY w.priority NULLS LAST, w.work_item_id
             """)).fetchall()
         result = [dict(r._mapping) for r in rows]
@@ -277,6 +303,21 @@ def _load_story_tracking_data() -> list[dict]:
     _st_data_cache["data"] = result
     _st_data_cache["ts"]   = _now
     return result
+
+
+def _save_st_date(work_item_id: int, col: str, val):
+    """Upsert one planning date into p_story_tracking."""
+    from data.loader import engine as _engine
+    from sqlalchemy import text as _text
+    assert col in ("est_start_date", "est_end_date")
+    with _engine.begin() as conn:
+        conn.execute(_text(f"""
+            INSERT INTO p_story_tracking (work_item_id, {col}, updated_at)
+            VALUES (:id, :val, NOW())
+            ON CONFLICT (work_item_id) DO UPDATE
+                SET {col} = EXCLUDED.{col}, updated_at = NOW()
+        """), {"id": work_item_id, "val": val or None})
+    _st_data_cache["data"] = None  # bust cache
 
 
 _ST_STATUS_COLOR = {
@@ -346,7 +387,7 @@ def _build_st_table(rows, sort_col, sort_dir, filters):
             "est_hrs":   lambda r: float(r.get("est_hours")    or 0),
             "actual":    lambda r: float(r.get("actual_hours") or 0),
             "designer":  lambda r: (r.get("main_designer") or "").lower(),
-            "qa":        lambda r: (r.get("responsible_qa") or "").lower(),
+            "qa":        lambda r: (r.get("main_qa") or "").lower(),
             "design":    lambda r: (r.get("design_type") or "").lower(),
         }
         fn = _sk.get(sort_col)
@@ -411,16 +452,23 @@ def _build_st_table(rows, sort_col, sort_dir, filters):
         stype    = str(r.get("story_type") or "—")
         design   = str(r.get("design_type") or "—")
         designer = str(r.get("main_designer") or "—").strip().rstrip(",")
-        qa       = str(r.get("responsible_qa") or "—")
+        qa       = str(r.get("main_qa") or "—")
 
-        est_s = str(r["est_start_date"]) if r.get("est_start_date") else "—"
-        est_e = str(r["est_end_date"])   if r.get("est_end_date")   else "—"
+        est_s_val = str(r["est_start_date"]) if r.get("est_start_date") else ""
+        est_e_val = str(r["est_end_date"])   if r.get("est_end_date")   else ""
         est_h = f"{float(r['est_hours']):.0f}h"    if r.get("est_hours")    else "—"
         act_h = f"{float(r['actual_hours']):.0f}h" if r.get("actual_hours") else "—"
 
         st_fg, st_bg = _ST_STATUS_COLOR.get(status, (MT, C2))
         sz_col       = _ST_SIZE_COLOR.get(size, MT)
         design_icon  = _ST_DESIGN_ICON.get(design, "")
+
+        _date_input_style = {
+            "background": "transparent", "border": f"1px solid {BD}",
+            "borderRadius": "4px", "fontSize": "11px",
+            "fontFamily": "monospace", "padding": "2px 4px",
+            "cursor": "pointer", "width": "112px", "outline": "none",
+        }
 
         body_rows.append(html.Tr([
             html.Td(html.A(str(wid), href=f"{ADO_BASE_URL}{wid}", target="_blank",
@@ -437,10 +485,18 @@ def _build_st_table(rows, sort_col, sort_dir, filters):
             html.Td(size, style={**_TD, "color": sz_col, "fontWeight": "600", "whiteSpace": "nowrap"}),
             _chip(status, st_fg, st_bg),
             html.Td(stype, style={**_TD, "color": MT, "fontSize": "11px"}),
-            html.Td(est_s, style={**_TD, "fontFamily": "monospace", "fontSize": "11px",
-                                  "color": B if est_s != "—" else MT, "whiteSpace": "nowrap"}),
-            html.Td(est_e, style={**_TD, "fontFamily": "monospace", "fontSize": "11px",
-                                  "color": B if est_e != "—" else MT, "whiteSpace": "nowrap"}),
+            html.Td(dcc.Input(
+                type="date", debounce=True,
+                value=est_s_val,
+                id={"type": "st-date-input", "col": "est_start_date", "wid": wid},
+                style={**_date_input_style, "color": B if est_s_val else MT},
+            ), style={**_TD, "padding": "4px 6px"}),
+            html.Td(dcc.Input(
+                type="date", debounce=True,
+                value=est_e_val,
+                id={"type": "st-date-input", "col": "est_end_date", "wid": wid},
+                style={**_date_input_style, "color": B if est_e_val else MT},
+            ), style={**_TD, "padding": "4px 6px"}),
             html.Td(est_h, style={**_TD, "textAlign": "right", "fontFamily": "monospace",
                                   "color": TX if est_h != "—" else MT}),
             html.Td(act_h, style={**_TD, "textAlign": "right", "fontFamily": "monospace",
@@ -556,6 +612,7 @@ def _build_story_tracking_tab() -> html.Div:
 
     return html.Div([
         dcc.Store(id="st-sort-store", data={"col": None, "dir": None}),
+        dcc.Store(id="st-save-ts",   data=0),
         html.Div([
             html.Span("STORY TRACKING", style={
                 "fontSize": "9px", "fontWeight": "800", "color": B,
@@ -3883,7 +3940,23 @@ def _update_st_sort(all_clicks, current):
     return {"col": col if new_dir else None, "dir": new_dir}
 
 
-# ── Story Tracking — re-render table on sort/filter change ───────────────────
+# ── Story Tracking — save date edits ─────────────────────────────────────────
+@callback(
+    Output("st-save-ts", "data"),
+    Input({"type": "st-date-input", "col": ALL, "wid": ALL}, "value"),
+    prevent_initial_call=True,
+)
+def _save_st_date_cb(values):
+    import time as _time
+    tid = ctx.triggered_id
+    if not tid or not isinstance(tid, dict):
+        raise dash.exceptions.PreventUpdate
+    val = ctx.triggered[0]["value"]
+    _save_st_date(int(tid["wid"]), tid["col"], val or None)
+    return int(_time.time())
+
+
+# ── Story Tracking — re-render table on sort/filter/save change ──────────────
 @callback(
     Output("st-table-wrapper", "children"),
     Input("st-sort-store",    "data"),
@@ -3892,9 +3965,10 @@ def _update_st_sort(all_clicks, current):
     Input("st-flt-size",      "value"),
     Input("st-flt-area",      "value"),
     Input("st-flt-owner",     "value"),
+    Input("st-save-ts",       "data"),
     prevent_initial_call=True,
 )
-def _render_st_table(sort_state, pri, status, size, area, owner):
+def _render_st_table(sort_state, pri, status, size, area, owner, _save_ts):
     rows = _load_story_tracking_data()
     filters = {
         "priority": pri    or [],
