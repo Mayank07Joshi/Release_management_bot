@@ -350,29 +350,36 @@ def _st_sort_th(lbl, col_key, sort_col, sort_dir):
 _ST_PAGE_SIZE = 50
 
 
+def _apply_st_filters(rows, filters):
+    """Return filtered copy of rows; shared by table builder and KPI callback."""
+    if not filters:
+        return rows
+    if filters.get("priority"):
+        pset = set(filters["priority"])
+        rows = [r for r in rows
+                if (f"P{int(r['priority'])}" if r.get("priority") else "—") in pset]
+    if filters.get("status"):
+        sset = set(filters["status"])
+        rows = [r for r in rows if (r.get("story_status") or "") in sset]
+    if filters.get("size"):
+        zset = set(filters["size"])
+        rows = [r for r in rows if (r.get("story_size") or "") in zset]
+    if filters.get("area"):
+        aset = set(filters["area"])
+        rows = [r for r in rows if (r.get("area") or "") in aset]
+    if filters.get("owner"):
+        oset = set(filters["owner"])
+        rows = [r for r in rows if (r.get("story_owner") or "") in oset]
+    if filters.get("state"):
+        stset = set(filters["state"])
+        rows = [r for r in rows if (r.get("state") or "") in stset]
+    return rows
+
+
 def _build_st_table(rows, sort_col, sort_dir, filters, page=0):
     """Render the story tracking HTML table with filters and sort applied."""
     # ── Filter ────────────────────────────────────────────────────────────────
-    if filters:
-        if filters.get("priority"):
-            pset = set(filters["priority"])
-            rows = [r for r in rows
-                    if (f"P{int(r['priority'])}" if r.get("priority") else "—") in pset]
-        if filters.get("status"):
-            sset = set(filters["status"])
-            rows = [r for r in rows if (r.get("story_status") or "") in sset]
-        if filters.get("size"):
-            zset = set(filters["size"])
-            rows = [r for r in rows if (r.get("story_size") or "") in zset]
-        if filters.get("area"):
-            aset = set(filters["area"])
-            rows = [r for r in rows if (r.get("area") or "") in aset]
-        if filters.get("owner"):
-            oset = set(filters["owner"])
-            rows = [r for r in rows if (r.get("story_owner") or "") in oset]
-        if filters.get("state"):
-            stset = set(filters["state"])
-            rows = [r for r in rows if (r.get("state") or "") in stset]
+    rows = _apply_st_filters(rows, filters)
 
     # ── Sort ──────────────────────────────────────────────────────────────────
     if sort_col and sort_dir:
@@ -3929,10 +3936,9 @@ def _update_st_sort(all_clicks, current):
     return {"col": col if new_dir else None, "dir": new_dir}
 
 
-# ── Story Tracking — lazy-load header + KPI + filter options on tab click ────
+# ── Story Tracking — lazy-load header + filter options on tab click ──────────
 @callback(
     Output("st-header",       "children"),
-    Output("st-kpi-row",      "children"),
     Output("st-flt-priority", "options"),
     Output("st-flt-status",   "options"),
     Output("st-flt-size",     "options"),
@@ -3947,35 +3953,7 @@ def _activate_tracking_tab(tab):
         raise dash.exceptions.PreventUpdate
 
     rows = _load_story_tracking_data()
-    total      = len(rows)
-    complete   = sum(1 for r in rows if (r.get("story_status") or "") == "Complete")
-    wip        = sum(1 for r in rows if (r.get("story_status") or "").lower() == "inprogress")
-    with_dates = sum(1 for r in rows if r.get("est_start_date"))
-    est_hrs    = sum(float(r["est_hours"])    for r in rows if r.get("est_hours"))
-    act_hrs    = sum(float(r["actual_hours"]) for r in rows if r.get("actual_hours"))
-
-    def _kpi(label, value, sub="", color=None):
-        return html.Div([
-            html.Div(str(value), style={
-                "fontSize": "22px", "fontWeight": "700",
-                "color": color or TX, "lineHeight": "1.1",
-            }),
-            html.Div(label, style={"fontSize": "11px", "color": MT, "marginTop": "2px"}),
-            html.Div(sub, style={"fontSize": "10px", "color": MT}) if sub else None,
-        ], style={
-            "background": CD, "border": f"1px solid {BD}", "borderRadius": "10px",
-            "padding": "14px 18px", "flex": "1", "minWidth": "90px",
-        })
-
-    kpi_children = [
-        _kpi("Total stories",   total),
-        _kpi("Complete",        complete,  color=G),
-        _kpi("In Progress",     wip,       color=A),
-        _kpi("With plan dates", with_dates),
-        _kpi("Est. hours",      f"{est_hrs:,.0f}"),
-        _kpi("Actual hours",    f"{act_hrs:,.0f}",
-             sub=f"{round(act_hrs/est_hrs*100)}% logged" if est_hrs else ""),
-    ]
+    total = len(rows)
 
     header_children = [
         html.Span("STORY TRACKING", style={
@@ -3997,7 +3975,6 @@ def _activate_tracking_tab(tab):
 
     return (
         header_children,
-        kpi_children,
         [{"label": v, "value": v} for v in pris],
         [{"label": v, "value": v} for v in statuses],
         [{"label": v, "value": v} for v in sizes],
@@ -4005,6 +3982,64 @@ def _activate_tracking_tab(tab):
         [{"label": v, "value": v} for v in owners],
         [{"label": v, "value": v} for v in states],
     )
+
+
+# ── Story Tracking — KPI cards (update on filter change) ─────────────────────
+@callback(
+    Output("st-kpi-row", "children"),
+    Input("plan-main-tab",   "data"),
+    Input("st-flt-priority", "value"),
+    Input("st-flt-status",   "value"),
+    Input("st-flt-size",     "value"),
+    Input("st-flt-area",     "value"),
+    Input("st-flt-owner",    "value"),
+    Input("st-flt-state",    "value"),
+    Input("st-save-ts",      "data"),
+    prevent_initial_call=True,
+)
+def _update_st_kpis(tab, pri, status, size, area, owner, state, _save_ts):
+    if tab and tab != "tracking":
+        raise dash.exceptions.PreventUpdate
+    all_rows = _load_story_tracking_data()
+    filters  = {
+        "priority": pri    or [],
+        "status":   status or [],
+        "size":     size   or [],
+        "area":     area   or [],
+        "owner":    owner  or [],
+        "state":    state  or [],
+    }
+    rows = _apply_st_filters(all_rows, filters)
+
+    total      = len(rows)
+    complete   = sum(1 for r in rows if (r.get("story_status") or "") == "Complete")
+    wip        = sum(1 for r in rows if (r.get("story_status") or "").lower() == "inprogress")
+    with_dates = sum(1 for r in rows if r.get("est_start_date"))
+    est_hrs    = sum(float(r["est_hours"])    for r in rows if r.get("est_hours"))
+    act_hrs    = sum(float(r["actual_hours"]) for r in rows if r.get("actual_hours"))
+
+    def _kpi(label, value, sub="", color=None):
+        return html.Div([
+            html.Div(str(value), style={
+                "fontSize": "22px", "fontWeight": "700",
+                "color": color or TX, "lineHeight": "1.1",
+            }),
+            html.Div(label, style={"fontSize": "11px", "color": MT, "marginTop": "2px"}),
+            html.Div(sub, style={"fontSize": "10px", "color": MT}) if sub else None,
+        ], style={
+            "background": CD, "border": f"1px solid {BD}", "borderRadius": "10px",
+            "padding": "14px 18px", "flex": "1", "minWidth": "90px",
+        })
+
+    return [
+        _kpi("Total stories",   total),
+        _kpi("Complete",        complete,  color=G),
+        _kpi("In Progress",     wip,       color=A),
+        _kpi("With plan dates", with_dates),
+        _kpi("Est. hours",      f"{est_hrs:,.0f}"),
+        _kpi("Actual hours",    f"{act_hrs:,.0f}",
+             sub=f"{round(act_hrs/est_hrs*100)}% logged" if est_hrs else ""),
+    ]
 
 
 # ── Story Tracking — save date edits ─────────────────────────────────────────
