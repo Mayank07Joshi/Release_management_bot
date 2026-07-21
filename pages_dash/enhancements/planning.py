@@ -294,6 +294,7 @@ def _load_story_tracking_data() -> list[dict]:
                 LEFT JOIN agg_story_estimation e USING (work_item_id)
                 LEFT JOIN agg_gantt_items      g USING (work_item_id)
                 WHERE w.work_item_type = 'Enhancement'
+                  AND w.state NOT IN ('Closed', 'Resolved', 'Removed', 'Rejected')
                 ORDER BY w.priority NULLS LAST, w.work_item_id
             """)).fetchall()
         result = [dict(r._mapping) for r in rows]
@@ -524,48 +525,7 @@ def _build_st_table(rows, sort_col, sort_dir, filters):
 
 
 def _build_story_tracking_tab() -> html.Div:
-    """Build Story Tracking tab: stores + KPI bar + filter row + table wrapper."""
-    rows = _load_story_tracking_data()
-
-    total      = len(rows)
-    complete   = sum(1 for r in rows if (r.get("story_status") or "") == "Complete")
-    wip        = sum(1 for r in rows if (r.get("story_status") or "").lower() == "inprogress")
-    with_dates = sum(1 for r in rows if r.get("est_start_date"))
-    est_hrs    = sum(float(r["est_hours"])    for r in rows if r.get("est_hours"))
-    act_hrs    = sum(float(r["actual_hours"]) for r in rows if r.get("actual_hours"))
-
-    def _kpi(label, value, sub="", color=None):
-        return html.Div([
-            html.Div(str(value), style={
-                "fontSize": "22px", "fontWeight": "700",
-                "color": color or TX, "lineHeight": "1.1",
-            }),
-            html.Div(label, style={"fontSize": "11px", "color": MT, "marginTop": "2px"}),
-            html.Div(sub, style={"fontSize": "10px", "color": MT}) if sub else None,
-        ], style={
-            "background": CD, "border": f"1px solid {BD}", "borderRadius": "10px",
-            "padding": "14px 18px", "flex": "1", "minWidth": "90px",
-        })
-
-    kpi_row = html.Div([
-        _kpi("Total stories",   total),
-        _kpi("Complete",        complete,  color=G),
-        _kpi("In Progress",     wip,       color=A),
-        _kpi("With plan dates", with_dates),
-        _kpi("Est. hours",      f"{est_hrs:,.0f}"),
-        _kpi("Actual hours",    f"{act_hrs:,.0f}",
-             sub=f"{round(act_hrs/est_hrs*100)}% logged" if est_hrs else ""),
-    ], style={"display": "flex", "gap": "10px", "marginBottom": "14px"})
-
-    # ── Filter options derived from loaded data ────────────────────────────────
-    pris     = sorted({f"P{int(r['priority'])}" for r in rows if r.get("priority")})
-    statuses = [s for s in ["Complete", "Inprogress", "Incomplete", "Not Required"]
-                if any((r.get("story_status") or "") == s for r in rows)]
-    sizes    = [s for s in ["Big", "Medium", "Small", "Very small"]
-                if any((r.get("story_size") or "") == s for r in rows)]
-    areas    = sorted({str(r.get("area") or "") for r in rows if r.get("area")})
-    owners   = sorted({str(r.get("story_owner") or "") for r in rows if r.get("story_owner")})
-
+    """Shell only — zero DB cost at build time. All content loaded lazily on tab click."""
     _DD = {"fontSize": "12px", "flex": "1"}
 
     def _flbl(txt):
@@ -575,31 +535,28 @@ def _build_story_tracking_tab() -> html.Div:
             "whiteSpace": "nowrap", "marginRight": "6px",
         })
 
+    # Dropdowns must exist in DOM at build time so Dash registers them.
+    # Options populated by _activate_tracking_tab callback on first tab click.
     filter_bar = html.Div([
         html.Div([_flbl("Priority"), dcc.Dropdown(
-            id="st-flt-priority",
-            options=[{"label": v, "value": v} for v in pris],
-            multi=True, placeholder="All…", className="dark-dropdown", style=_DD,
+            id="st-flt-priority", options=[], multi=True, placeholder="All…",
+            className="dark-dropdown", style=_DD,
         )], style={"display": "flex", "alignItems": "center", "flex": "1", "minWidth": "140px"}),
         html.Div([_flbl("Status"), dcc.Dropdown(
-            id="st-flt-status",
-            options=[{"label": v, "value": v} for v in statuses],
-            multi=True, placeholder="All…", className="dark-dropdown", style=_DD,
+            id="st-flt-status", options=[], multi=True, placeholder="All…",
+            className="dark-dropdown", style=_DD,
         )], style={"display": "flex", "alignItems": "center", "flex": "1.4", "minWidth": "180px"}),
         html.Div([_flbl("Size"), dcc.Dropdown(
-            id="st-flt-size",
-            options=[{"label": v, "value": v} for v in sizes],
-            multi=True, placeholder="All…", className="dark-dropdown", style=_DD,
+            id="st-flt-size", options=[], multi=True, placeholder="All…",
+            className="dark-dropdown", style=_DD,
         )], style={"display": "flex", "alignItems": "center", "flex": "1", "minWidth": "140px"}),
         html.Div([_flbl("Area"), dcc.Dropdown(
-            id="st-flt-area",
-            options=[{"label": v, "value": v} for v in areas],
-            multi=True, placeholder="All…", className="dark-dropdown", style=_DD,
+            id="st-flt-area", options=[], multi=True, placeholder="All…",
+            className="dark-dropdown", style=_DD,
         )], style={"display": "flex", "alignItems": "center", "flex": "1.4", "minWidth": "180px"}),
         html.Div([_flbl("Owner"), dcc.Dropdown(
-            id="st-flt-owner",
-            options=[{"label": v, "value": v} for v in owners],
-            multi=True, placeholder="All…", className="dark-dropdown", style=_DD,
+            id="st-flt-owner", options=[], multi=True, placeholder="All…",
+            className="dark-dropdown", style=_DD,
         )], style={"display": "flex", "alignItems": "center", "flex": "1", "minWidth": "140px"}),
     ], style={
         "display": "flex", "gap": "10px", "flexWrap": "wrap", "alignItems": "center",
@@ -610,24 +567,10 @@ def _build_story_tracking_tab() -> html.Div:
     return html.Div([
         dcc.Store(id="st-sort-store", data={"col": None, "dir": None}),
         dcc.Store(id="st-save-ts",   data=0),
-        html.Div([
-            html.Span("STORY TRACKING", style={
-                "fontSize": "9px", "fontWeight": "800", "color": B,
-                "letterSpacing": "2px", "textTransform": "uppercase",
-            }),
-            html.Span(f" · {total} stories · BA planning tracker",
-                      style={"fontSize": "11px", "color": MT, "marginLeft": "8px"}),
-        ], style={"marginBottom": "14px"}),
-        kpi_row,
+        html.Div(id="st-header",  style={"marginBottom": "14px"}),
+        html.Div(id="st-kpi-row", style={"display": "flex", "gap": "10px", "marginBottom": "14px"}),
         filter_bar,
-        html.Div(
-            html.Div(
-                _build_st_table(rows, None, None, {}),
-                style={"background": CD, "border": f"1px solid {BD}",
-                       "borderRadius": "12px", "overflow": "hidden"},
-            ),
-            id="st-table-wrapper",
-        ),
+        html.Div(id="st-table-wrapper"),
     ], style={"padding": "4px 0"})
 
 
@@ -3937,6 +3880,81 @@ def _update_st_sort(all_clicks, current):
     return {"col": col if new_dir else None, "dir": new_dir}
 
 
+# ── Story Tracking — lazy-load header + KPI + filter options on tab click ────
+@callback(
+    Output("st-header",       "children"),
+    Output("st-kpi-row",      "children"),
+    Output("st-flt-priority", "options"),
+    Output("st-flt-status",   "options"),
+    Output("st-flt-size",     "options"),
+    Output("st-flt-area",     "options"),
+    Output("st-flt-owner",    "options"),
+    Input("plan-main-tab",    "data"),
+    prevent_initial_call=True,
+)
+def _activate_tracking_tab(tab):
+    if tab != "tracking":
+        raise dash.exceptions.PreventUpdate
+
+    rows = _load_story_tracking_data()
+    total      = len(rows)
+    complete   = sum(1 for r in rows if (r.get("story_status") or "") == "Complete")
+    wip        = sum(1 for r in rows if (r.get("story_status") or "").lower() == "inprogress")
+    with_dates = sum(1 for r in rows if r.get("est_start_date"))
+    est_hrs    = sum(float(r["est_hours"])    for r in rows if r.get("est_hours"))
+    act_hrs    = sum(float(r["actual_hours"]) for r in rows if r.get("actual_hours"))
+
+    def _kpi(label, value, sub="", color=None):
+        return html.Div([
+            html.Div(str(value), style={
+                "fontSize": "22px", "fontWeight": "700",
+                "color": color or TX, "lineHeight": "1.1",
+            }),
+            html.Div(label, style={"fontSize": "11px", "color": MT, "marginTop": "2px"}),
+            html.Div(sub, style={"fontSize": "10px", "color": MT}) if sub else None,
+        ], style={
+            "background": CD, "border": f"1px solid {BD}", "borderRadius": "10px",
+            "padding": "14px 18px", "flex": "1", "minWidth": "90px",
+        })
+
+    kpi_children = [
+        _kpi("Total stories",   total),
+        _kpi("Complete",        complete,  color=G),
+        _kpi("In Progress",     wip,       color=A),
+        _kpi("With plan dates", with_dates),
+        _kpi("Est. hours",      f"{est_hrs:,.0f}"),
+        _kpi("Actual hours",    f"{act_hrs:,.0f}",
+             sub=f"{round(act_hrs/est_hrs*100)}% logged" if est_hrs else ""),
+    ]
+
+    header_children = [
+        html.Span("STORY TRACKING", style={
+            "fontSize": "9px", "fontWeight": "800", "color": B,
+            "letterSpacing": "2px", "textTransform": "uppercase",
+        }),
+        html.Span(f" · {total} active stories · BA planning tracker",
+                  style={"fontSize": "11px", "color": MT, "marginLeft": "8px"}),
+    ]
+
+    pris     = sorted({f"P{int(r['priority'])}" for r in rows if r.get("priority")})
+    statuses = [s for s in ["Complete", "Inprogress", "Incomplete", "Not Required"]
+                if any((r.get("story_status") or "") == s for r in rows)]
+    sizes    = [s for s in ["Big", "Medium", "Small", "Very small"]
+                if any((r.get("story_size") or "") == s for r in rows)]
+    areas    = sorted({str(r.get("area") or "") for r in rows if r.get("area")})
+    owners   = sorted({str(r.get("story_owner") or "") for r in rows if r.get("story_owner")})
+
+    return (
+        header_children,
+        kpi_children,
+        [{"label": v, "value": v} for v in pris],
+        [{"label": v, "value": v} for v in statuses],
+        [{"label": v, "value": v} for v in sizes],
+        [{"label": v, "value": v} for v in areas],
+        [{"label": v, "value": v} for v in owners],
+    )
+
+
 # ── Story Tracking — save date edits ─────────────────────────────────────────
 @callback(
     Output("st-save-ts", "data"),
@@ -3953,9 +3971,10 @@ def _save_st_date_cb(dates):
     return int(_time.time())
 
 
-# ── Story Tracking — re-render table on sort/filter/save change ──────────────
+# ── Story Tracking — re-render table on tab activation / sort / filter / save ─
 @callback(
     Output("st-table-wrapper", "children"),
+    Input("plan-main-tab",    "data"),
     Input("st-sort-store",    "data"),
     Input("st-flt-priority",  "value"),
     Input("st-flt-status",    "value"),
@@ -3965,7 +3984,9 @@ def _save_st_date_cb(dates):
     Input("st-save-ts",       "data"),
     prevent_initial_call=True,
 )
-def _render_st_table(sort_state, pri, status, size, area, owner, _save_ts):
+def _render_st_table(tab, sort_state, pri, status, size, area, owner, _save_ts):
+    if tab and tab != "tracking":
+        raise dash.exceptions.PreventUpdate
     rows = _load_story_tracking_data()
     filters = {
         "priority": pri    or [],
