@@ -294,7 +294,8 @@ def _load_story_tracking_data() -> list[dict]:
                 LEFT JOIN agg_story_estimation e USING (work_item_id)
                 LEFT JOIN agg_gantt_items      g USING (work_item_id)
                 WHERE w.work_item_type = 'Enhancement'
-                  AND w.state NOT IN ('Closed', 'Resolved', 'Removed', 'Rejected')
+                  AND w.state NOT IN ('Closed', 'Resolved', 'Removed', 'Rejected',
+                                     'Userstory Update', 'On Hold', 'Deferred', 'Cancelled')
                 ORDER BY w.priority NULLS LAST, w.work_item_id
             """)).fetchall()
         result = [dict(r._mapping) for r in rows]
@@ -368,6 +369,9 @@ def _build_st_table(rows, sort_col, sort_dir, filters):
         if filters.get("owner"):
             oset = set(filters["owner"])
             rows = [r for r in rows if (r.get("story_owner") or "") in oset]
+        if filters.get("state"):
+            stset = set(filters["state"])
+            rows = [r for r in rows if (r.get("state") or "") in stset]
 
     # ── Sort ──────────────────────────────────────────────────────────────────
     if sort_col and sort_dir:
@@ -556,6 +560,10 @@ def _build_story_tracking_tab() -> html.Div:
         )], style={"display": "flex", "alignItems": "center", "flex": "1.4", "minWidth": "180px"}),
         html.Div([_flbl("Owner"), dcc.Dropdown(
             id="st-flt-owner", options=[], multi=True, placeholder="All…",
+            className="dark-dropdown", style=_DD,
+        )], style={"display": "flex", "alignItems": "center", "flex": "1", "minWidth": "140px"}),
+        html.Div([_flbl("State"), dcc.Dropdown(
+            id="st-flt-state", options=[], multi=True, placeholder="All…",
             className="dark-dropdown", style=_DD,
         )], style={"display": "flex", "alignItems": "center", "flex": "1", "minWidth": "140px"}),
     ], style={
@@ -3889,6 +3897,7 @@ def _update_st_sort(all_clicks, current):
     Output("st-flt-size",     "options"),
     Output("st-flt-area",     "options"),
     Output("st-flt-owner",    "options"),
+    Output("st-flt-state",    "options"),
     Input("plan-main-tab",    "data"),
     prevent_initial_call=True,
 )
@@ -3943,6 +3952,7 @@ def _activate_tracking_tab(tab):
                 if any((r.get("story_size") or "") == s for r in rows)]
     areas    = sorted({str(r.get("area") or "") for r in rows if r.get("area")})
     owners   = sorted({str(r.get("story_owner") or "") for r in rows if r.get("story_owner")})
+    states   = sorted({str(r.get("state") or "") for r in rows if r.get("state")})
 
     return (
         header_children,
@@ -3952,6 +3962,7 @@ def _activate_tracking_tab(tab):
         [{"label": v, "value": v} for v in sizes],
         [{"label": v, "value": v} for v in areas],
         [{"label": v, "value": v} for v in owners],
+        [{"label": v, "value": v} for v in states],
     )
 
 
@@ -3981,10 +3992,11 @@ def _save_st_date_cb(dates):
     Input("st-flt-size",      "value"),
     Input("st-flt-area",      "value"),
     Input("st-flt-owner",     "value"),
+    Input("st-flt-state",     "value"),
     Input("st-save-ts",       "data"),
     prevent_initial_call=True,
 )
-def _render_st_table(tab, sort_state, pri, status, size, area, owner, _save_ts):
+def _render_st_table(tab, sort_state, pri, status, size, area, owner, state, _save_ts):
     if tab and tab != "tracking":
         raise dash.exceptions.PreventUpdate
     rows = _load_story_tracking_data()
@@ -3994,6 +4006,7 @@ def _render_st_table(tab, sort_state, pri, status, size, area, owner, _save_ts):
         "size":     size   or [],
         "area":     area   or [],
         "owner":    owner  or [],
+        "state":    state  or [],
     }
     sort_col = (sort_state or {}).get("col")
     sort_dir = (sort_state or {}).get("dir")
