@@ -285,6 +285,7 @@ def _load_story_tracking_data() -> list[dict]:
                     w.story_type,
                     w.main_qa,
                     w.design_type,
+                    w.iteration_path,
                     t.est_start_date,
                     t.est_end_date,
                     COALESCE(e.task_est_sum, 0) AS est_hours,
@@ -373,6 +374,12 @@ def _apply_st_filters(rows, filters):
     if filters.get("state"):
         stset = set(filters["state"])
         rows = [r for r in rows if (r.get("state") or "") in stset]
+    if filters.get("release"):
+        rset = set(filters["release"])
+        rows = [r for r in rows if (r.get("release_date") or "") in rset]
+    if filters.get("iteration"):
+        iset = set(filters["iteration"])
+        rows = [r for r in rows if (r.get("iteration_path") or "") in iset]
     return rows
 
 
@@ -613,6 +620,14 @@ def _build_story_tracking_tab() -> html.Div:
             id="st-flt-state", options=[], multi=True, placeholder="All…",
             className="dark-dropdown", style=_DD,
         )], style={"display": "flex", "alignItems": "center", "flex": "1", "minWidth": "140px"}),
+        html.Div([_flbl("Release"), dcc.Dropdown(
+            id="st-flt-release", options=[], multi=True, placeholder="All…",
+            className="dark-dropdown", style=_DD,
+        )], style={"display": "flex", "alignItems": "center", "flex": "1.2", "minWidth": "160px"}),
+        html.Div([_flbl("Iteration"), dcc.Dropdown(
+            id="st-flt-iteration", options=[], multi=True, placeholder="All…",
+            className="dark-dropdown", style=_DD,
+        )], style={"display": "flex", "alignItems": "center", "flex": "1.6", "minWidth": "200px"}),
     ], style={
         "display": "flex", "gap": "10px", "flexWrap": "wrap", "alignItems": "center",
         "background": CD, "border": f"1px solid {BD}", "borderRadius": "10px",
@@ -3943,8 +3958,10 @@ def _update_st_sort(all_clicks, current):
     Output("st-flt-status",   "options"),
     Output("st-flt-size",     "options"),
     Output("st-flt-area",     "options"),
-    Output("st-flt-owner",    "options"),
-    Output("st-flt-state",    "options"),
+    Output("st-flt-owner",     "options"),
+    Output("st-flt-state",     "options"),
+    Output("st-flt-release",   "options"),
+    Output("st-flt-iteration", "options"),
     Input("plan-main-tab",    "data"),
     prevent_initial_call=True,
 )
@@ -3972,6 +3989,8 @@ def _activate_tracking_tab(tab):
     areas    = sorted({str(r.get("area") or "") for r in rows if r.get("area")})
     owners   = sorted({str(r.get("story_owner") or "") for r in rows if r.get("story_owner")})
     states   = sorted({str(r.get("state") or "") for r in rows if r.get("state")})
+    releases = sorted({str(r.get("release_date") or "") for r in rows if r.get("release_date")})
+    iters    = sorted({str(r.get("iteration_path") or "") for r in rows if r.get("iteration_path")})
 
     return (
         header_children,
@@ -3981,6 +4000,8 @@ def _activate_tracking_tab(tab):
         [{"label": v, "value": v} for v in areas],
         [{"label": v, "value": v} for v in owners],
         [{"label": v, "value": v} for v in states],
+        [{"label": v, "value": v} for v in releases],
+        [{"label": v, "value": v} for v in iters],
     )
 
 
@@ -3992,22 +4013,26 @@ def _activate_tracking_tab(tab):
     Input("st-flt-status",   "value"),
     Input("st-flt-size",     "value"),
     Input("st-flt-area",     "value"),
-    Input("st-flt-owner",    "value"),
-    Input("st-flt-state",    "value"),
-    Input("st-save-ts",      "data"),
+    Input("st-flt-owner",     "value"),
+    Input("st-flt-state",     "value"),
+    Input("st-flt-release",   "value"),
+    Input("st-flt-iteration", "value"),
+    Input("st-save-ts",       "data"),
     prevent_initial_call=True,
 )
-def _update_st_kpis(tab, pri, status, size, area, owner, state, _save_ts):
+def _update_st_kpis(tab, pri, status, size, area, owner, state, release, iteration, _save_ts):
     if tab and tab != "tracking":
         raise dash.exceptions.PreventUpdate
     all_rows = _load_story_tracking_data()
     filters  = {
-        "priority": pri    or [],
-        "status":   status or [],
-        "size":     size   or [],
-        "area":     area   or [],
-        "owner":    owner  or [],
-        "state":    state  or [],
+        "priority":  pri       or [],
+        "status":    status    or [],
+        "size":      size      or [],
+        "area":      area      or [],
+        "owner":     owner     or [],
+        "state":     state     or [],
+        "release":   release   or [],
+        "iteration": iteration or [],
     }
     rows = _apply_st_filters(all_rows, filters)
 
@@ -4075,6 +4100,8 @@ def _save_st_date_cb(values):
     Input("st-flt-area",      "value"),
     Input("st-flt-owner",     "value"),
     Input("st-flt-state",     "value"),
+    Input("st-flt-release",   "value"),
+    Input("st-flt-iteration", "value"),
     prevent_initial_call=True,
 )
 def _reset_st_page(*_):
@@ -4112,19 +4139,23 @@ def _change_st_page(prev_clicks, next_clicks, page):
     State("st-flt-area",      "value"),
     State("st-flt-owner",     "value"),
     State("st-flt-state",     "value"),
+    State("st-flt-release",   "value"),
+    State("st-flt-iteration", "value"),
     prevent_initial_call=True,
 )
-def _render_st_table(page, tab, _save_ts, sort_state, pri, status, size, area, owner, state):
+def _render_st_table(page, tab, _save_ts, sort_state, pri, status, size, area, owner, state, release, iteration):
     if tab and tab != "tracking":
         raise dash.exceptions.PreventUpdate
     rows = _load_story_tracking_data()
     filters = {
-        "priority": pri    or [],
-        "status":   status or [],
-        "size":     size   or [],
-        "area":     area   or [],
-        "owner":    owner  or [],
-        "state":    state  or [],
+        "priority":  pri       or [],
+        "status":    status    or [],
+        "size":      size      or [],
+        "area":      area      or [],
+        "owner":     owner     or [],
+        "state":     state     or [],
+        "release":   release   or [],
+        "iteration": iteration or [],
     }
     sort_col = (sort_state or {}).get("col")
     sort_dir = (sort_state or {}).get("dir")
