@@ -294,8 +294,6 @@ def _load_story_tracking_data() -> list[dict]:
                 LEFT JOIN agg_story_estimation e USING (work_item_id)
                 LEFT JOIN agg_gantt_items      g USING (work_item_id)
                 WHERE w.work_item_type = 'Enhancement'
-                  AND w.state NOT IN ('Closed', 'Resolved', 'Removed', 'Rejected',
-                                     'Userstory Update', 'On Hold', 'Deferred', 'Cancelled')
                 ORDER BY w.priority NULLS LAST, w.work_item_id
             """)).fetchall()
         result = [dict(r._mapping) for r in rows]
@@ -483,22 +481,28 @@ def _build_st_table(rows, sort_col, sort_dir, filters):
             html.Td(size, style={**_TD, "color": sz_col, "fontWeight": "600", "whiteSpace": "nowrap"}),
             _chip(status, st_fg, st_bg),
             html.Td(stype, style={**_TD, "color": MT, "fontSize": "11px"}),
-            html.Td(dcc.DatePickerSingle(
+            html.Td(dcc.Input(
+                type="text", debounce=True,
+                value=est_s_val, placeholder="YYYY-MM-DD",
                 id={"type": "st-date-input", "col": "est_start_date", "wid": wid},
-                date=est_s_val or None,
-                display_format="DD MMM YYYY",
-                placeholder="Set date…",
-                clearable=True,
-                style={"transform": "scale(0.85)", "transformOrigin": "left center"},
-            ), style={**_TD, "padding": "2px 6px"}),
-            html.Td(dcc.DatePickerSingle(
+                style={
+                    "background": "transparent", "border": f"1px solid {BD}",
+                    "borderRadius": "4px", "color": B if est_s_val else MT,
+                    "fontSize": "11px", "fontFamily": "monospace",
+                    "padding": "3px 6px", "width": "96px", "outline": "none",
+                },
+            ), style={**_TD, "padding": "4px 6px"}),
+            html.Td(dcc.Input(
+                type="text", debounce=True,
+                value=est_e_val, placeholder="YYYY-MM-DD",
                 id={"type": "st-date-input", "col": "est_end_date", "wid": wid},
-                date=est_e_val or None,
-                display_format="DD MMM YYYY",
-                placeholder="Set date…",
-                clearable=True,
-                style={"transform": "scale(0.85)", "transformOrigin": "left center"},
-            ), style={**_TD, "padding": "2px 6px"}),
+                style={
+                    "background": "transparent", "border": f"1px solid {BD}",
+                    "borderRadius": "4px", "color": B if est_e_val else MT,
+                    "fontSize": "11px", "fontFamily": "monospace",
+                    "padding": "3px 6px", "width": "96px", "outline": "none",
+                },
+            ), style={**_TD, "padding": "4px 6px"}),
             html.Td(est_h, style={**_TD, "textAlign": "right", "fontFamily": "monospace",
                                   "color": TX if est_h != "—" else MT}),
             html.Td(act_h, style={**_TD, "textAlign": "right", "fontFamily": "monospace",
@@ -3969,16 +3973,23 @@ def _activate_tracking_tab(tab):
 # ── Story Tracking — save date edits ─────────────────────────────────────────
 @callback(
     Output("st-save-ts", "data"),
-    Input({"type": "st-date-input", "col": ALL, "wid": ALL}, "date"),
+    Input({"type": "st-date-input", "col": ALL, "wid": ALL}, "value"),
     prevent_initial_call=True,
 )
-def _save_st_date_cb(dates):
+def _save_st_date_cb(values):
     import time as _time
     tid = ctx.triggered_id
     if not tid or not isinstance(tid, dict):
         raise dash.exceptions.PreventUpdate
-    val = ctx.triggered[0]["value"]
-    _save_st_date(int(tid["wid"]), tid["col"], val or None)
+    val = (ctx.triggered[0]["value"] or "").strip()
+    # Accept YYYY-MM-DD only; clear on empty or bad format
+    parsed = None
+    if val:
+        try:
+            parsed = date.fromisoformat(val)
+        except ValueError:
+            raise dash.exceptions.PreventUpdate
+    _save_st_date(int(tid["wid"]), tid["col"], parsed)
     return int(_time.time())
 
 
