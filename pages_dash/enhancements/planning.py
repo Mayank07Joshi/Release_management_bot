@@ -245,6 +245,194 @@ def _load_bug_data() -> list[dict]:
     return result
 
 
+def _load_story_tracking_data() -> list[dict]:
+    """Load BA story tracking rows joined with work_items_main."""
+    from data.loader import engine as _engine
+    from sqlalchemy import text as _text
+    try:
+        with _engine.connect() as conn:
+            rows = conn.execute(_text("""
+                SELECT
+                    w.work_item_id, w.title, w.story_owner, w.area,
+                    w.function, w.priority, w.main_developer, w.main_designer,
+                    w.state, w.release_date,
+                    t.est_start_date, t.est_end_date, t.est_hours, t.actual_hours,
+                    t.story_size, t.story_status, t.story_type, t.design_type,
+                    t.responsible_qa
+                FROM p_story_tracking t
+                JOIN work_items_main w USING (work_item_id)
+                ORDER BY w.priority NULLS LAST, w.work_item_id
+            """)).fetchall()
+        return [dict(r._mapping) for r in rows]
+    except Exception:
+        return []
+
+
+_ST_STATUS_COLOR = {
+    "Complete":     ("var(--green)",  "var(--green-dim)"),
+    "Inprogress":   ("var(--amber)",  "var(--amber-dim)"),
+    "Incomplete":   ("var(--text-secondary)", "var(--bg-hover)"),
+    "Not Required": ("var(--text-secondary)", "var(--bg-hover)"),
+}
+_ST_SIZE_COLOR = {"Big": P, "Medium": B, "Small": G, "Very small": MT}
+_ST_DESIGN_ICON = {"New Design": "✦", "Old Design": "○"}
+
+
+def _build_story_tracking_tab() -> html.Div:
+    """Build the Story Tracking tab content."""
+    rows = _load_story_tracking_data()
+
+    total     = len(rows)
+    complete  = sum(1 for r in rows if (r.get("story_status") or "") == "Complete")
+    wip       = sum(1 for r in rows if (r.get("story_status") or "").lower() in ("inprogress",))
+    with_dates = sum(1 for r in rows if r.get("est_start_date"))
+    est_hrs   = sum(float(r["est_hours"]) for r in rows if r.get("est_hours"))
+    act_hrs   = sum(float(r["actual_hours"]) for r in rows if r.get("actual_hours"))
+
+    def _kpi(label, value, sub="", color=None):
+        return html.Div([
+            html.Div(str(value), style={
+                "fontSize": "24px", "fontWeight": "700",
+                "color": color or TX, "lineHeight": "1.1",
+            }),
+            html.Div(label, style={"fontSize": "11px", "color": MT, "marginTop": "2px"}),
+            html.Div(sub, style={"fontSize": "10px", "color": MT}) if sub else None,
+        ], style={
+            "background": CD, "border": f"1px solid {BD}", "borderRadius": "10px",
+            "padding": "14px 18px", "minWidth": "110px",
+        })
+
+    kpi_row = html.Div([
+        _kpi("Total stories", total),
+        _kpi("Complete", complete, color=G),
+        _kpi("In Progress", wip, color=A),
+        _kpi("With plan dates", with_dates),
+        _kpi("Est. hours", f"{est_hrs:,.0f}"),
+        _kpi("Actual hours", f"{act_hrs:,.0f}",
+             sub=f"{round(act_hrs/est_hrs*100)}% logged" if est_hrs else ""),
+    ], style={"display": "flex", "gap": "12px", "flexWrap": "wrap", "marginBottom": "20px"})
+
+    # ── Table ──────────────────────────────────────────────────────────────────
+    _TH = {
+        "background": "var(--bg-hover)", "color": MT,
+        "fontSize": "10px", "fontWeight": "700", "letterSpacing": "1px",
+        "textTransform": "uppercase", "padding": "8px 10px",
+        "borderBottom": f"1px solid {BD}", "whiteSpace": "nowrap",
+        "position": "sticky", "top": "0", "zIndex": "5",
+    }
+    _TD = {
+        "padding": "7px 10px", "borderBottom": f"1px solid {BD}",
+        "fontSize": "12px", "color": TX, "verticalAlign": "middle",
+    }
+
+    header = html.Tr([
+        html.Th("ID",        style=_TH),
+        html.Th("Title",     style={**_TH, "minWidth": "260px"}),
+        html.Th("Owner",     style=_TH),
+        html.Th("Priority",  style=_TH),
+        html.Th("Area",      style=_TH),
+        html.Th("Function",  style=_TH),
+        html.Th("Size",      style=_TH),
+        html.Th("Status",    style=_TH),
+        html.Th("Type",      style=_TH),
+        html.Th("Est Start", style=_TH),
+        html.Th("Est End",   style=_TH),
+        html.Th("Est Hrs",   style=_TH),
+        html.Th("Actual",    style=_TH),
+        html.Th("Designer",  style=_TH),
+        html.Th("QA",        style=_TH),
+        html.Th("Design",    style=_TH),
+    ])
+
+    def _td_chip(text, fg, bg):
+        return html.Td(html.Span(text, style={
+            "background": bg, "color": fg, "borderRadius": "4px",
+            "padding": "2px 7px", "fontSize": "11px", "fontWeight": "600",
+            "whiteSpace": "nowrap",
+        }), style=_TD)
+
+    body_rows = []
+    for r in rows:
+        wid     = r["work_item_id"]
+        title   = str(r.get("title") or "")
+        owner   = str(r.get("story_owner") or "—")
+        area    = str(r.get("area") or "—")
+        func    = str(r.get("function") or "—")
+        pri_raw = r.get("priority")
+        pri     = f"P{int(pri_raw)}" if pri_raw else "—"
+        size    = str(r.get("story_size") or "—")
+        status  = str(r.get("story_status") or "—")
+        stype   = str(r.get("story_type") or "—")
+        design  = str(r.get("design_type") or "—")
+        designer = str(r.get("main_designer") or "—").strip().rstrip(",")
+        qa      = str(r.get("responsible_qa") or "—")
+
+        est_s = str(r["est_start_date"]) if r.get("est_start_date") else "—"
+        est_e = str(r["est_end_date"])   if r.get("est_end_date")   else "—"
+        est_h = f"{float(r['est_hours']):.0f}h"    if r.get("est_hours")    else "—"
+        act_h = f"{float(r['actual_hours']):.0f}h" if r.get("actual_hours") else "—"
+
+        st_fg, st_bg = _ST_STATUS_COLOR.get(status, (MT, C2))
+        sz_col = _ST_SIZE_COLOR.get(size, MT)
+        design_icon = _ST_DESIGN_ICON.get(design, "")
+
+        body_rows.append(html.Tr([
+            html.Td(html.A(str(wid), href=f"{ADO_BASE_URL}{wid}", target="_blank",
+                           style={"color": P, "textDecoration": "none", "fontFamily": "monospace",
+                                  "fontSize": "11px"}), style=_TD),
+            html.Td(html.Div(title, style={
+                "overflow": "hidden", "textOverflow": "ellipsis",
+                "whiteSpace": "nowrap", "maxWidth": "280px",
+            }), style=_TD),
+            html.Td(owner, style={**_TD, "color": MT, "fontSize": "11px"}),
+            _td_chip(pri, P, P_DIM),
+            html.Td(area, style={**_TD, "color": MT, "fontSize": "11px", "whiteSpace": "nowrap"}),
+            html.Td(func, style={**_TD, "color": MT, "fontSize": "11px"}),
+            html.Td(size, style={**_TD, "color": sz_col, "fontWeight": "600", "whiteSpace": "nowrap"}),
+            _td_chip(status, st_fg, st_bg),
+            html.Td(stype, style={**_TD, "color": MT, "fontSize": "11px"}),
+            html.Td(est_s, style={**_TD, "fontFamily": "monospace", "fontSize": "11px",
+                                  "color": B if est_s != "—" else MT, "whiteSpace": "nowrap"}),
+            html.Td(est_e, style={**_TD, "fontFamily": "monospace", "fontSize": "11px",
+                                  "color": B if est_e != "—" else MT, "whiteSpace": "nowrap"}),
+            html.Td(est_h, style={**_TD, "textAlign": "right", "fontFamily": "monospace",
+                                  "color": TX if est_h != "—" else MT}),
+            html.Td(act_h, style={**_TD, "textAlign": "right", "fontFamily": "monospace",
+                                  "color": G if act_h != "—" else MT}),
+            html.Td(html.Div(designer, style={
+                "overflow": "hidden", "textOverflow": "ellipsis",
+                "whiteSpace": "nowrap", "maxWidth": "120px",
+            }), style={**_TD, "fontSize": "11px", "color": MT}),
+            html.Td(qa, style={**_TD, "fontSize": "11px", "color": MT, "whiteSpace": "nowrap"}),
+            html.Td(f"{design_icon} {design}", style={**_TD, "fontSize": "11px", "color": MT,
+                                                       "whiteSpace": "nowrap"}),
+        ], style={"transition": "background .1s"}))
+
+    table = html.Div(
+        html.Table(
+            [html.Thead(header), html.Tbody(body_rows)],
+            style={"width": "100%", "borderCollapse": "collapse"},
+        ),
+        style={"overflowX": "auto", "overflowY": "auto", "maxHeight": "68vh"},
+    )
+
+    return html.Div([
+        html.Div([
+            html.Span("STORY TRACKING", style={
+                "fontSize": "9px", "fontWeight": "800", "color": B,
+                "letterSpacing": "2px", "textTransform": "uppercase",
+            }),
+            html.Span(f" · {total} stories · BA planning tracker",
+                      style={"fontSize": "11px", "color": MT, "marginLeft": "8px"}),
+        ], style={"marginBottom": "16px"}),
+        kpi_row,
+        html.Div(table, style={
+            "background": CD, "border": f"1px solid {BD}",
+            "borderRadius": "12px", "overflow": "hidden",
+        }),
+    ], style={"padding": "4px 0"})
+
+
 def _story_status_key(s: dict) -> str:
     """Map gate dict → CELL_COLORS key for dev matrix cell colour."""
     done = sum(1 for f in _GATE_FIELDS if s.get(f))
@@ -3061,6 +3249,11 @@ def _build_full_layout():
                     "padding":      "7px 18px", "cursor": "pointer", "marginRight": "6px",
                 },
             ),
+            html.Button(
+                "Story Tracking",
+                id={"type": "plan-main-tab-btn", "tab": "tracking"}, n_clicks=0,
+                style=_MAIN_IDL,
+            ),
         ], style={"display": "flex", "alignItems": "center", "gap": "4px",
                   "marginBottom": "20px", "borderBottom": f"1px solid {BD}",
                   "paddingBottom": "12px"}),
@@ -3318,6 +3511,10 @@ def _build_full_layout():
         html.Div(id="main-sec-bateam", style={"display": "none"},
                  children=[_build_ba_brief()]),
 
+        # ── Story Tracking section ────────────────────────────────────────────
+        html.Div(id="main-sec-tracking", style={"display": "none"},
+                 children=[_build_story_tracking_tab()]),
+
         # ── BA filters left panel ─────────────────────────────────────────────
         html.Div(id="ba-flt-backdrop", n_clicks=0, style=_BACKDROP_CLOSED),
         html.Div([
@@ -3488,6 +3685,7 @@ _MAIN_IDL = {
     Output("main-sec-devcap",                            "style"),
     Output("main-sec-gantt",                             "style"),
     Output("main-sec-bateam",                            "style"),
+    Output("main-sec-tracking",                          "style"),
     Output("plan-main-tab",                              "data"),
     Output({"type": "plan-main-tab-btn", "tab": ALL},   "style"),
     Input({"type": "plan-main-tab-btn", "tab": ALL},    "n_clicks"),
@@ -3511,6 +3709,7 @@ def _switch_main_tab(n_clicks, btn_ids):
         show if tab == "devcap"    else hide,
         show if tab == "gantt"     else hide,
         show if tab == "bateam"    else hide,
+        show if tab == "tracking"  else hide,
         tab,
         btn_styles,
     )

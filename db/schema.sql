@@ -211,6 +211,22 @@ CREATE TABLE IF NOT EXISTS p_planning_log (
 CREATE INDEX IF NOT EXISTS idx_planning_log_item  ON p_planning_log (work_item_id);
 CREATE INDEX IF NOT EXISTS idx_planning_log_month ON p_planning_log (month_key);
 
+-- ── Story Tracking (BA planning tracker — Story Tracking tab from Excel) ────
+-- Stores BA-managed planning fields not present in ADO / work_items_main.
+CREATE TABLE IF NOT EXISTS p_story_tracking (
+    work_item_id   INTEGER PRIMARY KEY,
+    est_start_date DATE,
+    est_end_date   DATE,
+    est_hours      NUMERIC(8,2),
+    actual_hours   NUMERIC(8,2),
+    story_size     TEXT,         -- Big | Medium | Small | Very small
+    story_status   TEXT,         -- Complete | Incomplete | Inprogress | Not Required
+    story_type     TEXT,         -- User story | Use case
+    design_type    TEXT,         -- New Design | Old Design
+    responsible_qa TEXT,
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- ── Indexes ──────────────────────────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_features_epic       ON p_features (epic_id);
 CREATE INDEX IF NOT EXISTS idx_features_release    ON p_features (planned_release_id);
