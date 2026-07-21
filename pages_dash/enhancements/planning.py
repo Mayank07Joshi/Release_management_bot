@@ -129,6 +129,7 @@ _CAL = {1:"Jan", 2:"Feb", 3:"Mar", 4:"Apr", 5:"May", 6:"Jun",
 # Gate state is NOT cached here (always fresh from DB on page load).
 _planning_cache: dict = {"data": None, "ts": 0.0}
 _bug_cache:      dict = {"data": None, "ts": 0.0}
+_st_data_cache:  dict = {"data": None, "ts": 0.0}
 _PLANNING_TTL = 300  # 5 minutes, matches load_data() TTL
 _PAGE_SIZE    = 4    # rows per page in BA Sign-Off table
 
@@ -246,9 +247,15 @@ def _load_bug_data() -> list[dict]:
 
 
 def _load_story_tracking_data() -> list[dict]:
-    """Load BA story tracking rows joined with work_items_main."""
+    """Load BA story tracking rows joined with work_items_main (5-min cache)."""
+    import time as _time
     from data.loader import engine as _engine
     from sqlalchemy import text as _text
+
+    _now = _time.monotonic()
+    if _st_data_cache["data"] is not None and (_now - _st_data_cache["ts"]) < _PLANNING_TTL:
+        return _st_data_cache["data"]
+
     try:
         with _engine.connect() as conn:
             rows = conn.execute(_text("""
@@ -263,56 +270,90 @@ def _load_story_tracking_data() -> list[dict]:
                 JOIN work_items_main w USING (work_item_id)
                 ORDER BY w.priority NULLS LAST, w.work_item_id
             """)).fetchall()
-        return [dict(r._mapping) for r in rows]
+        result = [dict(r._mapping) for r in rows]
     except Exception:
-        return []
+        result = []
+
+    _st_data_cache["data"] = result
+    _st_data_cache["ts"]   = _now
+    return result
 
 
 _ST_STATUS_COLOR = {
-    "Complete":     ("var(--green)",  "var(--green-dim)"),
-    "Inprogress":   ("var(--amber)",  "var(--amber-dim)"),
-    "Incomplete":   ("var(--text-secondary)", "var(--bg-hover)"),
-    "Not Required": ("var(--text-secondary)", "var(--bg-hover)"),
+    "Complete":     ("var(--green)",           "var(--green-dim)"),
+    "Inprogress":   ("var(--amber)",           "var(--amber-dim)"),
+    "Incomplete":   ("var(--text-secondary)",  "var(--bg-hover)"),
+    "Not Required": ("var(--text-secondary)",  "var(--bg-hover)"),
 }
-_ST_SIZE_COLOR = {"Big": P, "Medium": B, "Small": G, "Very small": MT}
+_ST_SIZE_COLOR  = {"Big": P, "Medium": B, "Small": G, "Very small": MT}
 _ST_DESIGN_ICON = {"New Design": "✦", "Old Design": "○"}
+_ST_SIZE_RANK   = {"Big": 0, "Medium": 1, "Small": 2, "Very small": 3}
+
+# Sort-header helper — same pattern as release_status.py
+def _st_sort_th(lbl, col_key, sort_col, sort_dir):
+    if sort_col == col_key:
+        ind, ind_c = ("↑", B) if sort_dir == "asc" else ("↓", B)
+    else:
+        ind, ind_c = "⇅", BD
+    return html.Div(
+        [html.Span(lbl),
+         html.Span(ind, style={"fontSize": "8px", "color": ind_c,
+                               "marginLeft": "3px", "lineHeight": "1"})],
+        id={"type": "st-sort-th", "col": col_key},
+        n_clicks=0,
+        style={"display": "inline-flex", "alignItems": "center",
+               "cursor": "pointer", "userSelect": "none", "gap": "1px"},
+    )
 
 
-def _build_story_tracking_tab() -> html.Div:
-    """Build the Story Tracking tab content."""
-    rows = _load_story_tracking_data()
+def _build_st_table(rows, sort_col, sort_dir, filters):
+    """Render the story tracking HTML table with filters and sort applied."""
+    # ── Filter ────────────────────────────────────────────────────────────────
+    if filters:
+        if filters.get("priority"):
+            pset = set(filters["priority"])
+            rows = [r for r in rows
+                    if (f"P{int(r['priority'])}" if r.get("priority") else "—") in pset]
+        if filters.get("status"):
+            sset = set(filters["status"])
+            rows = [r for r in rows if (r.get("story_status") or "") in sset]
+        if filters.get("size"):
+            zset = set(filters["size"])
+            rows = [r for r in rows if (r.get("story_size") or "") in zset]
+        if filters.get("area"):
+            aset = set(filters["area"])
+            rows = [r for r in rows if (r.get("area") or "") in aset]
+        if filters.get("owner"):
+            oset = set(filters["owner"])
+            rows = [r for r in rows if (r.get("story_owner") or "") in oset]
 
-    total     = len(rows)
-    complete  = sum(1 for r in rows if (r.get("story_status") or "") == "Complete")
-    wip       = sum(1 for r in rows if (r.get("story_status") or "").lower() in ("inprogress",))
-    with_dates = sum(1 for r in rows if r.get("est_start_date"))
-    est_hrs   = sum(float(r["est_hours"]) for r in rows if r.get("est_hours"))
-    act_hrs   = sum(float(r["actual_hours"]) for r in rows if r.get("actual_hours"))
+    # ── Sort ──────────────────────────────────────────────────────────────────
+    if sort_col and sort_dir:
+        rev = sort_dir == "desc"
+        _sk = {
+            "id":        lambda r: r.get("work_item_id") or 0,
+            "title":     lambda r: (r.get("title") or "").lower(),
+            "owner":     lambda r: (r.get("story_owner") or "").lower(),
+            "priority":  lambda r: r.get("priority") or 99,
+            "area":      lambda r: (r.get("area") or "").lower(),
+            "function":  lambda r: (r.get("function") or "").lower(),
+            "size":      lambda r: _ST_SIZE_RANK.get(r.get("story_size") or "", 9),
+            "status":    lambda r: {"Complete":0,"Inprogress":1,"Incomplete":2,"Not Required":3}.get(
+                                    r.get("story_status") or "", 9),
+            "stype":     lambda r: (r.get("story_type") or "").lower(),
+            "est_start": lambda r: r.get("est_start_date") or date(2099, 1, 1),
+            "est_end":   lambda r: r.get("est_end_date")   or date(2099, 1, 1),
+            "est_hrs":   lambda r: float(r.get("est_hours")    or 0),
+            "actual":    lambda r: float(r.get("actual_hours") or 0),
+            "designer":  lambda r: (r.get("main_designer") or "").lower(),
+            "qa":        lambda r: (r.get("responsible_qa") or "").lower(),
+            "design":    lambda r: (r.get("design_type") or "").lower(),
+        }
+        fn = _sk.get(sort_col)
+        if fn:
+            rows = sorted(rows, key=fn, reverse=rev)
 
-    def _kpi(label, value, sub="", color=None):
-        return html.Div([
-            html.Div(str(value), style={
-                "fontSize": "24px", "fontWeight": "700",
-                "color": color or TX, "lineHeight": "1.1",
-            }),
-            html.Div(label, style={"fontSize": "11px", "color": MT, "marginTop": "2px"}),
-            html.Div(sub, style={"fontSize": "10px", "color": MT}) if sub else None,
-        ], style={
-            "background": CD, "border": f"1px solid {BD}", "borderRadius": "10px",
-            "padding": "14px 18px", "minWidth": "110px",
-        })
-
-    kpi_row = html.Div([
-        _kpi("Total stories", total),
-        _kpi("Complete", complete, color=G),
-        _kpi("In Progress", wip, color=A),
-        _kpi("With plan dates", with_dates),
-        _kpi("Est. hours", f"{est_hrs:,.0f}"),
-        _kpi("Actual hours", f"{act_hrs:,.0f}",
-             sub=f"{round(act_hrs/est_hrs*100)}% logged" if est_hrs else ""),
-    ], style={"display": "flex", "gap": "12px", "flexWrap": "wrap", "marginBottom": "20px"})
-
-    # ── Table ──────────────────────────────────────────────────────────────────
+    # ── HTML ──────────────────────────────────────────────────────────────────
     _TH = {
         "background": "var(--bg-hover)", "color": MT,
         "fontSize": "10px", "fontWeight": "700", "letterSpacing": "1px",
@@ -325,26 +366,31 @@ def _build_story_tracking_tab() -> html.Div:
         "fontSize": "12px", "color": TX, "verticalAlign": "middle",
     }
 
+    cols = [
+        ("ID",        "id",        {}),
+        ("Title",     "title",     {"minWidth": "260px"}),
+        ("Owner",     "owner",     {}),
+        ("Priority",  "priority",  {}),
+        ("Area",      "area",      {}),
+        ("Function",  "function",  {}),
+        ("Size",      "size",      {}),
+        ("Status",    "status",    {}),
+        ("Type",      "stype",     {}),
+        ("Est Start", "est_start", {}),
+        ("Est End",   "est_end",   {}),
+        ("Est Hrs",   "est_hrs",   {}),
+        ("Actual",    "actual",    {}),
+        ("Designer",  "designer",  {}),
+        ("QA",        "qa",        {}),
+        ("Design",    "design",    {}),
+    ]
+
     header = html.Tr([
-        html.Th("ID",        style=_TH),
-        html.Th("Title",     style={**_TH, "minWidth": "260px"}),
-        html.Th("Owner",     style=_TH),
-        html.Th("Priority",  style=_TH),
-        html.Th("Area",      style=_TH),
-        html.Th("Function",  style=_TH),
-        html.Th("Size",      style=_TH),
-        html.Th("Status",    style=_TH),
-        html.Th("Type",      style=_TH),
-        html.Th("Est Start", style=_TH),
-        html.Th("Est End",   style=_TH),
-        html.Th("Est Hrs",   style=_TH),
-        html.Th("Actual",    style=_TH),
-        html.Th("Designer",  style=_TH),
-        html.Th("QA",        style=_TH),
-        html.Th("Design",    style=_TH),
+        html.Th(_st_sort_th(lbl, ck, sort_col, sort_dir), style={**_TH, **ex})
+        for lbl, ck, ex in cols
     ])
 
-    def _td_chip(text, fg, bg):
+    def _chip(text, fg, bg):
         return html.Td(html.Span(text, style={
             "background": bg, "color": fg, "borderRadius": "4px",
             "padding": "2px 7px", "fontSize": "11px", "fontWeight": "600",
@@ -353,19 +399,19 @@ def _build_story_tracking_tab() -> html.Div:
 
     body_rows = []
     for r in rows:
-        wid     = r["work_item_id"]
-        title   = str(r.get("title") or "")
-        owner   = str(r.get("story_owner") or "—")
-        area    = str(r.get("area") or "—")
-        func    = str(r.get("function") or "—")
-        pri_raw = r.get("priority")
-        pri     = f"P{int(pri_raw)}" if pri_raw else "—"
-        size    = str(r.get("story_size") or "—")
-        status  = str(r.get("story_status") or "—")
-        stype   = str(r.get("story_type") or "—")
-        design  = str(r.get("design_type") or "—")
+        wid      = r["work_item_id"]
+        title    = str(r.get("title") or "")
+        owner    = str(r.get("story_owner") or "—")
+        area     = str(r.get("area") or "—")
+        func     = str(r.get("function") or "—")
+        pri_raw  = r.get("priority")
+        pri      = f"P{int(pri_raw)}" if pri_raw else "—"
+        size     = str(r.get("story_size") or "—")
+        status   = str(r.get("story_status") or "—")
+        stype    = str(r.get("story_type") or "—")
+        design   = str(r.get("design_type") or "—")
         designer = str(r.get("main_designer") or "—").strip().rstrip(",")
-        qa      = str(r.get("responsible_qa") or "—")
+        qa       = str(r.get("responsible_qa") or "—")
 
         est_s = str(r["est_start_date"]) if r.get("est_start_date") else "—"
         est_e = str(r["est_end_date"])   if r.get("est_end_date")   else "—"
@@ -373,23 +419,23 @@ def _build_story_tracking_tab() -> html.Div:
         act_h = f"{float(r['actual_hours']):.0f}h" if r.get("actual_hours") else "—"
 
         st_fg, st_bg = _ST_STATUS_COLOR.get(status, (MT, C2))
-        sz_col = _ST_SIZE_COLOR.get(size, MT)
-        design_icon = _ST_DESIGN_ICON.get(design, "")
+        sz_col       = _ST_SIZE_COLOR.get(size, MT)
+        design_icon  = _ST_DESIGN_ICON.get(design, "")
 
         body_rows.append(html.Tr([
             html.Td(html.A(str(wid), href=f"{ADO_BASE_URL}{wid}", target="_blank",
-                           style={"color": P, "textDecoration": "none", "fontFamily": "monospace",
-                                  "fontSize": "11px"}), style=_TD),
+                           style={"color": P, "textDecoration": "none",
+                                  "fontFamily": "monospace", "fontSize": "11px"}), style=_TD),
             html.Td(html.Div(title, style={
                 "overflow": "hidden", "textOverflow": "ellipsis",
                 "whiteSpace": "nowrap", "maxWidth": "280px",
             }), style=_TD),
             html.Td(owner, style={**_TD, "color": MT, "fontSize": "11px"}),
-            _td_chip(pri, P, P_DIM),
+            _chip(pri, P, P_DIM),
             html.Td(area, style={**_TD, "color": MT, "fontSize": "11px", "whiteSpace": "nowrap"}),
             html.Td(func, style={**_TD, "color": MT, "fontSize": "11px"}),
             html.Td(size, style={**_TD, "color": sz_col, "fontWeight": "600", "whiteSpace": "nowrap"}),
-            _td_chip(status, st_fg, st_bg),
+            _chip(status, st_fg, st_bg),
             html.Td(stype, style={**_TD, "color": MT, "fontSize": "11px"}),
             html.Td(est_s, style={**_TD, "fontFamily": "monospace", "fontSize": "11px",
                                   "color": B if est_s != "—" else MT, "whiteSpace": "nowrap"}),
@@ -404,19 +450,112 @@ def _build_story_tracking_tab() -> html.Div:
                 "whiteSpace": "nowrap", "maxWidth": "120px",
             }), style={**_TD, "fontSize": "11px", "color": MT}),
             html.Td(qa, style={**_TD, "fontSize": "11px", "color": MT, "whiteSpace": "nowrap"}),
-            html.Td(f"{design_icon} {design}", style={**_TD, "fontSize": "11px", "color": MT,
-                                                       "whiteSpace": "nowrap"}),
-        ], style={"transition": "background .1s"}))
+            html.Td(f"{design_icon} {design}",
+                    style={**_TD, "fontSize": "11px", "color": MT, "whiteSpace": "nowrap"}),
+        ]))
 
-    table = html.Div(
+    if not body_rows:
+        body_rows = [html.Tr([html.Td(
+            "No stories match the current filters.",
+            colSpan=16,
+            style={**_TD, "color": MT, "textAlign": "center", "padding": "32px"},
+        )])]
+
+    return html.Div(
         html.Table(
             [html.Thead(header), html.Tbody(body_rows)],
             style={"width": "100%", "borderCollapse": "collapse"},
         ),
-        style={"overflowX": "auto", "overflowY": "auto", "maxHeight": "68vh"},
+        style={"overflowX": "auto", "overflowY": "auto", "maxHeight": "65vh"},
     )
 
+
+def _build_story_tracking_tab() -> html.Div:
+    """Build Story Tracking tab: stores + KPI bar + filter row + table wrapper."""
+    rows = _load_story_tracking_data()
+
+    total      = len(rows)
+    complete   = sum(1 for r in rows if (r.get("story_status") or "") == "Complete")
+    wip        = sum(1 for r in rows if (r.get("story_status") or "").lower() == "inprogress")
+    with_dates = sum(1 for r in rows if r.get("est_start_date"))
+    est_hrs    = sum(float(r["est_hours"])    for r in rows if r.get("est_hours"))
+    act_hrs    = sum(float(r["actual_hours"]) for r in rows if r.get("actual_hours"))
+
+    def _kpi(label, value, sub="", color=None):
+        return html.Div([
+            html.Div(str(value), style={
+                "fontSize": "22px", "fontWeight": "700",
+                "color": color or TX, "lineHeight": "1.1",
+            }),
+            html.Div(label, style={"fontSize": "11px", "color": MT, "marginTop": "2px"}),
+            html.Div(sub, style={"fontSize": "10px", "color": MT}) if sub else None,
+        ], style={
+            "background": CD, "border": f"1px solid {BD}", "borderRadius": "10px",
+            "padding": "14px 18px", "flex": "1", "minWidth": "90px",
+        })
+
+    kpi_row = html.Div([
+        _kpi("Total stories",   total),
+        _kpi("Complete",        complete,  color=G),
+        _kpi("In Progress",     wip,       color=A),
+        _kpi("With plan dates", with_dates),
+        _kpi("Est. hours",      f"{est_hrs:,.0f}"),
+        _kpi("Actual hours",    f"{act_hrs:,.0f}",
+             sub=f"{round(act_hrs/est_hrs*100)}% logged" if est_hrs else ""),
+    ], style={"display": "flex", "gap": "10px", "marginBottom": "14px"})
+
+    # ── Filter options derived from loaded data ────────────────────────────────
+    pris     = sorted({f"P{int(r['priority'])}" for r in rows if r.get("priority")})
+    statuses = [s for s in ["Complete", "Inprogress", "Incomplete", "Not Required"]
+                if any((r.get("story_status") or "") == s for r in rows)]
+    sizes    = [s for s in ["Big", "Medium", "Small", "Very small"]
+                if any((r.get("story_size") or "") == s for r in rows)]
+    areas    = sorted({str(r.get("area") or "") for r in rows if r.get("area")})
+    owners   = sorted({str(r.get("story_owner") or "") for r in rows if r.get("story_owner")})
+
+    _DD = {"fontSize": "12px", "flex": "1"}
+
+    def _flbl(txt):
+        return html.Span(txt, style={
+            "fontSize": "10px", "fontWeight": "700", "color": MT,
+            "letterSpacing": "1px", "textTransform": "uppercase",
+            "whiteSpace": "nowrap", "marginRight": "6px",
+        })
+
+    filter_bar = html.Div([
+        html.Div([_flbl("Priority"), dcc.Dropdown(
+            id="st-flt-priority",
+            options=[{"label": v, "value": v} for v in pris],
+            multi=True, placeholder="All…", className="dark-dropdown", style=_DD,
+        )], style={"display": "flex", "alignItems": "center", "flex": "1", "minWidth": "140px"}),
+        html.Div([_flbl("Status"), dcc.Dropdown(
+            id="st-flt-status",
+            options=[{"label": v, "value": v} for v in statuses],
+            multi=True, placeholder="All…", className="dark-dropdown", style=_DD,
+        )], style={"display": "flex", "alignItems": "center", "flex": "1.4", "minWidth": "180px"}),
+        html.Div([_flbl("Size"), dcc.Dropdown(
+            id="st-flt-size",
+            options=[{"label": v, "value": v} for v in sizes],
+            multi=True, placeholder="All…", className="dark-dropdown", style=_DD,
+        )], style={"display": "flex", "alignItems": "center", "flex": "1", "minWidth": "140px"}),
+        html.Div([_flbl("Area"), dcc.Dropdown(
+            id="st-flt-area",
+            options=[{"label": v, "value": v} for v in areas],
+            multi=True, placeholder="All…", className="dark-dropdown", style=_DD,
+        )], style={"display": "flex", "alignItems": "center", "flex": "1.4", "minWidth": "180px"}),
+        html.Div([_flbl("Owner"), dcc.Dropdown(
+            id="st-flt-owner",
+            options=[{"label": v, "value": v} for v in owners],
+            multi=True, placeholder="All…", className="dark-dropdown", style=_DD,
+        )], style={"display": "flex", "alignItems": "center", "flex": "1", "minWidth": "140px"}),
+    ], style={
+        "display": "flex", "gap": "10px", "flexWrap": "wrap", "alignItems": "center",
+        "background": CD, "border": f"1px solid {BD}", "borderRadius": "10px",
+        "padding": "10px 14px", "marginBottom": "14px",
+    })
+
     return html.Div([
+        dcc.Store(id="st-sort-store", data={"col": None, "dir": None}),
         html.Div([
             html.Span("STORY TRACKING", style={
                 "fontSize": "9px", "fontWeight": "800", "color": B,
@@ -424,12 +563,17 @@ def _build_story_tracking_tab() -> html.Div:
             }),
             html.Span(f" · {total} stories · BA planning tracker",
                       style={"fontSize": "11px", "color": MT, "marginLeft": "8px"}),
-        ], style={"marginBottom": "16px"}),
+        ], style={"marginBottom": "14px"}),
         kpi_row,
-        html.Div(table, style={
-            "background": CD, "border": f"1px solid {BD}",
-            "borderRadius": "12px", "overflow": "hidden",
-        }),
+        filter_bar,
+        html.Div(
+            html.Div(
+                _build_st_table(rows, None, None, {}),
+                style={"background": CD, "border": f"1px solid {BD}",
+                       "borderRadius": "12px", "overflow": "hidden"},
+            ),
+            id="st-table-wrapper",
+        ),
     ], style={"padding": "4px 0"})
 
 
@@ -3712,6 +3856,59 @@ def _switch_main_tab(n_clicks, btn_ids):
         show if tab == "tracking"  else hide,
         tab,
         btn_styles,
+    )
+
+
+# ── Story Tracking — sort state ───────────────────────────────────────────────
+@callback(
+    Output("st-sort-store", "data"),
+    Input({"type": "st-sort-th", "col": ALL}, "n_clicks"),
+    State("st-sort-store", "data"),
+    prevent_initial_call=True,
+)
+def _update_st_sort(all_clicks, current):
+    if not any(all_clicks or []):
+        raise dash.exceptions.PreventUpdate
+    tid = ctx.triggered_id
+    if not tid or not isinstance(tid, dict):
+        raise dash.exceptions.PreventUpdate
+    col = tid["col"]
+    current   = current or {}
+    cur_col   = current.get("col")
+    cur_dir   = current.get("dir")
+    if cur_col == col:
+        new_dir = "desc" if cur_dir == "asc" else (None if cur_dir == "desc" else "asc")
+    else:
+        new_dir = "asc"
+    return {"col": col if new_dir else None, "dir": new_dir}
+
+
+# ── Story Tracking — re-render table on sort/filter change ───────────────────
+@callback(
+    Output("st-table-wrapper", "children"),
+    Input("st-sort-store",    "data"),
+    Input("st-flt-priority",  "value"),
+    Input("st-flt-status",    "value"),
+    Input("st-flt-size",      "value"),
+    Input("st-flt-area",      "value"),
+    Input("st-flt-owner",     "value"),
+    prevent_initial_call=True,
+)
+def _render_st_table(sort_state, pri, status, size, area, owner):
+    rows = _load_story_tracking_data()
+    filters = {
+        "priority": pri    or [],
+        "status":   status or [],
+        "size":     size   or [],
+        "area":     area   or [],
+        "owner":    owner  or [],
+    }
+    sort_col = (sort_state or {}).get("col")
+    sort_dir = (sort_state or {}).get("dir")
+    return html.Div(
+        _build_st_table(rows, sort_col, sort_dir, filters),
+        style={"background": CD, "border": f"1px solid {BD}",
+               "borderRadius": "12px", "overflow": "hidden"},
     )
 
 
