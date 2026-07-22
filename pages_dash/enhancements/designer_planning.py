@@ -337,7 +337,7 @@ def _build_summary_panels(stories: list, plan_months: list):
             "letterSpacing": "0.6px", "fontWeight": "700", "marginBottom": "10px",
         }),
         html.Table(
-            [html.Thead(html.Tr(head)), html.Tbody(body_rows)],
+            [html.Thead(html.Tr(head), style={"position": "sticky", "top": "0", "zIndex": "2"}), html.Tbody(body_rows)],
             style={"borderCollapse": "collapse", "width": "100%"},
         ),
         html.Div(

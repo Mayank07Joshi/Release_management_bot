@@ -10,14 +10,19 @@ from config.settings import ANALYSIS_START_DATE
 load_dotenv()
 
 # ── Database Configuration ───────────────────────────────────────────────────
-DB_USER = "postgres"
+# All values read from environment variables so the same codebase works locally
+# (.env file) and on Azure App Service (Application Settings).
+DB_USER = os.getenv("DB_USER",     "postgres")
 DB_PASS = os.getenv("DB_PASSWORD", "1234")
-DB_HOST = "localhost"
-DB_PORT = "5432"
-DB_NAME = "vsts_analytics"
+DB_HOST = os.getenv("DB_HOST",     "localhost")
+DB_PORT = os.getenv("DB_PORT",     "5432")
+DB_NAME = os.getenv("DB_NAME",     "vsts_analytics")
 
-# Connection string for SQLAlchemy (requires psycopg2 installed)
-CONN_STR = f"postgresql+psycopg2://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+# Full connection string can also be supplied directly (Azure Flexible Server style)
+_CONN_STR_OVERRIDE = os.getenv("DATABASE_URL")
+CONN_STR = _CONN_STR_OVERRIDE or (
+    f"postgresql+psycopg2://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+)
 engine = create_engine(CONN_STR, pool_size=10, max_overflow=20)
 
 # Global cache for data

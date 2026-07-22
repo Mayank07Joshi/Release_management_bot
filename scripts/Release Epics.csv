@@ -1,0 +1,19 @@
+﻿ID,Work Item Type,Title,Assigned To,State,Start Date,Target Date
+"34864","Epic","2025 June Release","Satyarth Singh <satyarth.singh@expenseondemand.com>","Closed","2/6/2025 4:30:00 am","25/6/2025 4:30:00 am"
+"35112","Epic","2025 July Release","Satyarth Singh <satyarth.singh@expenseondemand.com>","Closed","27/6/2025 2:38:00 pm","29/7/2025 4:30:00 am"
+"35496","Epic","2025 July 2nd Release","Satyarth Singh <satyarth.singh@expenseondemand.com>","Closed","21/7/2025 3:55:00 pm","22/8/2025 4:30:00 am"
+"35830","Epic","2025 September Release","Satyarth Singh <satyarth.singh@expenseondemand.com>","Closed","25/8/2025 4:12:00 pm","30/9/2025 4:30:00 am"
+"36447","Epic","2025 September Hotfix Release","Satyarth Singh <satyarth.singh@expenseondemand.com>","Closed","1/9/2025 4:12:00 pm","6/10/2025 4:30:00 am"
+"36528","Epic","2025 October Release","Satyarth Singh <satyarth.singh@expenseondemand.com>","Closed","10/9/2025 4:12:00 pm","3/11/2025 5:30:00 am"
+"37141","Epic","2025 November Release","Satyarth Singh <satyarth.singh@expenseondemand.com>","Closed","14/11/2025 4:35:00 pm","9/12/2025 5:30:00 am"
+"37839","Epic","2025 December + January Release","Satyarth Singh <satyarth.singh@expenseondemand.com>","Closed","10/12/2025 4:35:00 pm",
+"38551","Epic","2026 Jan 2 Release","Satyarth Singh <satyarth.singh@expenseondemand.com>","Closed","16/1/2026 4:35:00 pm","27/2/2026 5:30:00 am"
+"38552","Epic","2026 January Hotfix Release","Satyarth Singh <satyarth.singh@expenseondemand.com>","Closed","30/1/2026 4:35:00 pm","3/3/2026 5:30:00 am"
+"38553","Epic","2026 Jan 3 Release","Satyarth Singh <satyarth.singh@expenseondemand.com>","Closed","2/2/2026 4:35:00 pm","23/2/2026 5:30:00 am"
+"39015","Epic","2026 March Release","Satyarth Singh <satyarth.singh@expenseondemand.com>","Closed","2/3/2026 8:04:00 pm","25/3/2026 5:30:00 am"
+"39910","Epic","2026 April Release","Satyarth Singh <satyarth.singh@expenseondemand.com>","Closed","1/4/2026 7:04:00 pm","23/3/2026 5:30:00 am"
+"40558","Epic","2026 May Release","Satyarth Singh <satyarth.singh@expenseondemand.com>","Closed","1/5/2026 3:39:00 pm","21/5/2026 4:30:00 am"
+"42118","Epic","2026 June Release","Satyarth Singh <satyarth.singh@expenseondemand.com>","Closed","1/6/2026 3:39:00 pm","30/6/2026 4:30:00 am"
+"42124","Epic","2026 July Release","Satyarth Singh <satyarth.singh@expenseondemand.com>","Closed","1/7/2026 2:04:00 pm","20/7/2026 4:30:00 am"
+"42836","Epic","2026 July Onboarding Release","Satyarth Singh <satyarth.singh@expenseondemand.com>","New","21/7/2026 11:07:00 pm",
+"39016","Epic","2026 February Hotfix Release","Satyarth Singh <satyarth.singh@expenseondemand.com>","Closed","23/2/2026 4:35:00 pm","9/3/2026 5:30:00 am"

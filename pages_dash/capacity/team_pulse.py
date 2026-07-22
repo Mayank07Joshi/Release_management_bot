@@ -1182,7 +1182,7 @@ def _build_platform_table(plat_by_mk: dict, months: list, mks: list, today_mk: s
         tbody_rows.append(html.Tr(cells))
     return html.Div(
         html.Table([
-            html.Thead(html.Tr(head_cells)),
+            html.Thead(html.Tr(head_cells), style={"position": "sticky", "top": "0", "zIndex": "3"}),
             html.Tbody(tbody_rows),
         ], style={"borderCollapse": "collapse", "width": "100%",
                   "minWidth": f"{160 + len(mks) * 80}px"}),

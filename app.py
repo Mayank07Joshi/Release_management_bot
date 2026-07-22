@@ -121,6 +121,10 @@ _NAV_TREE = [
         ("VSTS Focus Area", "/summary",  "◇", True),
         ("BA Team Brief",   "/ba-brief", "□", False),
     ]),
+    ("REPORTS", "#a78bfa", [
+        ("Release Audit",   "/release-audit",   "◎", True),
+        ("Iteration Audit", "/iteration-audit",  "◑", False),
+    ]),
 ]
 
 
@@ -681,8 +685,9 @@ if __name__ == "__main__":
     from data.loader import load_data as _load_data
     threading.Thread(target=_load_data, daemon=True, name="cache-warmup").start()
 
+    _port = int(os.environ.get("PORT", 8050))
     if os.environ.get("PRODUCTION", "false").lower() == "true":
-        logging.getLogger(__name__).info("Starting Waitress on http://0.0.0.0:8050")
-        serve(app.server, host="0.0.0.0", port=8050, threads=8)
+        logging.getLogger(__name__).info("Starting Waitress on http://0.0.0.0:%d", _port)
+        serve(app.server, host="0.0.0.0", port=_port, threads=8)
     else:
-        app.run(host="0.0.0.0", port=8050, debug=True)
+        app.run(host="0.0.0.0", port=_port, debug=True)

@@ -4288,12 +4288,6 @@ def _render_stories(gates, month, ba_f, dev_f, show_f, type_f, tier_f, page, stu
         else:
             stories = [s for s in stories if _stuck_gate(s) == stuck_f]
 
-    _pri_ord = {"P1": 0, "P2": 1, "P3": 2, "P4": 3}
-    def _sort_key(s):
-        st = _status(gates.get(str(s["id"]), {f: s.get(f, False) for f in _GATE_FIELDS}))
-        return (0 if st != "READY" else 1, _pri_ord.get(s["pri"], 9), s["id"])
-    stories.sort(key=_sort_key)
-
     # Paginate
     total_filtered = len(stories)
     total_pages    = max(1, -(-total_filtered // _PAGE_SIZE))  # ceiling div
