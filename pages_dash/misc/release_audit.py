@@ -6,8 +6,11 @@ Dynamic: user picks a release_date tag; content rebuilds via callback.
 """
 from __future__ import annotations
 
+import io
+
 import dash
-from dash import Input, Output, callback, dcc, html
+import pandas as pd
+from dash import Input, Output, State, callback, dcc, html, no_update
 
 from db.release_audit import get_release_audit_data, get_release_options, get_release_trend
 
@@ -307,7 +310,49 @@ def _enh_section(d: dict) -> html.Div:
     ])
 
 
-def _bug_section(d: dict) -> html.Div:
+def _release_date_banner(d: dict) -> html.Div:
+    start = d.get("release_start") or "—"
+    end   = d.get("release_end")   or "Ongoing"
+    title = d.get("release_title", "")
+
+    def _date_block(label, value, color):
+        return html.Div([
+            html.Div(label, style={
+                "fontSize": "9px", "textTransform": "uppercase",
+                "letterSpacing": "0.07em", "color": _T3, "fontWeight": "600",
+                "marginBottom": "4px",
+            }),
+            html.Div(value, style={
+                "fontSize": "15px", "fontWeight": "700",
+                "color": color, "fontFamily": _MONO,
+            }),
+        ])
+
+    return html.Div([
+        html.Div([
+            html.Div(title, style={
+                "fontSize": "14px", "fontWeight": "700", "color": _T1,
+                "marginBottom": "10px",
+            }),
+            html.Div([
+                _date_block("Start Date", start, _CYAN),
+                html.Div("→", style={
+                    "fontSize": "20px", "color": _DIM,
+                    "margin": "0 20px", "alignSelf": "flex-end", "paddingBottom": "2px",
+                }),
+                _date_block("End Date", end, _CYAN),
+            ], style={"display": "flex", "alignItems": "flex-end"}),
+        ]),
+    ], style={
+        "background": _CARD, "border": f"1px solid {_BD}",
+        "borderLeft": f"4px solid {_CYAN}",
+        "borderRadius": "0 10px 10px 0",
+        "padding": "18px 24px",
+        "marginBottom": "24px",
+    })
+
+
+def _bugs_raised_section(d: dict) -> html.Div:
     bug_total = d["bug_total"]
     p1_open   = d["p1_open"]
     badge_c   = _RED if p1_open > 0 else _AMBER if bug_total > 0 else _GREEN
@@ -316,16 +361,19 @@ def _bug_section(d: dict) -> html.Div:
     if not bug_total:
         return html.Div([
             html.Div(style={"paddingTop": "28px"}),
-            _section_header("B", "Bug Report", "0 BUGS TAGGED", _GREEN),
-            html.Div("No bugs tagged for this release.",
+            _section_header("B", "Bugs Raised in Release", "0 BUGS RAISED", _GREEN),
+            html.Div("No bugs raised in this release window.",
                      style={"color": _GREEN, "fontSize": "12px"}),
         ])
 
     return html.Div([
         html.Div(style={"paddingTop": "28px"}),
-        _section_header("B", "Bug Report", badge_l, badge_c),
+        _section_header("B", "Bugs Raised in Release", badge_l, badge_c),
+        html.Div([
+            html.Span("Bugs created between release start and next release start date.",
+                      style={"fontSize": "11px", "color": _T3}),
+        ], style={"marginBottom": "16px"}),
 
-        # Row 1: priority + device + environment
         html.Div([
             _priority_block(d["bug_priority"]),
             html.Div(style={"width": "14px", "flexShrink": "0"}),
@@ -334,11 +382,41 @@ def _bug_section(d: dict) -> html.Div:
             _bar_chart("BY ENVIRONMENT (STAGE)", list(d["bug_stage"].items()), _AMBER),
         ], style={"display": "flex", "marginBottom": "14px"}),
 
-        # Row 2: state + bug type (narrower)
         html.Div([
             _bar_chart("STATE BREAKDOWN", list(d["bug_states"].items()), _INDIGO),
             html.Div(style={"width": "14px", "flexShrink": "0"}),
             _bar_chart("BUG TYPE", list(d["bug_type"].items()), _RED),
+        ], style={"display": "flex"}),
+    ])
+
+
+def _bugs_fixed_section(d: dict) -> html.Div:
+    n     = d["bugs_fixed_total"]
+    badge = f"{n} FIXED / CLOSED"
+    bcol  = _GREEN if n > 0 else _DIM
+
+    if not n:
+        return html.Div([
+            html.Div(style={"paddingTop": "28px"}),
+            _section_header("C", "Bugs Fixed in Release", "0 FIXED", _DIM),
+            html.Div("No bugs closed in this release window.",
+                     style={"color": _DIM, "fontSize": "12px"}),
+        ])
+
+    return html.Div([
+        html.Div(style={"paddingTop": "28px"}),
+        _section_header("C", "Bugs Fixed in Release", badge, bcol),
+        html.Div([
+            html.Span("Bugs whose closed_date falls within this release window (any source release).",
+                      style={"fontSize": "11px", "color": _T3}),
+        ], style={"marginBottom": "16px"}),
+
+        html.Div([
+            _priority_block(d["bugs_fixed_priority"], title="FIXED BY PRIORITY"),
+            html.Div(style={"width": "14px", "flexShrink": "0"}),
+            _bar_chart("FIXED BY DEVICE / AREA", list(d["bugs_fixed_area"].items()), _GREEN),
+            html.Div(style={"width": "14px", "flexShrink": "0"}),
+            _bar_chart("FIXED BY ENVIRONMENT", list(d["bugs_fixed_stage"].items()), _CYAN),
         ], style={"display": "flex"}),
     ])
 
@@ -375,7 +453,7 @@ def _verdict_section(d: dict) -> html.Div:
 
     return html.Div([
         html.Div(style={"paddingTop": "28px"}),
-        _section_header("C", "Release Verdict"),
+        _section_header("D", "Release Verdict"),
         html.Div([
             html.Div([
                 _label("OVERALL VERDICT"),
@@ -461,7 +539,7 @@ def _trend_table() -> html.Div:
 
     return html.Div([
         html.Div(style={"paddingTop": "28px"}),
-        _section_header("D", "Release History"),
+        _section_header("E", "Release History"),
         _card(
             html.Table(
                 [html.Thead(header), html.Tbody(tbl_rows)],
@@ -473,9 +551,11 @@ def _trend_table() -> html.Div:
 
 def _build_content(d: dict) -> html.Div:
     return html.Div([
+        _release_date_banner(d),
         _kpi_strip(d),
         _enh_section(d),
-        _bug_section(d),
+        _bugs_raised_section(d),
+        _bugs_fixed_section(d),
         _verdict_section(d),
         _trend_table(),
         html.Div([
@@ -498,7 +578,7 @@ def _empty_state() -> html.Div:
     })
 
 
-# ── Callback ──────────────────────────────────────────────────────────────────
+# ── Callbacks ─────────────────────────────────────────────────────────────────
 
 @callback(
     Output("ra-content", "children"),
@@ -509,6 +589,103 @@ def _on_release_change(release_key):
     if release_key is None:
         return _empty_state()
     return _build_content(get_release_audit_data(release_key))
+
+
+@callback(
+    Output("ra-download", "data"),
+    Input("ra-download-btn", "n_clicks"),
+    State("ra-release-select", "value"),
+    prevent_initial_call=True,
+)
+def _download_report(n_clicks, release_key):
+    if not n_clicks or release_key is None:
+        return no_update
+
+    d     = get_release_audit_data(release_key)
+    trend = get_release_trend()
+    buf   = io.BytesIO()
+
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+        # ── Sheet 1: Summary ──────────────────────────────────────────────────
+        pd.DataFrame([
+            ("Release",                d["release_title"]),
+            ("Start Date",             d["release_start"] or "—"),
+            ("End Date",               d["release_end"]   or "—"),
+            ("Generated",              d["generated"]),
+            ("Overall Verdict",        d["verdict"]),
+            ("",                       ""),
+            ("ENHANCEMENT DELIVERY",   ""),
+            ("Planned",                d["enh_total"]),
+            ("Shipped",                d["enh_closed"]),
+            ("Open",                   d["enh_open"]),
+            ("Delivery Rate",          f"{d['delivery_pct']}%"),
+            ("",                       ""),
+            ("BUGS RAISED IN RELEASE", ""),
+            ("Total Bugs Raised",      d["bug_total"]),
+            ("Open",                   d["bug_open"]),
+            ("Closed",                 d["bug_closed"]),
+            ("Bug Close Rate",         f"{d['bug_close_pct']}%"),
+            ("P1 Open",                d["p1_open"]),
+            ("",                       ""),
+            ("BUGS FIXED IN RELEASE",  ""),
+            ("Total Bugs Fixed",       d["bugs_fixed_total"]),
+        ], columns=["Metric", "Value"]).to_excel(writer, sheet_name="Summary", index=False)
+
+        # ── Sheet 2: Enhancement Delivery ─────────────────────────────────────
+        rows_enh = []
+        for st, cnt in d["enh_states"].items():
+            rows_enh.append({"State": st, "Count": cnt})
+        if rows_enh:
+            pd.DataFrame(rows_enh).to_excel(writer, sheet_name="Enh Delivery", index=False)
+
+        # ── Sheet 3: Bugs Raised ───────────────────────────────────────────────
+        raised_rows = (
+            [{"Category": "Priority", "Label": f"P{p}", "Count": c}
+             for p, c in d["bug_priority"].items()] +
+            [{"Category": "Area",     "Label": k,       "Count": v}
+             for k, v in d["bug_area"].items()] +
+            [{"Category": "Stage",    "Label": k,       "Count": v}
+             for k, v in d["bug_stage"].items()] +
+            [{"Category": "Type",     "Label": k,       "Count": v}
+             for k, v in d["bug_type"].items()] +
+            [{"Category": "State",    "Label": k,       "Count": v}
+             for k, v in d["bug_states"].items()]
+        )
+        if raised_rows:
+            pd.DataFrame(raised_rows).to_excel(writer, sheet_name="Bugs Raised", index=False)
+
+        # ── Sheet 4: Bugs Fixed ────────────────────────────────────────────────
+        fixed_rows = (
+            [{"Category": "Priority", "Label": f"P{p}", "Count": c}
+             for p, c in d["bugs_fixed_priority"].items()] +
+            [{"Category": "Area",     "Label": k,       "Count": v}
+             for k, v in d["bugs_fixed_area"].items()] +
+            [{"Category": "Stage",    "Label": k,       "Count": v}
+             for k, v in d["bugs_fixed_stage"].items()] +
+            [{"Category": "Type",     "Label": k,       "Count": v}
+             for k, v in d["bugs_fixed_type"].items()]
+        )
+        if fixed_rows:
+            pd.DataFrame(fixed_rows).to_excel(writer, sheet_name="Bugs Fixed", index=False)
+
+        # ── Sheet 5: Release History ───────────────────────────────────────────
+        if trend:
+            pd.DataFrame([{
+                "Release":        r["title"],
+                "Start Date":     r["start_date"],
+                "End Date":       r["target_date"],
+                "Status":         r["status"],
+                "Enh Planned":    r["enh_total"],
+                "Enh Delivered":  r["enh_closed"],
+                "Delivery %":     r["delivery_pct"],
+                "Bugs Found":     r["bug_total"],
+                "P1 Bugs":        r["p1_bugs"],
+                "P2 Bugs":        r["p2_bugs"],
+            } for r in trend]).to_excel(writer, sheet_name="Release History", index=False)
+
+    buf.seek(0)
+    fname = f"Release_Audit_{d['release_title'].replace(' ', '_')}.xlsx"
+    return dcc.send_bytes(buf.getvalue(), fname)
 
 
 # ── Layout ────────────────────────────────────────────────────────────────────
@@ -554,6 +731,17 @@ def layout(**_):
                 clearable=False,
                 style={"width": "180px", "fontSize": "12px"},
             ),
+            html.Button([
+                html.Span("↓", style={"marginRight": "6px", "fontSize": "14px"}),
+                "Download Report",
+            ], id="ra-download-btn", n_clicks=0, style={
+                "marginTop": "10px", "width": "100%",
+                "background": _INDIGO, "color": _T1,
+                "border": "none", "borderRadius": "6px",
+                "padding": "8px 14px", "fontSize": "11px",
+                "fontWeight": "600", "cursor": "pointer",
+                "letterSpacing": "0.03em",
+            }),
         ], style={"flexShrink": "0"}),
     ], style={
         "display": "flex", "alignItems": "flex-start",
@@ -564,6 +752,7 @@ def layout(**_):
 
     return html.Div([
         header,
+        dcc.Download(id="ra-download"),
         dcc.Loading(
             html.Div(id="ra-content", children=initial,
                      style={"padding": "20px 40px 40px"}),

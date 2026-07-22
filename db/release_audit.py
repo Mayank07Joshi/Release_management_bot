@@ -161,10 +161,33 @@ def _fetch(conn, key) -> tuple[dict, dict]:
     else:
         bug_rows = []
 
-    return meta, _crunch(enh_rows, bug_rows)
+    # ── Bugs Fixed — closed_date falls inside the release window ─────────────
+    if start:
+        bugs_fixed_rows = conn.execute(text("""
+            SELECT work_item_id, work_item_type, state, priority, area, stage
+            FROM work_items_main
+            WHERE work_item_type IN ('Bug', 'Bug_UI', 'Bug_Text')
+              AND closed_date >= :s
+              AND closed_date <  :e
+              AND state IN ('Closed','Not an issue','Not Required',
+                            'Userstory Update','No Customer Response','Resolved')
+        """), {"s": start, "e": window_end}).fetchall()
+    elif ado_label:
+        bugs_fixed_rows = conn.execute(text("""
+            SELECT work_item_id, work_item_type, state, priority, area, stage
+            FROM work_items_main
+            WHERE work_item_type IN ('Bug', 'Bug_UI', 'Bug_Text')
+              AND release_date = :lbl
+              AND state IN ('Closed','Not an issue','Not Required',
+                            'Userstory Update','No Customer Response','Resolved')
+        """), {"lbl": ado_label}).fetchall()
+    else:
+        bugs_fixed_rows = []
+
+    return meta, _crunch(enh_rows, bug_rows, bugs_fixed_rows)
 
 
-def _crunch(enh_rows, bug_rows) -> dict:
+def _crunch(enh_rows, bug_rows, bugs_fixed_rows=None) -> dict:
     # ── Enhancements ──────────────────────────────────────────────────────────
     enh_total  = len(enh_rows)
     enh_closed = sum(1 for r in enh_rows if (r.state or "") in _CLOSED_STATES)
@@ -215,6 +238,25 @@ def _crunch(enh_rows, bug_rows) -> dict:
         st = r.state or "Unknown"
         bug_states[st] = bug_states.get(st, 0) + 1
 
+    # ── Bugs Fixed ────────────────────────────────────────────────────────────
+    fixed = bugs_fixed_rows or []
+    bugs_fixed_total    = len(fixed)
+    bugs_fixed_priority = {1: 0, 2: 0, 3: 0, 4: 0}
+    bugs_fixed_area:  dict = {}
+    bugs_fixed_stage: dict = {}
+    bugs_fixed_type:  dict = {}
+
+    for r in fixed:
+        try:
+            p = max(1, min(4, int(r.priority or 4)))
+        except (ValueError, TypeError):
+            p = 4
+        bugs_fixed_priority[p] += 1
+        bugs_fixed_area[r.area or "Unassigned"]  = bugs_fixed_area.get(r.area or "Unassigned", 0) + 1
+        bugs_fixed_stage[r.stage or "Unassigned"] = bugs_fixed_stage.get(r.stage or "Unassigned", 0) + 1
+        t = r.work_item_type or "Bug"
+        bugs_fixed_type[t] = bugs_fixed_type.get(t, 0) + 1
+
     # ── Verdict ───────────────────────────────────────────────────────────────
     if enh_total == 0 and bug_total == 0:
         verdict = "UNKNOWN"
@@ -246,6 +288,12 @@ def _crunch(enh_rows, bug_rows) -> dict:
         "bug_stage":     dict(sorted(bug_stage.items(),  key=lambda x: -x[1])),
         "bug_type":      dict(sorted(bug_type.items(),   key=lambda x: -x[1])),
         "bug_states":    dict(sorted(bug_states.items(), key=lambda x: -x[1])),
+        # Fixed
+        "bugs_fixed_total":    bugs_fixed_total,
+        "bugs_fixed_priority": bugs_fixed_priority,
+        "bugs_fixed_area":     dict(sorted(bugs_fixed_area.items(),  key=lambda x: -x[1])),
+        "bugs_fixed_stage":    dict(sorted(bugs_fixed_stage.items(), key=lambda x: -x[1])),
+        "bugs_fixed_type":     dict(sorted(bugs_fixed_type.items(),  key=lambda x: -x[1])),
     }
 
 
@@ -340,4 +388,6 @@ def _empty() -> dict:
         "bug_total": 0, "bug_closed": 0, "bug_open": 0, "bug_close_pct": 0,
         "p1_open": 0, "bug_priority": dict(z4),
         "bug_area": {}, "bug_stage": {}, "bug_type": {}, "bug_states": {},
+        "bugs_fixed_total": 0, "bugs_fixed_priority": dict(z4),
+        "bugs_fixed_area": {}, "bugs_fixed_stage": {}, "bugs_fixed_type": {},
     }
