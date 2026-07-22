@@ -683,6 +683,10 @@ clientside_callback(
         // Snapshot the live rendered DOM — exact copy including dark theme + all components
         var clone = document.documentElement.cloneNode(true);
 
+        // Remove the release-selector / download-button panel — not useful in a static file
+        var ctrl = clone.querySelector('#ra-header-controls');
+        if (ctrl) ctrl.parentNode.removeChild(ctrl);
+
         // Strip Dash/React script tags so the saved file is static
         [].slice.call(clone.querySelectorAll('script')).forEach(function(s) {
             s.parentNode.removeChild(s);
@@ -765,7 +769,7 @@ def layout(**_):
                 "fontWeight": "600", "cursor": "pointer",
                 "letterSpacing": "0.03em",
             }),
-        ], style={"flexShrink": "0"}),
+        ], id="ra-header-controls", style={"flexShrink": "0"}),
     ], style={
         "display": "flex", "alignItems": "flex-start",
         "justifyContent": "space-between", "gap": "24px",
