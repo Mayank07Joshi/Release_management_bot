@@ -66,7 +66,7 @@ _FIELDS = [
     "Microsoft.VSTS.Common.ActivatedDate",
     "Custom.StorySize",
     "Custom.StoryStatus",
-    "Custom.MainQA",
+    # "Custom.MainQA",  # field removed from ADO project
     "Custom.Design",
     "Custom.StoryType",
 ]
@@ -230,7 +230,7 @@ def _transform(work_items) -> pd.DataFrame:
             "activated_date":    f.get("Microsoft.VSTS.Common.ActivatedDate"),
             "story_size":        f.get("Custom.StorySize", ""),
             "story_status":      f.get("Custom.StoryStatus", ""),
-            "main_qa":           _get_person_name(f.get("Custom.MainQA")),
+            "main_qa":           _get_person_name(f.get("Custom.MainQA", "")),
             "design_type":       f.get("Custom.Design", ""),
             "story_type":        f.get("Custom.StoryType", ""),
         })
