@@ -144,7 +144,7 @@ def _fetch(conn, key) -> tuple[dict, dict]:
     # ── Bugs — by created_date window (more accurate than tag) ────────────────
     if start:
         bug_rows = conn.execute(text("""
-            SELECT work_item_id, work_item_type, state, priority, area, stage
+            SELECT work_item_id, work_item_type, state, priority, area, stage, function
             FROM work_items_main
             WHERE work_item_type IN ('Bug', 'Bug_UI', 'Bug_Text')
               AND created_date >= :s
@@ -153,7 +153,7 @@ def _fetch(conn, key) -> tuple[dict, dict]:
     elif ado_label:
         # Fallback: use tag
         bug_rows = conn.execute(text("""
-            SELECT work_item_id, work_item_type, state, priority, area, stage
+            SELECT work_item_id, work_item_type, state, priority, area, stage, function
             FROM work_items_main
             WHERE work_item_type IN ('Bug', 'Bug_UI', 'Bug_Text')
               AND release_date = :lbl
@@ -261,6 +261,7 @@ def _crunch(enh_rows, bug_rows, bugs_fixed_rows=None) -> dict:
     bug_stage    = {}
     bug_type     = {}
     bug_states   = {}
+    bug_function = {}
     p1_open      = 0
 
     for r in bug_rows:
@@ -271,8 +272,9 @@ def _crunch(enh_rows, bug_rows, bugs_fixed_rows=None) -> dict:
         bug_priority[p] += 1
         if p == 1 and (r.state or "") not in _CLOSED_STATES:
             p1_open += 1
-        bug_area[r.area or "Unassigned"]  = bug_area.get(r.area or "Unassigned", 0) + 1
-        bug_stage[r.stage or "Unassigned"] = bug_stage.get(r.stage or "Unassigned", 0) + 1
+        bug_area[r.area or "Unassigned"]    = bug_area.get(r.area or "Unassigned", 0) + 1
+        bug_stage[r.stage or "Unassigned"]  = bug_stage.get(r.stage or "Unassigned", 0) + 1
+        bug_function[r.function or "General"] = bug_function.get(r.function or "General", 0) + 1
         t = r.work_item_type or "Bug"
         bug_type[t] = bug_type.get(t, 0) + 1
         st = r.state or "Unknown"
@@ -325,9 +327,10 @@ def _crunch(enh_rows, bug_rows, bugs_fixed_rows=None) -> dict:
         "p1_open":       p1_open,
         "bug_priority":  bug_priority,
         "bug_area":      dict(sorted(bug_area.items(),   key=lambda x: -x[1])),
-        "bug_stage":     dict(sorted(bug_stage.items(),  key=lambda x: -x[1])),
-        "bug_type":      dict(sorted(bug_type.items(),   key=lambda x: -x[1])),
-        "bug_states":    dict(sorted(bug_states.items(), key=lambda x: -x[1])),
+        "bug_stage":     dict(sorted(bug_stage.items(),    key=lambda x: -x[1])),
+        "bug_type":      dict(sorted(bug_type.items(),     key=lambda x: -x[1])),
+        "bug_states":    dict(sorted(bug_states.items(),   key=lambda x: -x[1])),
+        "bug_function":  dict(sorted(bug_function.items(), key=lambda x: -x[1])),
         # Fixed
         "bugs_fixed_total":    bugs_fixed_total,
         "bugs_fixed_priority": bugs_fixed_priority,
@@ -427,7 +430,7 @@ def _empty() -> dict:
         "enh_states": {}, "enh_priority": dict(z4), "enh_area": {}, "enh_function": {},
         "bug_total": 0, "bug_closed": 0, "bug_open": 0, "bug_close_pct": 0,
         "p1_open": 0, "bug_priority": dict(z4),
-        "bug_area": {}, "bug_stage": {}, "bug_type": {}, "bug_states": {},
+        "bug_area": {}, "bug_stage": {}, "bug_type": {}, "bug_states": {}, "bug_function": {},
         "bugs_fixed_total": 0, "bugs_fixed_priority": dict(z4),
         "bugs_fixed_area": {}, "bugs_fixed_stage": {}, "bugs_fixed_type": {},
         "p1_bug_details": [],

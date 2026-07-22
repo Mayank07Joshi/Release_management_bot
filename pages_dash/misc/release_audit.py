@@ -399,12 +399,12 @@ def _bugs_raised_section(d: dict) -> html.Div:
         ], style={"display": "flex", "marginBottom": "14px"}),
 
         html.Div([
+            _bar_chart("BY FUNCTION", list(d["bug_function"].items()), _PURPLE),
+            html.Div(style={"width": "14px", "flexShrink": "0"}),
             _bar_chart("STATE BREAKDOWN", list(d["bug_states"].items()), _INDIGO),
             html.Div(style={"width": "14px", "flexShrink": "0"}),
             _bar_chart("BUG TYPE", list(d["bug_type"].items()), _RED),
         ], style={"display": "flex"}),
-
-        _p1_detail_card(d.get("p1_bug_details", [])),
     ])
 
 
@@ -558,6 +558,7 @@ def _verdict_section(d: dict) -> html.Div:
             "borderLeft": f"4px solid {col}",
             "borderRadius": "0 10px 10px 0",
         }),
+        _p1_detail_card(d.get("p1_bug_details", [])),
     ])
 
 
