@@ -7,7 +7,7 @@ Dynamic: user picks a release_date tag; content rebuilds via callback.
 from __future__ import annotations
 
 import dash
-from dash import Input, Output, State, callback, dcc, html, no_update
+from dash import Input, Output, callback, clientside_callback, dcc, html
 
 from db.release_audit import get_release_audit_data, get_release_options, get_release_trend
 
@@ -674,219 +674,40 @@ def _on_release_change(release_key):
     return _build_content(get_release_audit_data(release_key))
 
 
-def _make_html_report(d: dict, trend: list) -> str:
-    vcol_map = {"RED": "#e04848", "AMBER": "#e0a23c", "GREEN": "#2ecc8a"}
-    vcol     = vcol_map.get(d["verdict"], "#888")
+clientside_callback(
+    """
+    function(n_clicks) {
+        if (!n_clicks) return window.dash_clientside.no_update;
 
-    def _pct_c(pct, hi=80, lo=50):
-        return "#2ecc8a" if pct >= hi else "#e0a23c" if pct >= lo else "#e04848"
+        // Snapshot the live rendered DOM — exact copy including dark theme + all components
+        var clone = document.documentElement.cloneNode(true);
 
-    def _trow(*cells, header=False, bg="#fff"):
-        tag = "th" if header else "td"
-        inner = "".join(f"<{tag} style='padding:7px 12px;border-bottom:1px solid #e0e0e0;"
-                        f"text-align:left;font-size:13px;white-space:nowrap'>{c}</{tag}>"
-                        for c in cells)
-        return f"<tr style='background:{bg}'>{inner}</tr>"
+        // Strip Dash/React script tags so the saved file is static
+        [].slice.call(clone.querySelectorAll('script')).forEach(function(s) {
+            s.parentNode.removeChild(s);
+        });
 
-    def _section(letter, title, rows_html, subtitle=""):
-        sub = f"<p style='font-size:11px;color:#888;margin:4px 0 12px'>{subtitle}</p>" if subtitle else ""
-        return (
-            f"<div style='margin-top:32px'>"
-            f"<div style='display:flex;align-items:center;gap:8px;border-bottom:2px solid #1a1a2e;"
-            f"padding-bottom:8px;margin-bottom:14px'>"
-            f"<span style='font-size:11px;color:#888;font-family:monospace'>{letter}</span>"
-            f"<span style='font-size:15px;font-weight:700;color:#1a1a2e'>{title}</span></div>"
-            f"{sub}{rows_html}</div>"
-        )
+        var t = clone.querySelector('title');
+        if (t) t.textContent = 'Release Audit Report';
 
-    def _kpi_cell(val, label, color="#1a1a2e"):
-        return (f"<div style='flex:1;padding:16px 18px;border-right:1px solid #e0e0e0'>"
-                f"<div style='font-size:26px;font-weight:700;color:{color};"
-                f"font-family:monospace;line-height:1;margin-bottom:4px'>{val}</div>"
-                f"<div style='font-size:10px;text-transform:uppercase;letter-spacing:0.06em;"
-                f"color:#888;font-weight:600'>{label}</div></div>")
+        var html = '<!DOCTYPE html>' + clone.outerHTML;
+        var blob = new Blob([html], {type: 'text/html;charset=utf-8'});
+        var url  = URL.createObjectURL(blob);
+        var a    = document.createElement('a');
+        a.href     = url;
+        a.download = 'Release_Audit_Report.html';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function() { URL.revokeObjectURL(url); }, 500);
 
-    def _table(headers, rows):
-        hdr = "".join(f"<th style='padding:8px 12px;background:#f5f7fa;border-bottom:2px solid #ddd;"
-                      f"text-align:left;font-size:11px;text-transform:uppercase;"
-                      f"letter-spacing:0.05em;color:#555;white-space:nowrap'>{h}</th>"
-                      for h in headers)
-        body = ""
-        for i, r in enumerate(rows):
-            bg = "#fff" if i % 2 == 0 else "#f9fafb"
-            body += "".join(f"<tr style='background:{bg}'>" +
-                            "".join(f"<td style='padding:8px 12px;border-bottom:1px solid #eee;"
-                                    f"font-size:13px'>{c}</td>" for c in r) +
-                            "</tr>")
-        return (f"<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;"
-                f"border:1px solid #e0e0e0;border-radius:6px;overflow:hidden'>"
-                f"<thead><tr>{hdr}</tr></thead><tbody>{body}</tbody></table></div>")
-
-    # ── KPI ───────────────────────────────────────────────────────────────────
-    del_c = _pct_c(d["delivery_pct"])
-    bcl_c = _pct_c(d["bug_close_pct"])
-    p1_c  = "#e04848" if d["p1_open"] > 0 else "#1a1a2e"
-    fx_c  = "#2ecc8a" if d["bugs_fixed_total"] > 0 else "#aaa"
-
-    kpi_deliveries = (
-        f"<div style='border:1px solid #e0e0e0;border-radius:6px;overflow:hidden;flex:3;margin-right:12px'>"
-        f"<div style='padding:7px 14px;background:#f0fff7;font-size:11px;font-weight:700;"
-        f"text-transform:uppercase;letter-spacing:0.07em;color:#2ecc8a;"
-        f"border-bottom:1px solid #e0e0e0'>&#9679; Deliveries</div>"
-        f"<div style='display:flex'>"
-        f"{_kpi_cell(d['enh_total'], 'Planned')}"
-        f"{_kpi_cell(d['enh_closed'], 'Shipped', '#2ecc8a' if d['enh_closed'] else '#aaa')}"
-        f"{_kpi_cell(str(d['delivery_pct'])+'%', 'Delivery Rate', del_c)}"
-        f"<div style='flex:1;padding:16px 18px'>"
-        f"<div style='font-size:26px;font-weight:700;color:{fx_c};"
-        f"font-family:monospace;line-height:1;margin-bottom:4px'>{d['bugs_fixed_total']}</div>"
-        f"<div style='font-size:10px;text-transform:uppercase;letter-spacing:0.06em;"
-        f"color:#888;font-weight:600'>Bugs Fixed</div></div>"
-        f"</div></div>"
-    )
-    kpi_discoveries = (
-        f"<div style='border:1px solid #e0e0e0;border-radius:6px;overflow:hidden;flex:2'>"
-        f"<div style='padding:7px 14px;background:#fffbf0;font-size:11px;font-weight:700;"
-        f"text-transform:uppercase;letter-spacing:0.07em;color:#e0a23c;"
-        f"border-bottom:1px solid #e0e0e0'>&#9679; Discoveries</div>"
-        f"<div style='display:flex'>"
-        f"{_kpi_cell(d['bug_total'], 'Bugs Raised', '#e0a23c' if d['bug_total'] else '#aaa')}"
-        f"{_kpi_cell(d['p1_open'], 'P1 Open', p1_c)}"
-        f"<div style='flex:1;padding:16px 18px'>"
-        f"<div style='font-size:26px;font-weight:700;color:{bcl_c};"
-        f"font-family:monospace;line-height:1;margin-bottom:4px'>{d['bug_close_pct']}%</div>"
-        f"<div style='font-size:10px;text-transform:uppercase;letter-spacing:0.06em;"
-        f"color:#888;font-weight:600'>Close Rate</div></div>"
-        f"</div></div>"
-    )
-    kpi_html = f"<div style='display:flex;margin-bottom:24px'>{kpi_deliveries}{kpi_discoveries}</div>"
-
-    # ── Enhancement table ─────────────────────────────────────────────────────
-    enh_rows = [
-        [st, str(cnt), f"{round(cnt/max(d['enh_total'],1)*100)}%"]
-        for st, cnt in d["enh_states"].items()
-    ] if d["enh_states"] else [["No enhancements tagged", "—", "—"]]
-    enh_html = _section("A", "Enhancement Delivery",
-                        _table(["State", "Count", "%"], enh_rows),
-                        f"{d['enh_closed']} of {d['enh_total']} delivered — {d['delivery_pct']}%")
-
-    # ── P1 open bugs table ────────────────────────────────────────────────────
-    p1_details = d.get("p1_bug_details", [])
-    if p1_details:
-        p1_rows_html = [
-            [str(b["id"]), b["title"], b["state"], b["assigned_to"],
-             b["area"], b["created"][:10] if b.get("created") else "—"]
-            for b in p1_details
-        ]
-        p1_html_inner = _table(["ID", "Title", "State", "Assigned To", "Area", "Raised"],
-                               p1_rows_html)
-    else:
-        p1_html_inner = "<p style='color:#2ecc8a;font-size:13px'>No P1 bugs open.</p>"
-
-    # ── Bugs raised table ─────────────────────────────────────────────────────
-    pri_rows_r = [[f"P{p}", str(c)] for p, c in d["bug_priority"].items()]
-    st_rows_r  = [[s, str(c)] for s, c in d["bug_states"].items()]
-    bugs_raised_html = _section(
-        "B", "Bugs Raised in Release",
-        _table(["Priority", "Count"], pri_rows_r) +
-        "<div style='margin-top:12px'></div>" +
-        _table(["State", "Count"], st_rows_r) +
-        "<div style='margin-top:16px'><strong style='font-size:13px'>P1 Open — Needs Immediate Attention</strong></div>" +
-        "<div style='margin-top:8px'>" + p1_html_inner + "</div>",
-        f"{d['bug_total']} total · {d['bug_open']} open · {d['p1_open']} P1 open",
-    )
-
-    # ── Bugs fixed table ──────────────────────────────────────────────────────
-    pri_rows_f = [[f"P{p}", str(c)] for p, c in d["bugs_fixed_priority"].items()]
-    bugs_fixed_html = _section(
-        "C", "Bugs Fixed in Release",
-        _table(["Priority", "Count"], pri_rows_f),
-        f"{d['bugs_fixed_total']} bugs closed within the release window",
-    )
-
-    # ── Verdict ───────────────────────────────────────────────────────────────
-    verdict_summaries = {
-        "RED": f"{d['p1_open']} P1 bug(s) still open. Delivery at {d['delivery_pct']}%. Immediate remediation required.",
-        "AMBER": f"Delivery at {d['delivery_pct']}%. {d['bug_open']} bugs still open. Monitor before next release.",
-        "GREEN": f"{d['delivery_pct']}% delivered. {d['bug_closed']} of {d['bug_total']} bugs closed ({d['bug_close_pct']}%).",
-        "UNKNOWN": "No items found for this release in ADO. Verify release_date tags.",
+        return window.dash_clientside.no_update;
     }
-    verdict_html = _section("D", "Release Verdict",
-        f"<div style='display:inline-block;padding:8px 20px;border-radius:6px;"
-        f"background:{vcol}20;border:1.5px solid {vcol};color:{vcol};"
-        f"font-size:15px;font-weight:700;margin-bottom:10px'>{d['verdict']}</div>"
-        f"<p style='font-size:13px;color:#555;line-height:1.7'>"
-        f"{verdict_summaries.get(d['verdict'], '')}</p>")
-
-    # ── History table ─────────────────────────────────────────────────────────
-    hist_rows = [
-        [r["title"],
-         f"{r['start_date']} → {r['target_date']}",
-         r["status"],
-         str(r["enh_total"]),
-         f"{r['delivery_pct']}%" if r["delivery_pct"] is not None else "—",
-         str(r["bug_total"]),
-         str(r["p1_bugs"])]
-        for r in trend
-    ] if trend else []
-    hist_html = _section("E", "Release History",
-                         _table(["Release", "Period", "Status", "Planned",
-                                 "Delivered", "Bugs", "P1"], hist_rows))
-
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<title>Release Audit — {d['release_title']}</title>
-<style>
-* {{ box-sizing: border-box; margin: 0; padding: 0; }}
-body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-        background: #f0f2f5; color: #1a1a2e; padding: 32px; font-size: 14px; }}
-.page {{ max-width: 1100px; margin: 0 auto; background: #fff;
-         border-radius: 8px; padding: 40px; box-shadow: 0 2px 12px rgba(0,0,0,.08); }}
-@media print {{ body {{ background:#fff;padding:0 }} .page {{ box-shadow:none }} }}
-</style>
-</head>
-<body><div class="page">
-  <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.1em;
-              color:#6860d4;font-weight:700;margin-bottom:10px">
-    Expense on Demand &nbsp;·&nbsp; Internal Confidential &nbsp;·&nbsp; Azure DevOps
-  </div>
-  <h1 style="font-size:22px;font-weight:700;margin-bottom:4px">Release Audit Report</h1>
-  <p style="font-size:13px;color:#888;margin-bottom:6px">
-    {d['release_title']} &nbsp;·&nbsp;
-    {d['release_start'] or '—'} → {d['release_end'] or 'Ongoing'}
-  </p>
-  <p style="font-size:11px;color:#aaa;margin-bottom:28px">
-    Generated {d['generated']} from Azure DevOps live sync
-  </p>
-  {kpi_html}
-  {enh_html}
-  {bugs_raised_html}
-  {bugs_fixed_html}
-  {verdict_html}
-  {hist_html}
-  <div style="margin-top:32px;padding-top:14px;border-top:1px solid #e0e0e0;
-              font-size:11px;color:#aaa">
-    Expense on Demand — Internal use only &nbsp;·&nbsp; Generated {d['generated']}
-  </div>
-</div></body></html>"""
-
-
-@callback(
-    Output("ra-download", "data"),
+    """,
+    Output("ra-dl-dummy", "children"),
     Input("ra-download-btn", "n_clicks"),
-    State("ra-release-select", "value"),
     prevent_initial_call=True,
 )
-def _download_report(n_clicks, release_key):
-    if not n_clicks or release_key is None:
-        return no_update
-    d     = get_release_audit_data(release_key)
-    trend = get_release_trend()
-    html_str = _make_html_report(d, trend)
-    fname = f"Release_Audit_{d['release_title'].replace(' ', '_')}.html"
-    return dcc.send_string(html_str, fname, type="text/html")
 
 
 # ── Layout ────────────────────────────────────────────────────────────────────
@@ -953,7 +774,7 @@ def layout(**_):
 
     return html.Div([
         header,
-        dcc.Download(id="ra-download"),
+        html.Div(id="ra-dl-dummy", style={"display": "none"}),
         dcc.Loading(
             html.Div(id="ra-content", children=initial,
                      style={"padding": "20px 40px 40px"}),
