@@ -2853,7 +2853,7 @@ def _build_gantt_html(
                 "display": "flex", "height": "30px", "position": "relative",
             }),
         ], style={"flex": "1", "background": _RA, "borderRadius": "0 10px 0 0"}),
-    ], style={"display": "flex"})
+    ], style={"display": "flex", "position": "sticky", "top": "0", "zIndex": "10"})
 
     # ── Legend ─────────────────────────────────────────────────────────────────
     def _swatch(s, label):
