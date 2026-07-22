@@ -6,10 +6,7 @@ Dynamic: user picks a release_date tag; content rebuilds via callback.
 """
 from __future__ import annotations
 
-import io
-
 import dash
-import pandas as pd
 from dash import Input, Output, State, callback, dcc, html, no_update
 
 from db.release_audit import get_release_audit_data, get_release_options, get_release_trend
@@ -406,6 +403,73 @@ def _bugs_raised_section(d: dict) -> html.Div:
             html.Div(style={"width": "14px", "flexShrink": "0"}),
             _bar_chart("BUG TYPE", list(d["bug_type"].items()), _RED),
         ], style={"display": "flex"}),
+
+        _p1_detail_card(d.get("p1_bug_details", [])),
+    ])
+
+
+def _p1_detail_card(details: list) -> html.Div:
+    if not details:
+        return html.Span()
+
+    _S_COLOR = {
+        "Active": _AMBER, "Dev InProgress": _AMBER, "Dev Review": _AMBER,
+        "Dev Complete": _CYAN, "Clarification": _RED, "New": _T3,
+        "Request Estimate": _RED,
+    }
+
+    hdr = html.Tr([
+        html.Th(t, style={
+            "padding": "7px 14px", "fontSize": "9px", "textTransform": "uppercase",
+            "letterSpacing": "0.06em", "color": _T3, "fontWeight": "600",
+            "textAlign": "left", "background": _RAISED, "borderBottom": f"1px solid {_BD}",
+            "whiteSpace": "nowrap",
+        }) for t in ["ID", "TITLE", "STATE", "ASSIGNED TO", "AREA", "RAISED"]
+    ])
+
+    rows = []
+    for i, bug in enumerate(details):
+        is_last = i == len(details) - 1
+        bd = "" if is_last else f"1px solid {_BD}"
+        scol = _S_COLOR.get(bug["state"], _T2)
+        bg = _CARD if i % 2 == 0 else _RAISED
+        rows.append(html.Tr([
+            html.Td(str(bug["id"]), style={
+                "padding": "8px 14px", "fontSize": "11px", "color": _DIM,
+                "fontFamily": _MONO, "borderBottom": bd, "whiteSpace": "nowrap",
+            }),
+            html.Td(bug["title"], style={
+                "padding": "8px 14px", "fontSize": "12px", "color": _T1,
+                "borderBottom": bd, "maxWidth": "320px",
+                "overflow": "hidden", "textOverflow": "ellipsis", "whiteSpace": "nowrap",
+            }),
+            html.Td(html.Span(bug["state"], style={"color": scol, "fontWeight": "600"}), style={
+                "padding": "8px 14px", "fontSize": "12px", "borderBottom": bd, "whiteSpace": "nowrap",
+            }),
+            html.Td(bug["assigned_to"], style={
+                "padding": "8px 14px", "fontSize": "12px", "color": _T2,
+                "borderBottom": bd, "whiteSpace": "nowrap",
+            }),
+            html.Td(bug["area"], style={
+                "padding": "8px 14px", "fontSize": "12px", "color": _T3,
+                "borderBottom": bd,
+            }),
+            html.Td(bug["created"][:10] if bug.get("created") else "—", style={
+                "padding": "8px 14px", "fontSize": "11px", "color": _DIM,
+                "fontFamily": _MONO, "borderBottom": bd, "whiteSpace": "nowrap",
+            }),
+        ], style={"background": bg}))
+
+    return html.Div([
+        html.Div(style={"height": "14px"}),
+        _card(
+            _card_header(f"P1 OPEN BUGS — {len(details)} ITEMS REQUIRING ATTENTION"),
+            html.Div(
+                html.Table([html.Thead(hdr), html.Tbody(rows)],
+                           style={"width": "100%", "borderCollapse": "collapse"}),
+                style={"overflowX": "auto"},
+            ),
+        ),
     ])
 
 
@@ -610,6 +674,205 @@ def _on_release_change(release_key):
     return _build_content(get_release_audit_data(release_key))
 
 
+def _make_html_report(d: dict, trend: list) -> str:
+    vcol_map = {"RED": "#e04848", "AMBER": "#e0a23c", "GREEN": "#2ecc8a"}
+    vcol     = vcol_map.get(d["verdict"], "#888")
+
+    def _pct_c(pct, hi=80, lo=50):
+        return "#2ecc8a" if pct >= hi else "#e0a23c" if pct >= lo else "#e04848"
+
+    def _trow(*cells, header=False, bg="#fff"):
+        tag = "th" if header else "td"
+        inner = "".join(f"<{tag} style='padding:7px 12px;border-bottom:1px solid #e0e0e0;"
+                        f"text-align:left;font-size:13px;white-space:nowrap'>{c}</{tag}>"
+                        for c in cells)
+        return f"<tr style='background:{bg}'>{inner}</tr>"
+
+    def _section(letter, title, rows_html, subtitle=""):
+        sub = f"<p style='font-size:11px;color:#888;margin:4px 0 12px'>{subtitle}</p>" if subtitle else ""
+        return (
+            f"<div style='margin-top:32px'>"
+            f"<div style='display:flex;align-items:center;gap:8px;border-bottom:2px solid #1a1a2e;"
+            f"padding-bottom:8px;margin-bottom:14px'>"
+            f"<span style='font-size:11px;color:#888;font-family:monospace'>{letter}</span>"
+            f"<span style='font-size:15px;font-weight:700;color:#1a1a2e'>{title}</span></div>"
+            f"{sub}{rows_html}</div>"
+        )
+
+    def _kpi_cell(val, label, color="#1a1a2e"):
+        return (f"<div style='flex:1;padding:16px 18px;border-right:1px solid #e0e0e0'>"
+                f"<div style='font-size:26px;font-weight:700;color:{color};"
+                f"font-family:monospace;line-height:1;margin-bottom:4px'>{val}</div>"
+                f"<div style='font-size:10px;text-transform:uppercase;letter-spacing:0.06em;"
+                f"color:#888;font-weight:600'>{label}</div></div>")
+
+    def _table(headers, rows):
+        hdr = "".join(f"<th style='padding:8px 12px;background:#f5f7fa;border-bottom:2px solid #ddd;"
+                      f"text-align:left;font-size:11px;text-transform:uppercase;"
+                      f"letter-spacing:0.05em;color:#555;white-space:nowrap'>{h}</th>"
+                      for h in headers)
+        body = ""
+        for i, r in enumerate(rows):
+            bg = "#fff" if i % 2 == 0 else "#f9fafb"
+            body += "".join(f"<tr style='background:{bg}'>" +
+                            "".join(f"<td style='padding:8px 12px;border-bottom:1px solid #eee;"
+                                    f"font-size:13px'>{c}</td>" for c in r) +
+                            "</tr>")
+        return (f"<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;"
+                f"border:1px solid #e0e0e0;border-radius:6px;overflow:hidden'>"
+                f"<thead><tr>{hdr}</tr></thead><tbody>{body}</tbody></table></div>")
+
+    # ── KPI ───────────────────────────────────────────────────────────────────
+    del_c = _pct_c(d["delivery_pct"])
+    bcl_c = _pct_c(d["bug_close_pct"])
+    p1_c  = "#e04848" if d["p1_open"] > 0 else "#1a1a2e"
+    fx_c  = "#2ecc8a" if d["bugs_fixed_total"] > 0 else "#aaa"
+
+    kpi_deliveries = (
+        f"<div style='border:1px solid #e0e0e0;border-radius:6px;overflow:hidden;flex:3;margin-right:12px'>"
+        f"<div style='padding:7px 14px;background:#f0fff7;font-size:11px;font-weight:700;"
+        f"text-transform:uppercase;letter-spacing:0.07em;color:#2ecc8a;"
+        f"border-bottom:1px solid #e0e0e0'>&#9679; Deliveries</div>"
+        f"<div style='display:flex'>"
+        f"{_kpi_cell(d['enh_total'], 'Planned')}"
+        f"{_kpi_cell(d['enh_closed'], 'Shipped', '#2ecc8a' if d['enh_closed'] else '#aaa')}"
+        f"{_kpi_cell(str(d['delivery_pct'])+'%', 'Delivery Rate', del_c)}"
+        f"<div style='flex:1;padding:16px 18px'>"
+        f"<div style='font-size:26px;font-weight:700;color:{fx_c};"
+        f"font-family:monospace;line-height:1;margin-bottom:4px'>{d['bugs_fixed_total']}</div>"
+        f"<div style='font-size:10px;text-transform:uppercase;letter-spacing:0.06em;"
+        f"color:#888;font-weight:600'>Bugs Fixed</div></div>"
+        f"</div></div>"
+    )
+    kpi_discoveries = (
+        f"<div style='border:1px solid #e0e0e0;border-radius:6px;overflow:hidden;flex:2'>"
+        f"<div style='padding:7px 14px;background:#fffbf0;font-size:11px;font-weight:700;"
+        f"text-transform:uppercase;letter-spacing:0.07em;color:#e0a23c;"
+        f"border-bottom:1px solid #e0e0e0'>&#9679; Discoveries</div>"
+        f"<div style='display:flex'>"
+        f"{_kpi_cell(d['bug_total'], 'Bugs Raised', '#e0a23c' if d['bug_total'] else '#aaa')}"
+        f"{_kpi_cell(d['p1_open'], 'P1 Open', p1_c)}"
+        f"<div style='flex:1;padding:16px 18px'>"
+        f"<div style='font-size:26px;font-weight:700;color:{bcl_c};"
+        f"font-family:monospace;line-height:1;margin-bottom:4px'>{d['bug_close_pct']}%</div>"
+        f"<div style='font-size:10px;text-transform:uppercase;letter-spacing:0.06em;"
+        f"color:#888;font-weight:600'>Close Rate</div></div>"
+        f"</div></div>"
+    )
+    kpi_html = f"<div style='display:flex;margin-bottom:24px'>{kpi_deliveries}{kpi_discoveries}</div>"
+
+    # ── Enhancement table ─────────────────────────────────────────────────────
+    enh_rows = [
+        [st, str(cnt), f"{round(cnt/max(d['enh_total'],1)*100)}%"]
+        for st, cnt in d["enh_states"].items()
+    ] if d["enh_states"] else [["No enhancements tagged", "—", "—"]]
+    enh_html = _section("A", "Enhancement Delivery",
+                        _table(["State", "Count", "%"], enh_rows),
+                        f"{d['enh_closed']} of {d['enh_total']} delivered — {d['delivery_pct']}%")
+
+    # ── P1 open bugs table ────────────────────────────────────────────────────
+    p1_details = d.get("p1_bug_details", [])
+    if p1_details:
+        p1_rows_html = [
+            [str(b["id"]), b["title"], b["state"], b["assigned_to"],
+             b["area"], b["created"][:10] if b.get("created") else "—"]
+            for b in p1_details
+        ]
+        p1_html_inner = _table(["ID", "Title", "State", "Assigned To", "Area", "Raised"],
+                               p1_rows_html)
+    else:
+        p1_html_inner = "<p style='color:#2ecc8a;font-size:13px'>No P1 bugs open.</p>"
+
+    # ── Bugs raised table ─────────────────────────────────────────────────────
+    pri_rows_r = [[f"P{p}", str(c)] for p, c in d["bug_priority"].items()]
+    st_rows_r  = [[s, str(c)] for s, c in d["bug_states"].items()]
+    bugs_raised_html = _section(
+        "B", "Bugs Raised in Release",
+        _table(["Priority", "Count"], pri_rows_r) +
+        "<div style='margin-top:12px'></div>" +
+        _table(["State", "Count"], st_rows_r) +
+        "<div style='margin-top:16px'><strong style='font-size:13px'>P1 Open — Needs Immediate Attention</strong></div>" +
+        "<div style='margin-top:8px'>" + p1_html_inner + "</div>",
+        f"{d['bug_total']} total · {d['bug_open']} open · {d['p1_open']} P1 open",
+    )
+
+    # ── Bugs fixed table ──────────────────────────────────────────────────────
+    pri_rows_f = [[f"P{p}", str(c)] for p, c in d["bugs_fixed_priority"].items()]
+    bugs_fixed_html = _section(
+        "C", "Bugs Fixed in Release",
+        _table(["Priority", "Count"], pri_rows_f),
+        f"{d['bugs_fixed_total']} bugs closed within the release window",
+    )
+
+    # ── Verdict ───────────────────────────────────────────────────────────────
+    verdict_summaries = {
+        "RED": f"{d['p1_open']} P1 bug(s) still open. Delivery at {d['delivery_pct']}%. Immediate remediation required.",
+        "AMBER": f"Delivery at {d['delivery_pct']}%. {d['bug_open']} bugs still open. Monitor before next release.",
+        "GREEN": f"{d['delivery_pct']}% delivered. {d['bug_closed']} of {d['bug_total']} bugs closed ({d['bug_close_pct']}%).",
+        "UNKNOWN": "No items found for this release in ADO. Verify release_date tags.",
+    }
+    verdict_html = _section("D", "Release Verdict",
+        f"<div style='display:inline-block;padding:8px 20px;border-radius:6px;"
+        f"background:{vcol}20;border:1.5px solid {vcol};color:{vcol};"
+        f"font-size:15px;font-weight:700;margin-bottom:10px'>{d['verdict']}</div>"
+        f"<p style='font-size:13px;color:#555;line-height:1.7'>"
+        f"{verdict_summaries.get(d['verdict'], '')}</p>")
+
+    # ── History table ─────────────────────────────────────────────────────────
+    hist_rows = [
+        [r["title"],
+         f"{r['start_date']} → {r['target_date']}",
+         r["status"],
+         str(r["enh_total"]),
+         f"{r['delivery_pct']}%" if r["delivery_pct"] is not None else "—",
+         str(r["bug_total"]),
+         str(r["p1_bugs"])]
+        for r in trend
+    ] if trend else []
+    hist_html = _section("E", "Release History",
+                         _table(["Release", "Period", "Status", "Planned",
+                                 "Delivered", "Bugs", "P1"], hist_rows))
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Release Audit — {d['release_title']}</title>
+<style>
+* {{ box-sizing: border-box; margin: 0; padding: 0; }}
+body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        background: #f0f2f5; color: #1a1a2e; padding: 32px; font-size: 14px; }}
+.page {{ max-width: 1100px; margin: 0 auto; background: #fff;
+         border-radius: 8px; padding: 40px; box-shadow: 0 2px 12px rgba(0,0,0,.08); }}
+@media print {{ body {{ background:#fff;padding:0 }} .page {{ box-shadow:none }} }}
+</style>
+</head>
+<body><div class="page">
+  <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.1em;
+              color:#6860d4;font-weight:700;margin-bottom:10px">
+    Expense on Demand &nbsp;·&nbsp; Internal Confidential &nbsp;·&nbsp; Azure DevOps
+  </div>
+  <h1 style="font-size:22px;font-weight:700;margin-bottom:4px">Release Audit Report</h1>
+  <p style="font-size:13px;color:#888;margin-bottom:6px">
+    {d['release_title']} &nbsp;·&nbsp;
+    {d['release_start'] or '—'} → {d['release_end'] or 'Ongoing'}
+  </p>
+  <p style="font-size:11px;color:#aaa;margin-bottom:28px">
+    Generated {d['generated']} from Azure DevOps live sync
+  </p>
+  {kpi_html}
+  {enh_html}
+  {bugs_raised_html}
+  {bugs_fixed_html}
+  {verdict_html}
+  {hist_html}
+  <div style="margin-top:32px;padding-top:14px;border-top:1px solid #e0e0e0;
+              font-size:11px;color:#aaa">
+    Expense on Demand — Internal use only &nbsp;·&nbsp; Generated {d['generated']}
+  </div>
+</div></body></html>"""
+
+
 @callback(
     Output("ra-download", "data"),
     Input("ra-download-btn", "n_clicks"),
@@ -619,92 +882,11 @@ def _on_release_change(release_key):
 def _download_report(n_clicks, release_key):
     if not n_clicks or release_key is None:
         return no_update
-
     d     = get_release_audit_data(release_key)
     trend = get_release_trend()
-    buf   = io.BytesIO()
-
-    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
-        # ── Sheet 1: Summary ──────────────────────────────────────────────────
-        pd.DataFrame([
-            ("Release",                d["release_title"]),
-            ("Start Date",             d["release_start"] or "—"),
-            ("End Date",               d["release_end"]   or "—"),
-            ("Generated",              d["generated"]),
-            ("Overall Verdict",        d["verdict"]),
-            ("",                       ""),
-            ("ENHANCEMENT DELIVERY",   ""),
-            ("Planned",                d["enh_total"]),
-            ("Shipped",                d["enh_closed"]),
-            ("Open",                   d["enh_open"]),
-            ("Delivery Rate",          f"{d['delivery_pct']}%"),
-            ("",                       ""),
-            ("BUGS RAISED IN RELEASE", ""),
-            ("Total Bugs Raised",      d["bug_total"]),
-            ("Open",                   d["bug_open"]),
-            ("Closed",                 d["bug_closed"]),
-            ("Bug Close Rate",         f"{d['bug_close_pct']}%"),
-            ("P1 Open",                d["p1_open"]),
-            ("",                       ""),
-            ("BUGS FIXED IN RELEASE",  ""),
-            ("Total Bugs Fixed",       d["bugs_fixed_total"]),
-        ], columns=["Metric", "Value"]).to_excel(writer, sheet_name="Summary", index=False)
-
-        # ── Sheet 2: Enhancement Delivery ─────────────────────────────────────
-        rows_enh = []
-        for st, cnt in d["enh_states"].items():
-            rows_enh.append({"State": st, "Count": cnt})
-        if rows_enh:
-            pd.DataFrame(rows_enh).to_excel(writer, sheet_name="Enh Delivery", index=False)
-
-        # ── Sheet 3: Bugs Raised ───────────────────────────────────────────────
-        raised_rows = (
-            [{"Category": "Priority", "Label": f"P{p}", "Count": c}
-             for p, c in d["bug_priority"].items()] +
-            [{"Category": "Area",     "Label": k,       "Count": v}
-             for k, v in d["bug_area"].items()] +
-            [{"Category": "Stage",    "Label": k,       "Count": v}
-             for k, v in d["bug_stage"].items()] +
-            [{"Category": "Type",     "Label": k,       "Count": v}
-             for k, v in d["bug_type"].items()] +
-            [{"Category": "State",    "Label": k,       "Count": v}
-             for k, v in d["bug_states"].items()]
-        )
-        if raised_rows:
-            pd.DataFrame(raised_rows).to_excel(writer, sheet_name="Bugs Raised", index=False)
-
-        # ── Sheet 4: Bugs Fixed ────────────────────────────────────────────────
-        fixed_rows = (
-            [{"Category": "Priority", "Label": f"P{p}", "Count": c}
-             for p, c in d["bugs_fixed_priority"].items()] +
-            [{"Category": "Area",     "Label": k,       "Count": v}
-             for k, v in d["bugs_fixed_area"].items()] +
-            [{"Category": "Stage",    "Label": k,       "Count": v}
-             for k, v in d["bugs_fixed_stage"].items()] +
-            [{"Category": "Type",     "Label": k,       "Count": v}
-             for k, v in d["bugs_fixed_type"].items()]
-        )
-        if fixed_rows:
-            pd.DataFrame(fixed_rows).to_excel(writer, sheet_name="Bugs Fixed", index=False)
-
-        # ── Sheet 5: Release History ───────────────────────────────────────────
-        if trend:
-            pd.DataFrame([{
-                "Release":        r["title"],
-                "Start Date":     r["start_date"],
-                "End Date":       r["target_date"],
-                "Status":         r["status"],
-                "Enh Planned":    r["enh_total"],
-                "Enh Delivered":  r["enh_closed"],
-                "Delivery %":     r["delivery_pct"],
-                "Bugs Found":     r["bug_total"],
-                "P1 Bugs":        r["p1_bugs"],
-                "P2 Bugs":        r["p2_bugs"],
-            } for r in trend]).to_excel(writer, sheet_name="Release History", index=False)
-
-    buf.seek(0)
-    fname = f"Release_Audit_{d['release_title'].replace(' ', '_')}.xlsx"
-    return dcc.send_bytes(buf.getvalue(), fname)
+    html_str = _make_html_report(d, trend)
+    fname = f"Release_Audit_{d['release_title'].replace(' ', '_')}.html"
+    return dcc.send_string(html_str, fname, type="text/html")
 
 
 # ── Layout ────────────────────────────────────────────────────────────────────

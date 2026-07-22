@@ -185,7 +185,46 @@ def _fetch(conn, key) -> tuple[dict, dict]:
     else:
         bugs_fixed_rows = []
 
-    return meta, _crunch(enh_rows, bug_rows, bugs_fixed_rows)
+    # ── P1 open bug details ────────────────────────────────────────────────────
+    if start:
+        p1_rows = conn.execute(text("""
+            SELECT work_item_id, title, state, assigned_to, area, stage, created_date
+            FROM work_items_main
+            WHERE work_item_type IN ('Bug', 'Bug_UI', 'Bug_Text')
+              AND priority::text = '1'
+              AND state NOT IN ('Closed','Not an issue','Not Required',
+                                'Userstory Update','No Customer Response','Resolved')
+              AND created_date >= :s
+              AND created_date <  :e
+            ORDER BY created_date
+        """), {"s": start, "e": window_end}).fetchall()
+    elif ado_label:
+        p1_rows = conn.execute(text("""
+            SELECT work_item_id, title, state, assigned_to, area, stage, created_date
+            FROM work_items_main
+            WHERE work_item_type IN ('Bug', 'Bug_UI', 'Bug_Text')
+              AND priority::text = '1'
+              AND state NOT IN ('Closed','Not an issue','Not Required',
+                                'Userstory Update','No Customer Response','Resolved')
+              AND release_date = :lbl
+            ORDER BY created_date
+        """), {"lbl": ado_label}).fetchall()
+    else:
+        p1_rows = []
+
+    result = _crunch(enh_rows, bug_rows, bugs_fixed_rows)
+    result["p1_bug_details"] = [
+        {
+            "id":          r.work_item_id,
+            "title":       r.title or "—",
+            "state":       r.state or "Unknown",
+            "assigned_to": r.assigned_to or "Unassigned",
+            "area":        r.area or "—",
+            "created":     str(r.created_date or ""),
+        }
+        for r in p1_rows
+    ]
+    return meta, result
 
 
 def _crunch(enh_rows, bug_rows, bugs_fixed_rows=None) -> dict:
@@ -391,4 +430,5 @@ def _empty() -> dict:
         "bug_area": {}, "bug_stage": {}, "bug_type": {}, "bug_states": {},
         "bugs_fixed_total": 0, "bugs_fixed_priority": dict(z4),
         "bugs_fixed_area": {}, "bugs_fixed_stage": {}, "bugs_fixed_type": {},
+        "p1_bug_details": [],
     }
