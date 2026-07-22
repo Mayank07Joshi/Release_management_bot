@@ -4444,6 +4444,8 @@ def _render_stories(gates, month, ba_f, dev_f, show_f, type_f, tier_f, page, stu
     prevent_initial_call=True,
 )
 def _stuck_filter_update(n_clicks):
+    if not any((n or 0) > 0 for n in (n_clicks or [])):
+        return no_update
     triggered = ctx.triggered_id
     if isinstance(triggered, dict):
         return triggered.get("v", "all")
@@ -4661,6 +4663,8 @@ def _ba_filter(all_clicks, ba_clicks):
     prevent_initial_call=True,
 )
 def _dev_filter(all_clicks, dev_clicks):
+    if not (all_clicks or 0) > 0 and not any((n or 0) > 0 for n in (dev_clicks or [])):
+        return no_update
     triggered = ctx.triggered_id
     if triggered == "dev-all-chip":
         return "All"
@@ -4676,6 +4680,8 @@ def _dev_filter(all_clicks, dev_clicks):
     prevent_initial_call=True,
 )
 def _show_filter(n_clicks):
+    if not any((n or 0) > 0 for n in (n_clicks or [])):
+        return no_update
     triggered = ctx.triggered_id
     if isinstance(triggered, dict):
         return triggered.get("show", "Needs Action")
@@ -4689,6 +4695,8 @@ def _show_filter(n_clicks):
     prevent_initial_call=True,
 )
 def _type_filter(n_clicks):
+    if not any((n or 0) > 0 for n in (n_clicks or [])):
+        return no_update
     triggered = ctx.triggered_id
     if isinstance(triggered, dict):
         return triggered.get("v", "All")
