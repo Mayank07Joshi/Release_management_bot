@@ -102,24 +102,16 @@ def _card_header(text: str) -> html.Div:
 # ── KPI Strip ─────────────────────────────────────────────────────────────────
 
 def _kpi_strip(d: dict) -> html.Div:
-    del_pct  = d["delivery_pct"]
-    del_col  = _RED if del_pct < 50 else _AMBER if del_pct < 80 else _GREEN
-    p1_col   = _RED if d["p1_open"] > 0 else _T1
-    bcl_col  = _GREEN if d["bug_close_pct"] >= 80 else _AMBER
-
-    cells = [
-        (str(d["enh_total"]),      "PLANNED",       _T1),
-        (str(d["enh_closed"]),     "SHIPPED",        _GREEN if d["enh_closed"] > 0 else _DIM),
-        (f"{del_pct}%",            "DELIVERY RATE",  del_col),
-        (str(d["bug_total"]),      "BUGS IN RELEASE",_AMBER if d["bug_total"] > 0 else _DIM),
-        (str(d["p1_open"]),        "P1 OPEN",        p1_col),
-        (f"{d['bug_close_pct']}%", "BUG CLOSE RATE", bcl_col),
-    ]
+    del_pct   = d["delivery_pct"]
+    del_col   = _RED if del_pct < 50 else _AMBER if del_pct < 80 else _GREEN
+    p1_col    = _RED if d["p1_open"] > 0 else _T1
+    bcl_col   = _GREEN if d["bug_close_pct"] >= 80 else _AMBER
+    fixed_col = _GREEN if d["bugs_fixed_total"] > 0 else _DIM
 
     def _cell(val, lbl, color, last=False):
         return html.Div([
             html.Div(val, style={
-                "fontSize": "30px", "fontWeight": "700", "color": color,
+                "fontSize": "28px", "fontWeight": "700", "color": color,
                 "fontFamily": _MONO, "lineHeight": "1", "marginBottom": "6px",
                 "letterSpacing": "-0.5px",
             }),
@@ -128,17 +120,44 @@ def _kpi_strip(d: dict) -> html.Div:
                 "letterSpacing": "0.07em", "color": _T3, "fontWeight": "600",
             }),
         ], style={
-            "flex": "1", "padding": "20px 22px",
-            "background": _CARD,
+            "flex": "1", "padding": "18px 20px",
             **({} if last else {"borderRight": f"1px solid {_BD}"}),
         })
 
-    return _card(
-        html.Div([_cell(v, l, c, last=(i == len(cells) - 1))
-                  for i, (v, l, c) in enumerate(cells)],
-                 style={"display": "flex"}),
-        style={"marginBottom": "24px"},
+    def _group_label(text, accent):
+        return html.Div([
+            html.Span("●", style={"color": accent, "fontSize": "7px", "marginRight": "6px"}),
+            text,
+        ], style={
+            "fontSize": "9px", "textTransform": "uppercase", "letterSpacing": "0.08em",
+            "fontWeight": "700", "color": accent,
+            "padding": "7px 16px", "borderBottom": f"1px solid {_BD}",
+            "background": _RAISED,
+        })
+
+    deliveries = _card(
+        _group_label("Deliveries", _GREEN),
+        html.Div([
+            _cell(str(d["enh_total"]),         "Planned",       _T1),
+            _cell(str(d["enh_closed"]),         "Shipped",       _GREEN if d["enh_closed"] > 0 else _DIM),
+            _cell(f"{del_pct}%",               "Delivery Rate", del_col),
+            _cell(str(d["bugs_fixed_total"]),   "Bugs Fixed",    fixed_col, last=True),
+        ], style={"display": "flex"}),
+        style={"flex": "3", "marginRight": "12px"},
     )
+
+    discoveries = _card(
+        _group_label("Discoveries", _AMBER),
+        html.Div([
+            _cell(str(d["bug_total"]),      "Bugs Raised", _AMBER if d["bug_total"] > 0 else _DIM),
+            _cell(str(d["p1_open"]),        "P1 Open",     p1_col),
+            _cell(f"{d['bug_close_pct']}%", "Close Rate",  bcl_col, last=True),
+        ], style={"display": "flex"}),
+        style={"flex": "2"},
+    )
+
+    return html.Div([deliveries, discoveries],
+                    style={"display": "flex", "marginBottom": "24px"})
 
 
 # ── Priority block (big numbers) ──────────────────────────────────────────────

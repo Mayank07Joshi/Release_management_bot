@@ -162,6 +162,7 @@ def _fetch(conn, key) -> tuple[dict, dict]:
         bug_rows = []
 
     # ── Bugs Fixed — closed_date falls inside the release window ─────────────
+    # closed_date is stored as text in PG — pass params as ISO strings to match
     if start:
         bugs_fixed_rows = conn.execute(text("""
             SELECT work_item_id, work_item_type, state, priority, area, stage
@@ -171,7 +172,7 @@ def _fetch(conn, key) -> tuple[dict, dict]:
               AND closed_date <  :e
               AND state IN ('Closed','Not an issue','Not Required',
                             'Userstory Update','No Customer Response','Resolved')
-        """), {"s": start, "e": window_end}).fetchall()
+        """), {"s": str(start), "e": str(window_end)}).fetchall()
     elif ado_label:
         bugs_fixed_rows = conn.execute(text("""
             SELECT work_item_id, work_item_type, state, priority, area, stage
