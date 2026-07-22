@@ -4429,6 +4429,12 @@ def _render_stories(gates, month, ba_f, dev_f, show_f, type_f, tier_f, page, stu
         style={"color": MT, "fontSize": "12px", "fontWeight": "500"},
     )
 
+    # Don't recreate stuck-chips when only gate-store changed — re-creating them
+    # with n_clicks=0 falsely fires _stuck_filter_update → resets page to 1.
+    triggered = ctx.triggered_id if ctx.triggered_id else ""
+    if triggered == "gate-store":
+        stuck_bar = no_update
+
     return rows, header, page_info, prev_disabled, next_disabled, pag_style, stuck_bar, summary_text
 
 
