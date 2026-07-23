@@ -1020,8 +1020,9 @@ def _kpi_card(label, value_pct, sub, color=None, count=""):
     })
 
 
-def _ba_card(name, code, role, pct, done, total, color=None):
+def _ba_card(name, code, role, pct, done, total, color=None, first_name="", is_active=False):
     c = color or (G if pct >= 80 else A if pct >= 50 else R)
+    border = f"2px solid {c}" if is_active else f"1px solid {c}33"
     return html.Div([
         html.Div([
             html.Span(name, style={"fontWeight": "700", "color": TX, "fontSize": "13px"}),
@@ -1036,10 +1037,13 @@ def _ba_card(name, code, role, pct, done, total, color=None):
                    "background": "rgba(255,255,255,0.08)",
                    "borderRadius": "2px", "margin": "8px 0"}),
         html.Div(f"{done} of {total} stories", style={"fontSize": "10px", "color": MT}),
-    ], style={
-        "background": C2, "border": f"1px solid {c}33",
+    ], id={"type": "ba-card", "ba": first_name} if first_name else None,
+    n_clicks=0,
+    style={
+        "background": C2, "border": border,
         "borderRadius": "10px", "padding": "12px 16px",
         "minWidth": "160px", "flex": "1",
+        "cursor": "pointer",
     })
 
 
@@ -4340,9 +4344,11 @@ def _render_stories(gates, month, ba_f, dev_f, show_f, type_f, tier_f, page, stu
             if _status(gates.get(str(s["id"]),
                        {f: s.get(f, False) for f in _GATE_FIELDS})) == "READY"
         )
+        fn = ba_name.split()[0]
         ba_cards.append(
             _ba_card(ba_name, ba_code, ba_role,
-                     round(r / len(ss) * 100) if ss else 100, r, len(ss))
+                     round(r / len(ss) * 100) if ss else 100, r, len(ss),
+                     first_name=fn, is_active=(ba_f == fn))
         )
 
     header = html.Div([
@@ -4432,7 +4438,16 @@ def _render_stories(gates, month, ba_f, dev_f, show_f, type_f, tier_f, page, stu
     # Don't recreate stuck-chips when only gate-store changed — re-creating them
     # with n_clicks=0 falsely fires _stuck_filter_update → resets page to 1.
     triggered = ctx.triggered_id if ctx.triggered_id else ""
-    if triggered == "gate-store":
+
+    # readiness-header (BA cards + progress bar) is computed from all_month, not
+    # the filtered list — only re-send it when the underlying data actually changed.
+    if triggered not in {"gate-store", "plan-active-month", "plan-ba-filter"}:
+        header = no_update
+
+    # stuck-filter-bar counts are also from all_month; only active-chip state
+    # changes when stuck-filter fires.  gate-store skip is preserved to avoid
+    # resetting n_clicks=0 on the chips (existing bug workaround).
+    if triggered == "gate-store" or triggered not in {"plan-active-month", "stuck-filter"}:
         stuck_bar = no_update
 
     return rows, header, page_info, prev_disabled, next_disabled, pag_style, stuck_bar, summary_text
@@ -4644,15 +4659,20 @@ def _bug_next(_, page):
     Output("plan-ba-filter", "data"),
     Input("ba-all-chip",                    "n_clicks"),
     Input({"type": "ba-chip", "ba": ALL},   "n_clicks"),
+    Input({"type": "ba-card", "ba": ALL},   "n_clicks"),
+    State("plan-ba-filter",                 "data"),
     prevent_initial_call=True,
 )
-def _ba_filter(all_clicks, ba_clicks):
+def _ba_filter(all_clicks, ba_clicks, card_clicks, current_ba_f):
     triggered = ctx.triggered_id
     if triggered == "ba-all-chip":
         return "All BAs"
     if isinstance(triggered, dict):
-        return triggered.get("ba", "All BAs")
-    return "All BAs"
+        ba = triggered.get("ba", "All BAs")
+        if triggered.get("type") == "ba-card" and current_ba_f == ba:
+            return "All BAs"
+        return ba
+    return no_update
 
 
 # ── 6. Dev filter chip ────────────────────────────────────────────────────────

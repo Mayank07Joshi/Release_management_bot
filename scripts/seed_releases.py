@@ -132,7 +132,7 @@ _RELEASES: list[tuple] = [
         "2026 July Onboarding Release",
         42836,
         date(2026, 7, 21), None,
-        "In Progress", None,
+        "In Progress", "2026 July Onboarding",
     ),
 ]
 

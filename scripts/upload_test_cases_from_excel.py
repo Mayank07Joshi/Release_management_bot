@@ -42,6 +42,12 @@ import openpyxl
 
 load_dotenv()
 
+# Windows consoles default to cp1252, which can't encode characters like
+# '→' that show up in test-step text -- force UTF-8 so printing never crashes.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 # -- Constants ------------------------------------------------------------------
 
 ORG_URL  = os.getenv("ORGANIZATION_URL", "https://dev.azure.com/expenseondemand")
