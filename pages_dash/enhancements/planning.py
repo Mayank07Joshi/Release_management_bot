@@ -3475,16 +3475,6 @@ def _build_full_layout():
                     ("By Developer", "bydev"),
                     ("By Story",     "bystory"),
                 ])],
-                html.Button([
-                    html.Span("⚙", style={"marginRight": "6px", "fontSize": "13px"}),
-                    html.Span("Filters", style={"fontSize": "12px", "fontWeight": "600"}),
-                ], id="ba-flt-open-btn", n_clicks=0, style={
-                    "display": "flex", "alignItems": "center", "marginLeft": "auto",
-                    "background": "transparent", "border": f"1px solid {BD}",
-                    "borderRadius": "8px", "color": MT,
-                    "padding": "6px 14px", "cursor": "pointer",
-                    "transition": "border-color .15s, color .15s",
-                }),
             ], style={
                 "display": "flex", "alignItems": "center", "gap": "4px",
                 "position": "sticky", "top": "0", "zIndex": "22",
@@ -4253,11 +4243,14 @@ def _render_stories(gates, month, ba_f, dev_f, show_f, type_f, tier_f, page, stu
         stories = [s for s in stories if s["ba"].startswith(ba_f)]
     if dev_f and dev_f != "All":
         stories = [s for s in stories if s["dev"].split()[0] == dev_f]
+    # show_f is skipped when a specific stuck-filter is active — stuck filter
+    # already implies a readiness state, and applying both causes empty results
+    # (e.g. "Needs Action" strips READY stories before "complete" can match them).
     _actionable = {"NOT STARTED", "IN PROGRESS"}
-    if show_f == "Needs Action":
+    if (not stuck_f or stuck_f == "all") and show_f == "Needs Action":
         stories = [s for s in stories
                    if _status(gates.get(str(s["id"]), {f: s.get(f, False) for f in _GATE_FIELDS})) in _actionable]
-    elif show_f == "Ready":
+    elif (not stuck_f or stuck_f == "all") and show_f == "Ready":
         stories = [s for s in stories
                    if _status(gates.get(str(s["id"]), {f: s.get(f, False) for f in _GATE_FIELDS})) not in _actionable]
     if type_f == "Enhancements":
@@ -4276,21 +4269,29 @@ def _render_stories(gates, month, ba_f, dev_f, show_f, type_f, tier_f, page, stu
         elif tier_f == "complete":
             stories = [s for s in stories if _status(_gst(s)) == "READY"]
 
-    # Stuck-at filter
-    def _stuck_gate(s):
+    # Progress-stage filter — last gate that has been checked off
+    def _progress_stage(s):
+        if _status(_gst(s)) == "READY":
+            return "complete"
         g = _gst(s)
+        last = None
         for f in _GATE_FIELDS:
-            if not g.get(f):
-                return f
-        return None  # all gates done
+            if g.get(f):
+                last = f
+            else:
+                break
+        return last  # None = not started, else = last checked gate key
+
+    # Snapshot after base filters — stuck bar counts must match what clicking shows
+    stories_base = stories
 
     if stuck_f and stuck_f != "all":
         if stuck_f == "not_started":
-            stories = [s for s in stories if _status(_gst(s)) == "NOT STARTED"]
+            stories = [s for s in stories if _progress_stage(s) is None]
         elif stuck_f == "complete":
-            stories = [s for s in stories if _status(_gst(s)) == "READY"]
+            stories = [s for s in stories if _progress_stage(s) == "complete"]
         else:
-            stories = [s for s in stories if _stuck_gate(s) == stuck_f]
+            stories = [s for s in stories if _progress_stage(s) == stuck_f]
 
     # Paginate
     total_filtered = len(stories)
@@ -4390,13 +4391,15 @@ def _render_stories(gates, month, ba_f, dev_f, show_f, type_f, tier_f, page, stu
                          "marginBottom": "16px"}),
     ])
 
-    # ── WHERE STORIES ARE STUCK filter bar ────────────────────────────────────
-    def _count_stuck(gate_key):
-        return sum(1 for s in all_month if _stuck_gate(s) == gate_key)
+    # ── BA SIGN-OFF PROGRESS filter bar ───────────────────────────────────────
+    # Use stories_base (after ba/dev/type/tier filters, before stuck filter) so
+    # the count shown on each chip matches exactly what clicking it will display.
+    def _count_stage(gate_key):
+        return sum(1 for s in stories_base if _progress_stage(s) == gate_key)
 
-    n_total    = len(all_month)
-    n_ns       = sum(1 for s in all_month if _status(_gst(s)) == "NOT STARTED")
-    n_complete = sum(1 for s in all_month if _status(_gst(s)) == "READY")
+    n_total    = len(stories_base)
+    n_ns       = sum(1 for s in stories_base if _progress_stage(s) is None)
+    n_complete = sum(1 for s in stories_base if _progress_stage(s) == "complete")
 
     _sfbtn_act = {"padding": "5px 12px", "borderRadius": "20px", "fontSize": "12px",
                   "fontWeight": "600", "cursor": "pointer",
@@ -4415,14 +4418,14 @@ def _render_stories(gates, month, ba_f, dev_f, show_f, type_f, tier_f, page, stu
         )
 
     stuck_bar = html.Div([
-        html.Span("WHERE STORIES ARE STUCK", style={
+        html.Span("SIGN-OFF PROGRESS", style={
             "fontSize": "9px", "fontWeight": "800", "letterSpacing": "2px",
             "textTransform": "uppercase", "color": A, "marginRight": "14px",
             "flexShrink": "0", "alignSelf": "center",
         }),
         _sfbtn("All",         n_total,    "all"),
         _sfbtn("Not started", n_ns,       "not_started"),
-        *[_sfbtn(f"Stuck: {_GATE_LABELS[f]}", _count_stuck(f), f) for f in _GATE_FIELDS],
+        *[_sfbtn(_GATE_LABELS[f], _count_stage(f), f) for f in _GATE_FIELDS],
         _sfbtn("Complete",    n_complete, "complete"),
     ], style={
         "display": "flex", "alignItems": "center", "flexWrap": "wrap", "gap": "6px",
@@ -4435,19 +4438,21 @@ def _render_stories(gates, month, ba_f, dev_f, show_f, type_f, tier_f, page, stu
         style={"color": MT, "fontSize": "12px", "fontWeight": "500"},
     )
 
-    # Don't recreate stuck-chips when only gate-store changed — re-creating them
-    # with n_clicks=0 falsely fires _stuck_filter_update → resets page to 1.
     triggered = ctx.triggered_id if ctx.triggered_id else ""
 
     # readiness-header (BA cards + progress bar) is computed from all_month, not
-    # the filtered list — only re-send it when the underlying data actually changed.
-    if triggered not in {"gate-store", "plan-active-month", "plan-ba-filter"}:
+    # the filtered list — only skip re-sending when a trigger that doesn't affect
+    # it fires.  Empty triggered means initial load — always render.
+    if triggered and triggered not in {"gate-store", "plan-active-month", "plan-ba-filter"}:
         header = no_update
 
-    # stuck-filter-bar counts are also from all_month; only active-chip state
-    # changes when stuck-filter fires.  gate-store skip is preserved to avoid
-    # resetting n_clicks=0 on the chips (existing bug workaround).
-    if triggered == "gate-store" or triggered not in {"plan-active-month", "stuck-filter"}:
+    # stuck-filter-bar: skip only on story-page (pagination never changes stage
+    # counts).  Gate clicks previously skipped to avoid the n_clicks=0 chip
+    # re-fire cascade, but _stuck_filter_update already guards against that, so
+    # gate-store is safe to include — and necessary: on initial render Dash
+    # picks gate-store as the primary trigger, so omitting it here left the bar
+    # blank on first load.
+    if triggered and triggered == "story-page":
         stuck_bar = no_update
 
     return rows, header, page_info, prev_disabled, next_disabled, pag_style, stuck_bar, summary_text
@@ -4633,14 +4638,11 @@ def _toggle_ba_section(ba_type):
 @callback(
     Output("ba-flt-panel",    "style"),
     Output("ba-flt-backdrop", "style"),
-    Input("ba-flt-open-btn",    "n_clicks"),
     Input("ba-flt-panel-close", "n_clicks"),
     Input("ba-flt-backdrop",    "n_clicks"),
     prevent_initial_call=True,
 )
-def _toggle_ba_filter_panel(open_n, close_n, backdrop_n):
-    if ctx.triggered_id == "ba-flt-open-btn":
-        return _FLT_PANEL_OPEN, _BACKDROP_OPEN
+def _toggle_ba_filter_panel(close_n, backdrop_n):
     return _FLT_PANEL_CLOSED, _BACKDROP_CLOSED
 
 
@@ -4664,6 +4666,10 @@ def _bug_next(_, page):
     prevent_initial_call=True,
 )
 def _ba_filter(all_clicks, ba_clicks, card_clicks, current_ba_f):
+    # Guard: dynamically-rendered BA cards re-fire this callback with n_clicks=0
+    # when added to the DOM. Only act on genuine user clicks (value > 0).
+    if not ctx.triggered or not ctx.triggered[0].get("value"):
+        return no_update
     triggered = ctx.triggered_id
     if triggered == "ba-all-chip":
         return "All BAs"
