@@ -3180,6 +3180,10 @@ def layout(**_):
             color="#818cf8",
             style={"minHeight": "80vh", "display": "flex",
                    "alignItems": "center", "justifyContent": "center"},
+            # Only watch _plan-body.children — without this Dash 4 shows the
+            # full-page spinner whenever ANY descendant callback fires (e.g.
+            # _render_stories on every click), making the page appear blank.
+            target_components={"_plan-body": "children"},
             children=html.Div(id="_plan-body"),
         ),
     ], style={"background": C3, "minHeight": "100vh",
