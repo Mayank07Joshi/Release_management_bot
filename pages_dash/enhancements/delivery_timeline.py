@@ -760,6 +760,7 @@ def layout(**_):
         # ── Planning / Insights view ───────────────────────────────────────────
         html.Div(id="dt-planning-section", style={"display": "none"}, children=[
             dcc.Loading(type="circle", color="#818cf8",
+                        target_components={"dt-planning-charts": "children"},
                         children=html.Div(id="dt-planning-charts")),
         ]),
 
