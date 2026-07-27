@@ -56,6 +56,7 @@ FIELD_MAP: dict[str, str] = {
     "area":              "Custom.Area",
     "main_developer":    "Custom.MainDevevloper",   # intentional typo — matches ADO field
     "main_designer":     "Custom.MainDesigner",
+    "design_type":       "Custom.Design",
     "tags":              "System.Tags",
     "description":       "System.Description",
     "release_date":      "Custom.Releasedate",

@@ -268,6 +268,15 @@ def _load_story_tracking_data() -> list[dict]:
                 )
             """))
             conn.commit()
+            for _ddl in [
+                "ALTER TABLE p_story_tracking ADD COLUMN IF NOT EXISTS est_hours      NUMERIC(8,2)",
+                "ALTER TABLE p_story_tracking ADD COLUMN IF NOT EXISTS act_start_date DATE",
+                "ALTER TABLE p_story_tracking ADD COLUMN IF NOT EXISTS act_end_date   DATE",
+                "ALTER TABLE p_story_tracking ADD COLUMN IF NOT EXISTS act_hours      NUMERIC(8,2)",
+                "ALTER TABLE p_story_tracking ADD COLUMN IF NOT EXISTS story_review   TEXT",
+            ]:
+                conn.execute(_text(_ddl))
+            conn.commit()
             rows = conn.execute(_text("""
                 SELECT
                     w.work_item_id,
@@ -319,6 +328,76 @@ def _save_st_date(work_item_id: int, col: str, val):
                 SET {col} = EXCLUDED.{col}, updated_at = NOW()
         """), {"id": work_item_id, "val": val or None})
     _st_data_cache["data"] = None  # bust cache
+
+
+def _load_sp_data(story_id: int) -> dict:
+    """Load local planning fields + live ADO fields for the story panel."""
+    from data.loader import engine as _engine
+    from sqlalchemy import text as _text
+    try:
+        with _engine.connect() as conn:
+            t = conn.execute(_text("""
+                SELECT est_start_date, est_end_date, est_hours,
+                       act_start_date, act_end_date, act_hours
+                FROM p_story_tracking WHERE work_item_id = :id
+            """), {"id": story_id}).fetchone()
+            w = conn.execute(_text("""
+                SELECT main_designer, design_type, release_date, iteration_path, story_owner
+                FROM work_items_main WHERE work_item_id = :id
+            """), {"id": story_id}).fetchone()
+        result = {}
+        if t:
+            result.update({k: v for k, v in dict(t._mapping).items() if v is not None})
+        if w:
+            result.update({k: v for k, v in dict(w._mapping).items() if v is not None})
+        return result
+    except Exception:
+        return {}
+
+
+def _upsert_sp_data(story_id: int, col: str, val) -> None:
+    """Upsert one local-DB column in p_story_tracking."""
+    _ALLOWED = {"est_start_date", "est_end_date", "est_hours",
+                "act_start_date", "act_end_date", "act_hours"}
+    if col not in _ALLOWED:
+        return
+    from data.loader import engine as _engine
+    from sqlalchemy import text as _text
+    with _engine.begin() as conn:
+        conn.execute(_text(f"""
+            INSERT INTO p_story_tracking (work_item_id, {col}, updated_at)
+            VALUES (:id, :val, NOW())
+            ON CONFLICT (work_item_id) DO UPDATE
+                SET {col} = EXCLUDED.{col}, updated_at = NOW()
+        """), {"id": story_id, "val": val if val != "" else None})
+    _st_data_cache["data"] = None
+
+
+def _load_sp_options() -> tuple[list, list]:
+    """Return (releases, iteration_paths) lists for story panel dropdowns."""
+    from data.loader import engine as _engine
+    from sqlalchemy import text as _text
+    releases, iterations = [], []
+    try:
+        with _engine.connect() as conn:
+            # Pull all human-readable release names directly from work_items_main
+            # (p_releases is incomplete — future releases only exist here)
+            for r in conn.execute(_text(
+                "SELECT DISTINCT release_date FROM work_items_main "
+                "WHERE release_date ~ '^202[5-9] [A-Za-z]' "
+                "ORDER BY release_date DESC"
+            )).fetchall():
+                v = r.release_date
+                releases.append({"label": v, "value": v})
+            for r in conn.execute(_text(
+                "SELECT DISTINCT iteration_path FROM work_items_main "
+                "WHERE iteration_path LIKE '%Iteration 202%' "
+                "ORDER BY iteration_path DESC"
+            )).fetchall():
+                iterations.append(r.iteration_path)
+    except Exception:
+        pass
+    return releases, iterations
 
 
 _ST_STATUS_COLOR = {
@@ -917,32 +996,60 @@ def _tag(text, color):
     })
 
 
-def _gate_btn(sid, gate, checked):
-    label = _GATE_LABELS.get(gate, gate)
-    txt_c = "#ffffff" if checked else MT
-    return html.Div(
-        [
-            html.Span("✓" if checked else "○",
-                      style={"color": txt_c, "marginRight": "6px",
-                             "fontSize": "11px", "fontWeight": "700", "flexShrink": "0"}),
-            html.Span(label, style={"fontSize": "11px", "fontWeight": "600", "color": txt_c}),
-        ],
-        id={"type": "gate-open-btn", "sid": sid, "gate": gate},
-        n_clicks=0,
-        className=f"gate-pill {'gate-done' if checked else 'gate-pending'}",
-        style={
-            "padding":      "7px 12px",
-            "cursor":       "pointer",
-            "display":      "flex",
-            "alignItems":   "center",
-            "borderRadius": "6px",
-            "marginBottom": "3px",
-            "width":        "100%",
-            "transition":   "all .2s",
-            "background":   G if checked else "rgba(255,255,255,0.05)",
-            "border":       f"1px solid {G}" if checked else f"1px solid {BD}",
-        },
-    )
+def _gate_row(sid: int, field: str, g: dict) -> html.Div:
+    """Stage-row styled gate: label | Done/WIP/Not-Started circles | date input."""
+    label    = _GATE_LABELS.get(field, field)
+    done     = g.get(field, False)
+    wip      = g.get(f"{field}_wip", False)
+    date_val = g.get(f"{field}_date", "")
+    status   = "done" if done else ("wip" if wip else "not_started")
+
+    def _sbtn(val: str, color: str) -> html.Button:
+        active = (status == val)
+        r = color[4:-1]  # strip "rgb(" and ")"
+        return html.Button(
+            "✓" if active else "",
+            id={"type": "sp-gate-circle", "sid": sid, "field": field, "status": val},
+            n_clicks=0,
+            style={
+                "width": "22px", "height": "22px", "borderRadius": "50%",
+                "cursor": "pointer", "padding": "0",
+                "background": color if active else "transparent",
+                "border": f"2px solid {color}" if active
+                          else f"2px solid rgba({r},0.4)",
+                "display": "flex", "alignItems": "center",
+                "justifyContent": "center",
+                "color": "rgb(10,13,21)", "fontSize": "11px", "fontWeight": "800",
+                "lineHeight": "1",
+            },
+        )
+
+    return html.Div([
+        html.Span(label, style={
+            "flex": "1", "fontSize": "12px", "color": _SP_FG, "lineHeight": "1.3",
+        }),
+        html.Div([
+            _sbtn("done",        _SP_GREEN),
+            _sbtn("wip",         _SP_AMBER),
+            _sbtn("not_started", _SP_RED),
+        ], style={"display": "flex", "gap": "5px"}),
+        dcc.Input(
+            id={"type": "sp-gate-date", "sid": sid, "field": field},
+            type="text", value=date_val or "", placeholder="YYYY-MM-DD",
+            debounce=True,
+            style={
+                "width": "122px", "padding": "5px 6px",
+                "background": _SP_BHEAD, "border": f"1px solid {_SP_BD}",
+                "color": _SP_FG, "borderRadius": "6px",
+                "fontSize": "11px", "fontFamily": _SP_MONO, "outline": "none",
+            },
+        ),
+    ], style={
+        "display": "flex", "alignItems": "center", "gap": "7px",
+        "padding": "6px 8px", "borderRadius": "7px",
+        "border": f"1px solid {_SP_BDCELL}",
+        "marginBottom": "4px",
+    })
 
 
 def _status_badge(status, g):
@@ -1150,10 +1257,24 @@ def _story_row(s: dict, gates: dict) -> html.Tr:
         tags.append(html.Span(f"{s['hrs']:.0f}h",
                                style={"fontSize": "10px", "color": MT, "marginLeft": "2px"}))
 
-    gates_col = html.Div(
-        [_gate_btn(s["id"], f, g.get(f, False)) for f in _GATE_FIELDS],
-        style={"display": "flex", "flexDirection": "column", "gap": "2px"},
-    )
+    done = sum(1 for f in _GATE_FIELDS if g.get(f))
+    gate_summary = html.Div([
+        html.Div([
+            html.Span("●" if g.get(f) else "○",
+                      style={"color": G if g.get(f) else "rgba(255,255,255,0.18)",
+                             "fontSize": "10px", "marginRight": "3px"})
+            for f in _GATE_FIELDS
+        ], style={"display": "flex", "marginBottom": "5px"}),
+        html.Div(f"{done}/5  ·  {status}",
+                 style={"fontSize": "10px", "color": sc,
+                        "fontWeight": "700", "letterSpacing": "0.3px"}),
+        html.Div("Click to review ›",
+                 style={"fontSize": "9px", "color": MT, "marginTop": "3px"}),
+    ], id={"type": "sp-open-btn", "sid": s["id"]}, n_clicks=0, style={
+        "padding": "8px 12px", "cursor": "pointer", "borderRadius": "8px",
+        "background": "rgba(255,255,255,0.03)", "border": f"1px solid {BD}",
+        "transition": "border-color .15s", "userSelect": "none",
+    })
 
     return html.Tr([
         html.Td([
@@ -1191,7 +1312,7 @@ def _story_row(s: dict, gates: dict) -> html.Tr:
             html.Div(f"{s['ba_code']} · {s['ba_role']}",
                      style={"color": MT, "fontSize": "10px", "marginTop": "2px"}),
         ], style={"padding": "18px 16px", "borderBottom": f"1px solid {BD}"}),
-        html.Td(gates_col, style={"padding": "12px 16px", "borderBottom": f"1px solid {BD}"}),
+        html.Td(gate_summary, style={"padding": "12px 16px", "borderBottom": f"1px solid {BD}"}),
         html.Td(_status_badge(status, g), style={"padding": "18px 16px", "borderBottom": f"1px solid {BD}"}),
         html.Td(
             html.Button("📋", id={"type": "tracker-btn", "sid": s["id"]}, n_clicks=0,
@@ -1831,6 +1952,44 @@ _BACKDROP_BASE = {
 }
 _BACKDROP_OPEN   = {**_BACKDROP_BASE, "opacity": "1",  "pointerEvents": "all"}
 _BACKDROP_CLOSED = {**_BACKDROP_BASE, "opacity": "0",  "pointerEvents": "none"}
+
+# Story detail panel — 620px wide, sits above unest panel (higher z-index)
+# ── Panel design-standard colors (matches release_status.py) ─────────────────
+_SP_BG     = "rgb(18,22,31)"      # panel background
+_SP_BHEAD  = "rgb(23,28,40)"      # input / date background
+_SP_BD     = "rgb(38,44,58)"      # primary border
+_SP_BDCELL = "rgb(30,36,51)"      # row / divider border
+_SP_FG     = "rgb(234,236,242)"   # primary text
+_SP_MT     = "rgb(139,146,164)"   # secondary text
+_SP_DIM    = "rgb(91,98,118)"     # dim labels
+_SP_INDIGO = "rgb(110,118,241)"   # accent / supertitle / save button
+_SP_GREEN  = "rgb(70,194,142)"    # success / done
+_SP_AMBER  = "rgb(224,162,60)"    # WIP / warning
+_SP_RED    = "rgb(239,110,99)"    # not started / danger
+_SP_MONO   = "'JetBrains Mono','SF Mono',monospace"
+
+_SP_BASE = {
+    "position": "fixed", "top": "0", "right": "0",
+    "height": "100vh", "width": "760px",
+    "background": _SP_BG,
+    "borderLeft": f"1px solid {_SP_BD}",
+    "zIndex": "1052",
+    "display": "flex", "flexDirection": "column",
+    "boxShadow": "rgba(0,0,0,0.467) -8px 0px 24px",
+    "transition": "transform 0.28s cubic-bezier(.4,0,.2,1)",
+}
+_SP_OPEN   = {**_SP_BASE, "transform": "translateX(0%)"}
+_SP_CLOSED = {**_SP_BASE, "transform": "translateX(110%)"}
+
+_SP_BD_BASE = {
+    "position": "fixed", "top": "0", "left": "0",
+    "width": "100vw", "height": "100vh",
+    "background": "rgba(0,0,0,0.50)",
+    "zIndex": "1051",
+    "transition": "opacity 0.28s ease",
+}
+_SP_BD_OPEN   = {**_SP_BD_BASE, "opacity": "1",  "pointerEvents": "all"}
+_SP_BD_CLOSED = {**_SP_BD_BASE, "opacity": "0",  "pointerEvents": "none"}
 
 _FLT_PANEL_BASE = {
     "position": "fixed", "top": "0", "left": "0",
@@ -3398,6 +3557,8 @@ def _build_full_layout():
         dcc.Store(id="ba-type-f",           data="Enhancements"),
         dcc.Store(id="gantt-view", data="0-12"),
         dcc.Store(id="gantt-expanded",      data={"s": [], "t": []}),
+        dcc.Store(id="plan-story-sid",      data=None),  # open story in detail panel
+        dcc.Store(id="sp-loaded-data",      data={}),   # ADO field values at panel-open time
     ])
 
     # ── Sprint info strip (dynamic) ──────────────────────────────────────────
@@ -3786,12 +3947,254 @@ def _build_full_layout():
                      style={"overflowY": "auto", "flex": "1", "padding": "16px 20px"}),
         ], id="unest-side-panel", style=_PANEL_CLOSED),
 
+        # ── Story detail side panel ───────────────────────────────────────────
+        html.Div(id="sp-backdrop", n_clicks=0, style=_SP_BD_CLOSED),
+        html.Div([
+            # Header
+            html.Div([
+                html.Div([
+                    html.Div("Story Detail", style={
+                        "fontSize": "9.5px", "fontWeight": "700",
+                        "color": _SP_INDIGO,
+                        "textTransform": "uppercase", "letterSpacing": "0.6px",
+                        "marginBottom": "4px",
+                    }),
+                    html.Div(id="sp-panel-title"),
+                ], style={"flex": "1", "overflow": "hidden"}),
+                html.Button("✕", id="sp-close-btn", n_clicks=0, style={
+                    "background": "none", "border": "none",
+                    "color": _SP_DIM,
+                    "fontSize": "20px", "cursor": "pointer",
+                    "padding": "0 0 0 12px", "lineHeight": "1", "flexShrink": "0",
+                }),
+            ], style={"display": "flex", "alignItems": "flex-start",
+                      "padding": "18px 20px 14px",
+                      "borderBottom": f"1px solid {_SP_BD}", "flexShrink": "0"}),
+            # Scrollable body
+            html.Div([
+                # Dynamic body: planning, estimates, actuals, ADO settings + save button
+                html.Div(id="sp-panel-body"),
+                # Save status feedback — stable so callbacks always find it
+                html.Div(id="sp-save-status", style={
+                    "fontSize": "11px", "color": _SP_GREEN, "textAlign": "right",
+                    "minHeight": "18px", "marginTop": "4px",
+                }),
+                # Gates section — stable; rows refreshed by _sp_update_gates
+                html.Div([
+                    html.Div(style={
+                        "borderTop": f"1px solid {_SP_BDCELL}",
+                        "margin": "13px 0 10px",
+                    }),
+                    html.Div([
+                        html.Span("Sign-Off Gates", style={
+                            "fontSize": "9.5px", "fontWeight": "700",
+                            "color": _SP_DIM,
+                            "textTransform": "uppercase", "letterSpacing": "0.5px",
+                        }),
+                        html.Div([
+                            html.Span([
+                                html.Span(style={
+                                    "width": "10px", "height": "10px",
+                                    "borderRadius": "50%",
+                                    "border": f"2px solid {c}",
+                                    "display": "inline-block", "marginRight": "4px",
+                                }),
+                                html.Span(lbl, style={
+                                    "fontSize": "10px", "color": _SP_DIM,
+                                }),
+                            ], style={"display": "inline-flex", "alignItems": "center",
+                                      "marginLeft": "10px"})
+                            for lbl, c in [
+                                ("Done", _SP_GREEN),
+                                ("WIP",  _SP_AMBER),
+                                ("Not started", _SP_RED),
+                            ]
+                        ], style={"display": "flex"}),
+                    ], style={
+                        "display": "flex", "justifyContent": "space-between",
+                        "alignItems": "center", "marginBottom": "9px",
+                    }),
+                    html.Div(id="sp-gates-body"),
+                ]),
+            ], style={"overflowY": "auto", "flex": "1", "padding": "18px 20px 28px"}),
+        ], id="sp-side-panel", style=_SP_CLOSED),
+
     ], style={
         "padding":    "24px 32px",
         "background": C3,
         "minHeight":  "100vh",
         "fontFamily": "Inter, system-ui, sans-serif",
     })
+
+
+# ── Story detail panel body builder ──────────────────────────────────────────
+_DESIGNER_OPTS = [
+    {"label": n, "value": n}
+    for n in ["Gagandeep Kaur", "Furquan Nayyar", "Kaushik Awasthi", "Neeraj Kumar", "Unassigned"]
+]
+_DESIGN_OPTS  = [{"label": "New Design", "value": "New Design"},
+                 {"label": "Old Design",  "value": "Old Design"}]
+_REVIEW_OPTS  = [{"label": n, "value": n}
+                 for n in ["Chhavi", "Geetika", "Sunil", "Vineeta"]]
+
+
+def _sp_days(s_date, e_date) -> str:
+    if not s_date or not e_date:
+        return "—"
+    try:
+        from datetime import date as _d
+        s = _d.fromisoformat(str(s_date))
+        e = _d.fromisoformat(str(e_date))
+        return str(max(0, (e - s).days + 1))
+    except Exception:
+        return "—"
+
+
+def _build_sp_body_static(story: dict, sp_data: dict, releases: list, iterations: list) -> html.Div:
+    """Build the non-gate body sections of the story detail panel."""
+
+    _inp_s = {
+        "width": "100%", "padding": "8px 10px",
+        "background": _SP_BHEAD, "border": f"1px solid {_SP_BD}",
+        "borderRadius": "7px", "color": _SP_FG,
+        "fontSize": "12.5px", "boxSizing": "border-box", "outline": "none",
+    }
+    _dd_s = {"fontSize": "12.5px"}
+    _div  = html.Div(style={"borderTop": f"1px solid {_SP_BDCELL}",
+                            "margin": "13px 0 10px"})
+
+    def _sh(label: str) -> html.Div:
+        return html.Div(label, style={
+            "fontSize": "9.5px", "fontWeight": "700", "color": _SP_DIM,
+            "textTransform": "uppercase", "letterSpacing": "0.6px",
+            "marginBottom": "8px", "marginTop": "14px",
+        })
+
+    def _lbl(text: str) -> html.Div:
+        return html.Div(text, style={
+            "fontSize": "9.5px", "fontWeight": "700", "color": _SP_DIM,
+            "textTransform": "uppercase", "letterSpacing": "0.5px",
+            "marginBottom": "5px",
+        })
+
+    def _row(*cols) -> html.Div:
+        return html.Div(list(cols),
+                        style={"display": "flex", "gap": "10px", "marginBottom": "14px"})
+
+    def _col(children) -> html.Div:
+        return html.Div(children, style={"flex": "1", "minWidth": "0"})
+
+    est_start = str(sp_data.get("est_start_date") or "")
+    est_end   = str(sp_data.get("est_end_date")   or "")
+    act_start = str(sp_data.get("act_start_date") or "")
+    act_end   = str(sp_data.get("act_end_date")   or "")
+
+
+    # ── Planning ──────────────────────────────────────────────────────────────
+    planning = html.Div([
+        _sh("Planning"),
+        _row(
+            _col([_lbl("Story Owner"),
+                  dcc.Dropdown(id="sp-story-owner", options=_REVIEW_OPTS,
+                               value=sp_data.get("story_owner"), placeholder="—",
+                               clearable=True, style=_dd_s)]),
+            _col([_lbl("Design"),
+                  dcc.Dropdown(id="sp-design-type", options=_DESIGN_OPTS,
+                               value=sp_data.get("design_type"), placeholder="—",
+                               clearable=True, style=_dd_s)]),
+        ),
+        html.Div([_lbl("Main Designer"),
+                  dcc.Dropdown(id="sp-designer", options=_DESIGNER_OPTS,
+                               value=sp_data.get("main_designer"), placeholder="—",
+                               clearable=True, style=_dd_s)],
+                 style={"marginBottom": "14px"}),
+    ])
+
+    # ── Estimates ─────────────────────────────────────────────────────────────
+    estimates = html.Div([
+        _div,
+        _sh("Estimates"),
+        _row(
+            _col([_lbl("Start Date"),
+                  dcc.Input(id="sp-est-start", type="text", value=est_start,
+                            placeholder="YYYY-MM-DD", debounce=True, style=_inp_s)]),
+            _col([_lbl("End Date"),
+                  dcc.Input(id="sp-est-end", type="text", value=est_end,
+                            placeholder="YYYY-MM-DD", debounce=True, style=_inp_s)]),
+            html.Div([
+                _lbl("Days"),
+                html.Div(_sp_days(est_start, est_end),
+                         style={"fontSize": "18px", "fontWeight": "700",
+                                "color": _SP_FG, "paddingTop": "6px"}),
+            ], style={"flexShrink": "0", "minWidth": "44px"}),
+        ),
+        html.Div([
+            _lbl("Hours"),
+            dcc.Input(id="sp-est-hours", type="number", min=0, step=0.5,
+                      value=sp_data.get("est_hours"), debounce=True,
+                      style={**_inp_s, "width": "110px", "padding": "4px 8px",
+                             "fontSize": "12px"}),
+        ], style={"marginBottom": "14px"}),
+    ])
+
+    # ── Actuals ───────────────────────────────────────────────────────────────
+    actuals = html.Div([
+        _div,
+        _sh("Actuals"),
+        _row(
+            _col([_lbl("Start Date"),
+                  dcc.Input(id="sp-act-start", type="text", value=act_start,
+                            placeholder="YYYY-MM-DD", debounce=True, style=_inp_s)]),
+            _col([_lbl("End Date"),
+                  dcc.Input(id="sp-act-end", type="text", value=act_end,
+                            placeholder="YYYY-MM-DD", debounce=True, style=_inp_s)]),
+            html.Div([
+                _lbl("Days"),
+                html.Div(_sp_days(act_start, act_end),
+                         style={"fontSize": "18px", "fontWeight": "700",
+                                "color": _SP_FG, "paddingTop": "6px"}),
+            ], style={"flexShrink": "0", "minWidth": "44px"}),
+        ),
+        html.Div([
+            _lbl("Hours"),
+            dcc.Input(id="sp-act-hours", type="number", min=0, step=0.5,
+                      value=sp_data.get("act_hours"), debounce=True,
+                      style={**_inp_s, "width": "110px", "padding": "4px 8px",
+                             "fontSize": "12px"}),
+        ], style={"marginBottom": "14px"}),
+    ])
+
+    # ── ADO Settings ─────────────────────────────────────────────────────────
+    ado = html.Div([
+        _div,
+        _sh("ADO Settings"),
+        _row(
+            _col([_lbl("Release"),
+                  dcc.Dropdown(id="sp-release", options=releases,
+                               value=sp_data.get("release_date"), placeholder="—",
+                               clearable=True, style=_dd_s)]),
+            _col([_lbl("Iteration"),
+                  dcc.Dropdown(
+                      id="sp-iteration",
+                      options=[{"label": i.split("\\")[-1] if "\\" in i else i, "value": i}
+                               for i in iterations],
+                      value=sp_data.get("iteration_path"), placeholder="—",
+                      clearable=True, style=_dd_s,
+                  )]),
+        ),
+    ])
+
+    # ── Save to ADO button ────────────────────────────────────────────────────
+    save_btn = html.Button("Save to ADO", id="sp-save-ado-btn", n_clicks=0, style={
+        "width": "100%", "padding": "9px", "borderRadius": "8px",
+        "background": "rgba(110,118,241,0.133)",
+        "border": "1px solid rgba(110,118,241,0.5)",
+        "color": _SP_INDIGO, "cursor": "pointer",
+        "fontSize": "12px", "fontWeight": "700",
+        "marginBottom": "4px",
+    })
+
+    return html.Div([planning, estimates, actuals, ado, save_btn])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -4165,10 +4568,10 @@ def _select_month(n_clicks, current, months_data):
     return new_month, html.Div(tabs, style={"display": "flex", "gap": "6px", "width": "100%"})
 
 
-# ── 3. Gate direct-toggle — click pill to check/uncheck ──────────────────────
+# ── 3. Gate circle click — Done / WIP / Not Started ──────────────────────────
 @callback(
     Output("gate-store", "data", allow_duplicate=True),
-    Input({"type": "gate-open-btn", "sid": ALL, "gate": ALL}, "n_clicks"),
+    Input({"type": "sp-gate-circle", "sid": ALL, "field": ALL, "status": ALL}, "n_clicks"),
     State("gate-store",          "data"),
     State("plan-stories-store",  "data"),
     prevent_initial_call=True,
@@ -4177,43 +4580,59 @@ def _toggle_gate(gate_clicks, gates, stories_data):
     if not any(gate_clicks or []):
         return no_update
     triggered = ctx.triggered_id
-    if not isinstance(triggered, dict) or triggered.get("type") != "gate-open-btn":
+    if not isinstance(triggered, dict) or triggered.get("type") != "sp-gate-circle":
         return no_update
 
-    sid      = triggered["sid"]
-    gate     = triggered["gate"]
-    sid_str  = str(sid)
+    sid     = triggered["sid"]
+    field   = triggered["field"]
+    clicked = triggered["status"]
+    sid_str = str(sid)
 
-    current  = dict(gates or {})
-    g        = dict(current.get(sid_str, {f: False for f in _GATE_FIELDS}))
-    new_val  = not g.get(gate, False)
+    current = dict(gates or {})
+    g       = dict(current.get(sid_str, {f: False for f in _GATE_FIELDS}))
 
-    g[gate] = new_val
-    # Cascade clear downstream gates when unchecking
-    if not new_val:
+    # Determine current status
+    cur_status = "done" if g.get(field) else ("wip" if g.get(f"{field}_wip") else "not_started")
+    # Clicking the active state again resets to not_started (toggle off)
+    new_status = "not_started" if clicked == cur_status else clicked
+
+    new_done = (new_status == "done")
+    g[field] = new_done
+
+    # Cascade-clear downstream gates only when fully removing done (→ not_started).
+    # Going done→wip leaves downstream intact — earlier gate is in progress,
+    # not undone, so completed later gates should remain.
+    if cur_status == "done" and new_status == "not_started":
         gate_order = list(_GATE_FIELDS)
-        idx = gate_order.index(gate) if gate in gate_order else -1
+        idx = gate_order.index(field) if field in gate_order else -1
         for ds in gate_order[idx + 1:]:
             g[ds] = False
+            g[f"{ds}_wip"] = False
 
+    g[f"{field}_wip"] = (new_status == "wip")
     current[sid_str] = g
 
+    # DB write in background so the UI updates immediately
     try:
         from flask_login import current_user as _cu
         performed_by = _cu.display_name if _cu and _cu.is_authenticated else "system"
     except Exception:
         performed_by = "system"
-    try:
-        from db.planning import upsert_gate as _upsert
-        story_obj = next((s for s in (stories_data or []) if s["id"] == sid), {})
-        _upsert(int(sid), gate, new_val, performed_by,
-                title=story_obj.get("title", ""),
-                ba=story_obj.get("ba", ""),
-                dev_name=story_obj.get("dev", ""),
-                month_key=story_obj.get("month", ""),
-                priority=story_obj.get("pri", ""))
-    except Exception:
-        pass
+
+    import threading
+    story_obj = next((s for s in (stories_data or []) if s["id"] == sid), {})
+    def _bg_save():
+        try:
+            from db.planning import set_gate_status as _set_status
+            _set_status(int(sid), field, new_status, performed_by,
+                        title=story_obj.get("title", ""),
+                        ba=story_obj.get("ba", ""),
+                        dev_name=story_obj.get("dev", ""),
+                        month_key=story_obj.get("month", ""),
+                        priority=story_obj.get("pri", ""))
+        except Exception:
+            pass
+    threading.Thread(target=_bg_save, daemon=True).start()
 
     return current
 
@@ -6156,3 +6575,214 @@ def _gantt_render(view, active_tab, type_filter, prio_filter, expanded):
         year_filter=None,
         cust_filter="all",   # Customer/Internal never filters the Gantt
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# STORY DETAIL PANEL CALLBACKS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Open: condensed badge click → set story sid ───────────────────────────────
+@callback(
+    Output("plan-story-sid", "data"),
+    Input({"type": "sp-open-btn", "sid": ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def _sp_open(clicks):
+    if not any((n or 0) > 0 for n in (clicks or [])):
+        return no_update
+    triggered = ctx.triggered_id
+    if isinstance(triggered, dict) and triggered.get("type") == "sp-open-btn":
+        return triggered["sid"]
+    return no_update
+
+
+# ── Close: close button / backdrop click → clear sid ─────────────────────────
+@callback(
+    Output("plan-story-sid", "data", allow_duplicate=True),
+    Input("sp-close-btn", "n_clicks"),
+    Input("sp-backdrop",   "n_clicks"),
+    prevent_initial_call=True,
+)
+def _sp_close(close_c, backdrop_c):
+    if not ctx.triggered or not ctx.triggered[0].get("value"):
+        return no_update
+    return None
+
+
+# ── Render: open panel + load data when sid changes ──────────────────────────
+@callback(
+    Output("sp-side-panel",  "style"),
+    Output("sp-backdrop",    "style"),
+    Output("sp-panel-title", "children"),
+    Output("sp-panel-body",  "children"),
+    Output("sp-gates-body",  "children"),
+    Output("sp-loaded-data", "data"),
+    Input("plan-story-sid",  "data"),
+    State("plan-stories-store", "data"),
+    State("gate-store",         "data"),
+    prevent_initial_call=True,
+)
+def _sp_render(sid, stories_data, gates):
+    if not sid:
+        return _SP_CLOSED, _SP_BD_CLOSED, no_update, no_update, no_update, no_update
+
+    story = next((s for s in (stories_data or []) if s["id"] == sid), None)
+    if not story:
+        return _SP_CLOSED, _SP_BD_CLOSED, no_update, no_update, no_update, no_update
+
+    g        = (gates or {}).get(str(sid), {f: False for f in _GATE_FIELDS})
+    sp_data  = _load_sp_data(sid)
+    releases, iterations = _load_sp_options()
+
+    # Snapshot ADO field values at open-time so _sp_save_ado can ignore spurious fires
+    loaded = {
+        "main_designer":  sp_data.get("main_designer"),
+        "design_type":    sp_data.get("design_type"),
+        "release_date":   sp_data.get("release_date"),
+        "iteration_path": sp_data.get("iteration_path"),
+        "story_owner":    sp_data.get("story_owner"),
+    }
+
+    pri     = story.get("pri", "")
+    release = sp_data.get("release_date", "")
+
+    _pri_bg  = {"P1": "rgba(239,68,68,0.15)",  "P2": "rgba(251,191,36,0.12)",
+                "P3": "rgba(52,211,153,0.10)"}.get(pri, "rgba(148,163,184,0.08)")
+    _pri_fg  = {"P1": "rgb(239,68,68)", "P2": "rgb(251,191,36)",
+                "P3": "rgb(52,211,153)"}.get(pri, "rgb(148,163,184)")
+    _pri_bd  = {"P1": "rgba(239,68,68,0.35)", "P2": "rgba(251,191,36,0.30)",
+                "P3": "rgba(52,211,153,0.25)"}.get(pri, "rgba(148,163,184,0.20)")
+
+    def _hdr_badge(text, bg, color, border):
+        return html.Span(text, style={
+            "background": bg, "color": color, "border": f"1px solid {border}",
+            "borderRadius": "4px", "padding": "1px 6px",
+            "fontSize": "10px", "fontWeight": "600", "whiteSpace": "nowrap",
+        })
+
+    badges = [_hdr_badge(pri, _pri_bg, _pri_fg, _pri_bd)]
+    if release:
+        badges.append(_hdr_badge(release,
+                                 "rgba(6,182,212,0.10)", "rgb(6,182,212)",
+                                 "rgba(6,182,212,0.25)"))
+
+    title = [
+        html.Div(story["title"], style={
+            "fontSize": "14px", "fontWeight": "700", "color": _SP_FG,
+            "lineHeight": "1.4", "marginTop": "4px", "marginBottom": "3px",
+        }),
+        html.Div([
+            html.Span(f"#{story['id']}",
+                      style={"fontFamily": _SP_MONO, "color": _SP_MT}),
+            html.Span(f"  ·  {story.get('ba', '—')}",
+                      style={"color": _SP_MT}),
+        ], style={"fontSize": "11px", "marginTop": "3px",
+                  "fontFamily": _SP_MONO, "marginBottom": "7px"}),
+        html.Div(badges, style={
+            "display": "flex", "flexWrap": "wrap", "gap": "4px",
+        }),
+    ]
+    gate_btns = [_gate_row(sid, f, g) for f in _GATE_FIELDS]
+    body      = _build_sp_body_static(story, sp_data, releases, iterations)
+
+    return _SP_OPEN, _SP_BD_OPEN, title, body, gate_btns, loaded
+
+
+# ── Refresh gate buttons when gate-store changes while panel is open ──────────
+@callback(
+    Output("sp-gates-body", "children", allow_duplicate=True),
+    Input("gate-store",     "data"),
+    State("plan-story-sid", "data"),
+    prevent_initial_call=True,
+)
+def _sp_update_gates(gates, sid):
+    if not sid:
+        return no_update
+    g = (gates or {}).get(str(sid), {f: False for f in _GATE_FIELDS})
+    return [_gate_row(int(sid), f, g) for f in _GATE_FIELDS]
+
+
+# ── Save gate dates ───────────────────────────────────────────────────────────
+@callback(
+    Output("sp-save-status", "children", allow_duplicate=True),
+    Input({"type": "sp-gate-date", "sid": ALL, "field": ALL}, "value"),
+    prevent_initial_call=True,
+)
+def _sp_gate_date_save(values):
+    triggered = ctx.triggered_id
+    if not isinstance(triggered, dict):
+        return no_update
+    val = (ctx.triggered[0].get("value") if ctx.triggered else None)
+    if not val:
+        return no_update
+    try:
+        from db.planning import set_gate_date as _set_date
+        _set_date(int(triggered["sid"]), triggered["field"], val)
+        return "Saved ✓"
+    except Exception:
+        return "Error"
+
+
+# ── Save local DB fields (est/act dates & hours) ──────────────────────────────
+@callback(
+    Output("sp-save-status", "children"),
+    Input("sp-est-start",    "value"),
+    Input("sp-est-end",      "value"),
+    Input("sp-est-hours",    "value"),
+    Input("sp-act-start",    "value"),
+    Input("sp-act-end",      "value"),
+    Input("sp-act-hours",    "value"),
+    State("plan-story-sid",  "data"),
+    prevent_initial_call=True,
+)
+def _sp_save_local(est_s, est_e, est_h, act_s, act_e, act_h, sid):
+    if not sid:
+        return no_update
+    triggered = ctx.triggered_id
+    _field_map = {
+        "sp-est-start":    ("est_start_date", est_s),
+        "sp-est-end":      ("est_end_date",   est_e),
+        "sp-est-hours":    ("est_hours",      est_h),
+        "sp-act-start":    ("act_start_date", act_s),
+        "sp-act-end":      ("act_end_date",   act_e),
+        "sp-act-hours":    ("act_hours",      act_h),
+    }
+    col, val = _field_map.get(triggered, (None, None))
+    if not col:
+        return no_update
+    try:
+        _upsert_sp_data(int(sid), col, val)
+        return "Saved"
+    except Exception:
+        return "Error saving"
+
+
+# ── Save to ADO button — batches all ADO fields in one write ──────────────────
+@callback(
+    Output("sp-save-status", "children", allow_duplicate=True),
+    Input("sp-save-ado-btn",  "n_clicks"),
+    State("sp-story-owner",  "value"),
+    State("sp-designer",     "value"),
+    State("sp-design-type",  "value"),
+    State("sp-release",      "value"),
+    State("sp-iteration",    "value"),
+    State("plan-story-sid",  "data"),
+    prevent_initial_call=True,
+)
+def _sp_save_ado(n, story_owner, designer, design_type, release, iteration, sid):
+    if not n or not sid:
+        return no_update
+    fields = {}
+    if story_owner: fields["story_owner"]  = story_owner
+    if designer:    fields["main_designer"] = designer
+    if design_type: fields["design_type"]   = design_type
+    if release:     fields["release_date"]  = release
+    if iteration:   fields["iteration"]     = iteration
+    if not fields:
+        return no_update
+    try:
+        from sync.ado_write import write_fields as _write
+        _write(int(sid), fields)
+        return "Saved to ADO ✓"
+    except Exception:
+        return "ADO error"

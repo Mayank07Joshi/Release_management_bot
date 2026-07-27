@@ -68,6 +68,18 @@ _MIGRATE_GATES = [
     "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS our_screens    BOOLEAN NOT NULL DEFAULT FALSE",
     "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS html_screens   BOOLEAN NOT NULL DEFAULT FALSE",
     "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS sn_signoff     BOOLEAN NOT NULL DEFAULT FALSE",
+    # WIP status per gate
+    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS claude_screens_wip  BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS text_written_wip    BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS our_screens_wip     BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS html_screens_wip    BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS sn_signoff_wip      BOOLEAN NOT NULL DEFAULT FALSE",
+    # Date per gate
+    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS claude_screens_date TEXT",
+    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS text_written_date   TEXT",
+    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS our_screens_date    TEXT",
+    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS html_screens_date   TEXT",
+    "ALTER TABLE p_planning_gates ADD COLUMN IF NOT EXISTS sn_signoff_date     TEXT",
 ]
 
 _CREATE_LOG = """
@@ -211,7 +223,8 @@ def toggle_tracker_step(
 
 def load_all_gates() -> dict[int, dict]:
     """
-    Return every row in p_planning_gates as a 5-field BA sign-off dict per work item.
+    Return every row in p_planning_gates as a per-work-item dict.
+    Includes done booleans, wip booleans, and date strings for all 5 gates.
     Returns empty dict on any error.
     """
     try:
@@ -220,17 +233,31 @@ def load_all_gates() -> dict[int, dict]:
                 text("""
                     SELECT work_item_id,
                            claude_screens, text_written, our_screens,
-                           html_screens, sn_signoff
+                           html_screens, sn_signoff,
+                           claude_screens_wip, text_written_wip, our_screens_wip,
+                           html_screens_wip, sn_signoff_wip,
+                           claude_screens_date, text_written_date, our_screens_date,
+                           html_screens_date, sn_signoff_date
                     FROM p_planning_gates
                 """)
             ).fetchall()
         return {
             r.work_item_id: {
-                "claude_screens": bool(r.claude_screens),
-                "text_written":   bool(r.text_written),
-                "our_screens":    bool(r.our_screens),
-                "html_screens":   bool(r.html_screens),
-                "sn_signoff":     bool(r.sn_signoff),
+                "claude_screens":      bool(r.claude_screens),
+                "text_written":        bool(r.text_written),
+                "our_screens":         bool(r.our_screens),
+                "html_screens":        bool(r.html_screens),
+                "sn_signoff":          bool(r.sn_signoff),
+                "claude_screens_wip":  bool(r.claude_screens_wip),
+                "text_written_wip":    bool(r.text_written_wip),
+                "our_screens_wip":     bool(r.our_screens_wip),
+                "html_screens_wip":    bool(r.html_screens_wip),
+                "sn_signoff_wip":      bool(r.sn_signoff_wip),
+                "claude_screens_date": r.claude_screens_date or "",
+                "text_written_date":   r.text_written_date   or "",
+                "our_screens_date":    r.our_screens_date    or "",
+                "html_screens_date":   r.html_screens_date   or "",
+                "sn_signoff_date":     r.sn_signoff_date     or "",
             }
             for r in rows
         }
@@ -395,3 +422,62 @@ def _status_label(gate: str, value: bool) -> str:
         ("sn_signoff",     False): "SN Sign-Off ✗",
     }
     return labels.get((gate, value), f"{gate}={'on' if value else 'off'}")
+
+
+_GATE_WIP_COL = {
+    "claude_screens": "claude_screens_wip",
+    "text_written":   "text_written_wip",
+    "our_screens":    "our_screens_wip",
+    "html_screens":   "html_screens_wip",
+    "sn_signoff":     "sn_signoff_wip",
+}
+
+_GATE_DATE_COL = {
+    "claude_screens": "claude_screens_date",
+    "text_written":   "text_written_date",
+    "our_screens":    "our_screens_date",
+    "html_screens":   "html_screens_date",
+    "sn_signoff":     "sn_signoff_date",
+}
+
+
+def set_gate_status(
+    work_item_id: int,
+    gate:         str,
+    status:       str,
+    performed_by: str,
+    **kwargs,
+) -> None:
+    """
+    Set a gate to 'done', 'wip', or 'not_started'.
+    Calls upsert_gate for the done boolean (handles cascade), then syncs the wip column.
+    kwargs forwarded to upsert_gate (title, ba, dev_name, month_key, priority).
+    """
+    done = (status == "done")
+    wip  = (status == "wip")
+    upsert_gate(work_item_id, gate, done, performed_by, **kwargs)
+
+    wip_col = _GATE_WIP_COL.get(gate)
+    if not wip_col:
+        return
+    with engine.begin() as conn:
+        conn.execute(text(f"""
+            INSERT INTO p_planning_gates (work_item_id, {wip_col}, updated_by, updated_at)
+            VALUES (:wid, :wip, :by, NOW())
+            ON CONFLICT (work_item_id) DO UPDATE
+            SET {wip_col} = :wip, updated_by = :by, updated_at = NOW()
+        """), {"wid": work_item_id, "wip": wip, "by": performed_by})
+
+
+def set_gate_date(work_item_id: int, gate: str, date_val: Optional[str]) -> None:
+    """Persist a free-text date string for a gate (YYYY-MM-DD or empty)."""
+    col = _GATE_DATE_COL.get(gate)
+    if not col:
+        return
+    with engine.begin() as conn:
+        conn.execute(text(f"""
+            INSERT INTO p_planning_gates (work_item_id, {col}, updated_by, updated_at)
+            VALUES (:wid, :dt, 'system', NOW())
+            ON CONFLICT (work_item_id) DO UPDATE
+            SET {col} = :dt, updated_at = NOW()
+        """), {"wid": work_item_id, "dt": date_val or None})
