@@ -74,9 +74,10 @@ _TH_B = {
 _TD_B = {
     "padding": "9px 10px",
     "borderBottom": f"1px solid {_BD_CELL}",
-    "borderRight":  f"1px solid {_BD_CELL}",
     "fontSize": "12px", "verticalAlign": "middle",
 }
+_BG_ROW_ODD = "rgba(255,255,255,0.025)"   # zebra odd row tint
+_BG_STICKY_ODD = "rgb(22,26,37)"          # matching solid bg for sticky cells on odd rows
 
 
 # ── DB bootstrap ──────────────────────────────────────────────────────────────
@@ -299,26 +300,29 @@ def _stage_cell(status, stage_date, wid=None, stage_key=None):
     click_props = {"id": click_id, "n_clicks": 0} if click_id else {}
 
     if not status:
-        return html.Td("", style={**_TD_B, "minWidth": "110px",
+        return html.Td("", style={**_TD_B, "minWidth": "100px",
                                   **click_style_extra}, **click_props)
     if status == "n_a":
         return html.Td(
-            html.Div("N/A", style={"fontSize": "10px", "color": _DIM,
-                                   "fontWeight": "600", "fontStyle": "italic"}),
-            style={**_TD_B, "minWidth": "110px", **click_style_extra}, **click_props)
+            html.Span("— N/A", style={"fontSize": "10px", "color": _DIM,
+                                      "fontWeight": "600", "fontStyle": "italic"}),
+            style={**_TD_B, "minWidth": "100px", **click_style_extra}, **click_props)
+
     color = _ST_COLOR.get(status, _ST_COLOR[""])
     r     = _rgb(color)
-    return html.Td([
-        html.Div(str(stage_date)[:10] if stage_date else "",
-                 style={"fontFamily": _MONO, "fontSize": "10.5px",
-                        "color": _FG, "fontWeight": "600"}),
-        html.Div(_ST_LABEL.get(status, ""),
-                 style={"fontSize": "10px", "color": color,
-                        "fontWeight": "700", "marginTop": "2px"}),
-    ], style={**_TD_B, "minWidth": "110px",
-              "background": f"rgba({r},0.14)",
-              "boxShadow": f"rgba({r},0.333) 0px 0px 0px 1px inset",
-              **click_style_extra}, **click_props)
+    label = _ST_LABEL.get(status, "")
+    return html.Td(
+        html.Span([
+            html.Span("●", style={"fontSize": "7px", "marginRight": "5px",
+                                  "verticalAlign": "middle", "color": color}),
+            html.Span(label, style={"fontSize": "11px", "fontWeight": "700",
+                                    "color": color}),
+        ], style={
+            "display": "inline-flex", "alignItems": "center",
+            "padding": "3px 8px", "borderRadius": "5px",
+            "background": f"rgba({r},0.12)",
+        }),
+        style={**_TD_B, "minWidth": "100px", **click_style_extra}, **click_props)
 
 
 def _tog(label, btn_id, active, color=_INDIGO):
@@ -511,7 +515,7 @@ def _build_table(stories, stage_data, row_data, selected_id=None, selected_ids=N
     head_cells.append(html.Th("Comment", style={**_TH_B, "minWidth": "150px"}))
 
     body_rows = []
-    for s in stories:
+    for idx, s in enumerate(stories):
         wid      = s["work_item_id"]
         s_stages = stage_data.get(wid, {})
         s_row    = row_data.get(wid, {})
@@ -522,7 +526,16 @@ def _build_table(stories, stage_data, row_data, selected_id=None, selected_ids=N
         sc       = _GREEN if s["story_status"] == "Complete" else _MT
 
         is_selected = (wid == selected_id)
-        row_bg = "rgba(110,118,241,0.09)" if is_selected else "transparent"
+        is_odd      = idx % 2 == 1
+        if is_selected:
+            row_bg    = "rgba(110,118,241,0.09)"
+            sticky_bg = "rgb(24,28,44)"
+        elif is_odd:
+            row_bg    = _BG_ROW_ODD
+            sticky_bg = _BG_STICKY_ODD
+        else:
+            row_bg    = "transparent"
+            sticky_bg = _BG_CARD
         row_shadow = "inset 3px 0 0 rgb(110,118,241)" if is_selected else "none"
         row_style = {"background": row_bg, "boxShadow": row_shadow}
 
@@ -542,7 +555,7 @@ def _build_table(stories, stage_data, row_data, selected_id=None, selected_ids=N
                 },
             ),
             style={**_TD_B, "position": "sticky", "left": "0px", "zIndex": "2",
-                   "background": _BG_CARD, "width": "28px", "textAlign": "center"},
+                   "background": sticky_bg, "width": "28px", "textAlign": "center"},
         )
 
         body_rows.append(html.Tr([
@@ -557,7 +570,7 @@ def _build_table(stories, stage_data, row_data, selected_id=None, selected_ids=N
                               "textDecoration": "none"},
                        **{"className": "ado-vsts-link"}),
                 style={**_TD_B, "position": "sticky", "left": "28px", "zIndex": "2",
-                       "background": _BG_CARD, "textAlign": "center",
+                       "background": sticky_bg, "textAlign": "center",
                        "width": "58px", "whiteSpace": "nowrap"},
             ),
             # Name of Story — sticky, offset by checkbox + ID width; click → open panel
@@ -566,7 +579,7 @@ def _build_table(stories, stage_data, row_data, selected_id=None, selected_ids=N
                 id={"type": "rs-row", "key": str(wid), "stage": ""},
                 n_clicks=0,
                 style={**_TD_B, "position": "sticky", "left": "86px",
-                       "zIndex": "2", "background": _BG_CARD,
+                       "zIndex": "2", "background": sticky_bg,
                        "fontWeight": "600", "whiteSpace": "normal", "maxWidth": "200px",
                        "cursor": "pointer"},
             ),
