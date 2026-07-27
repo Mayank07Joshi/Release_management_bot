@@ -114,7 +114,7 @@ def _load_insights_data() -> pd.DataFrame:
                 LEFT JOIN p_planning_gates pg USING (work_item_id)
                 WHERE w.work_item_type = 'Enhancement'
                   AND w.state NOT IN (
-                      'Done','Closed','Watch List','Not an issue','Not Required',
+                      'Done','Closed','Not an issue','Not Required',
                       'Userstory Update','No Customer Response','Resolved','Not Specified'
                   )
                   AND (
