@@ -1,14 +1,17 @@
 """EOD — Delivery Timeline
-Two views on one page:
+Three views on one page:
   - Month Grid  : CEO-facing, one row per story, chip in the DELIVERY (release) month
   - Gantt Chart : Developer / function bar-chart from planning.py
+  - Planning    : Dev load heatmap + release readiness + risk matrix
 """
+import re
 import dash
 import pandas as pd
 import time as _time_mod
 from datetime import date
 from dash import dcc, html, Input, Output, State, callback, ctx, no_update, ALL
 from sqlalchemy import text as _text
+import plotly.graph_objects as go
 
 from data.loader import engine
 
@@ -47,6 +50,249 @@ _AREA_COLORS = {
 _DT_CACHE: dict = {"df": None, "ts": 0.0}
 _DT_TTL = 300
 _GRID_RENDER_CACHE: dict = {}   # filter_key → (ts, grid_children)
+
+_INSIGHTS_CACHE: dict = {"df": None, "ts": 0.0}
+_INSIGHTS_TTL = 180
+
+# Chart palette (matches panel design standard)
+_IC = {
+    "bg":     "rgb(18,22,31)",
+    "paper":  "rgb(13,17,27)",
+    "grid":   "rgb(38,44,58)",
+    "fg":     "rgb(234,236,242)",
+    "mt":     "rgb(139,146,164)",
+    "green":  "rgb(70,194,142)",
+    "amber":  "rgb(224,162,60)",
+    "red":    "rgb(239,110,99)",
+    "indigo": "rgb(110,118,241)",
+    "cyan":   "rgb(63,182,201)",
+}
+
+_MONTH_NUM = {
+    "January":1,"February":2,"March":3,"April":4,"May":5,"June":6,
+    "July":7,"August":8,"September":9,"October":10,"November":11,"December":12,
+}
+_MON3 = {"Jan":1,"Feb":2,"Mar":3,"Apr":4,"May":5,"Jun":6,
+         "Jul":7,"Aug":8,"Sep":9,"Oct":10,"Nov":11,"Dec":12}
+
+
+def _release_sort_key(label: str) -> tuple:
+    m = re.match(r"(\d{4})\s+(\w+)", label or "")
+    if m:
+        return (int(m.group(1)), _MONTH_NUM.get(m.group(2).capitalize(), 0), label)
+    return (9999, 0, label)
+
+
+def _load_insights_data() -> pd.DataFrame:
+    now = _time_mod.time()
+    if _INSIGHTS_CACHE["df"] is not None and now - _INSIGHTS_CACHE["ts"] < _INSIGHTS_TTL:
+        return _INSIGHTS_CACHE["df"]
+    try:
+        with engine.connect() as c:
+            df = pd.read_sql(_text("""
+                SELECT
+                    w.work_item_id,
+                    w.title,
+                    COALESCE(NULLIF(TRIM(w.main_developer), ''), 'Unassigned') AS developer,
+                    w.iteration_path,
+                    COALESCE(NULLIF(TRIM(w.release_date),  ''), '') AS release_label,
+                    COALESCE(NULLIF(TRIM(w.priority::TEXT), ''), '3') AS priority,
+                    COALESCE(NULLIF(TRIM(w.story_size),    ''), 'Unknown') AS story_size,
+                    COALESCE(NULLIF(TRIM(w.story_owner),   ''), '—')       AS story_owner,
+                    COALESCE(w.original_estimate, 0)                AS est_hours,
+                    (CASE WHEN COALESCE(pg.claude_screens,     FALSE) THEN 1 ELSE 0 END +
+                     CASE WHEN COALESCE(pg.text_written,       FALSE) THEN 1 ELSE 0 END +
+                     CASE WHEN COALESCE(pg.our_screens,        FALSE) THEN 1 ELSE 0 END +
+                     CASE WHEN COALESCE(pg.html_screens,       FALSE) THEN 1 ELSE 0 END +
+                     CASE WHEN COALESCE(pg.sn_signoff,         FALSE) THEN 1 ELSE 0 END) AS gates_done,
+                    (CASE WHEN COALESCE(pg.claude_screens_wip, FALSE) THEN 1 ELSE 0 END +
+                     CASE WHEN COALESCE(pg.text_written_wip,   FALSE) THEN 1 ELSE 0 END +
+                     CASE WHEN COALESCE(pg.our_screens_wip,    FALSE) THEN 1 ELSE 0 END +
+                     CASE WHEN COALESCE(pg.html_screens_wip,   FALSE) THEN 1 ELSE 0 END +
+                     CASE WHEN COALESCE(pg.sn_signoff_wip,     FALSE) THEN 1 ELSE 0 END) AS gates_wip
+                FROM work_items_main w
+                LEFT JOIN p_planning_gates pg USING (work_item_id)
+                WHERE w.work_item_type = 'Enhancement'
+                  AND w.state NOT IN (
+                      'Done','Closed','Watch List','Not an issue','Not Required',
+                      'Userstory Update','No Customer Response','Resolved','Not Specified'
+                  )
+                  AND (
+                      w.release_date   ~ '^202[6-9] [A-Za-z]'
+                      OR w.iteration_path ~ 'Iteration 202[6-9]'
+                  )
+            """), c)
+        df["priority"] = pd.to_numeric(df["priority"], errors="coerce").fillna(3).astype(int)
+        _INSIGHTS_CACHE["df"] = df
+        _INSIGHTS_CACHE["ts"] = now
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+def _dark_layout(**kw) -> dict:
+    base = dict(
+        plot_bgcolor=_IC["bg"], paper_bgcolor=_IC["paper"],
+        font=dict(color=_IC["fg"], family="Inter, system-ui, sans-serif", size=12),
+        hoverlabel=dict(bgcolor="rgb(23,28,40)", bordercolor=_IC["grid"],
+                        font=dict(color=_IC["fg"], size=12)),
+        legend=dict(font=dict(color=_IC["mt"], size=11)),
+    )
+    base.update(kw)
+    return base
+
+
+def _build_dev_load_chart(df: pd.DataFrame) -> dcc.Graph:
+    """Heatmap: developer × sprint month, cell = story count."""
+    df = df.copy()
+
+    def _month_key(ip):
+        m = re.search(r"Iteration (\d{4}) (\d{2})-(\w+)", ip or "")
+        if m:
+            return f"{m.group(3)[:3]} '{m.group(1)[2:]}"   # "Jul '26"
+        return None
+
+    df["month_key"] = df["iteration_path"].apply(_month_key)
+    df = df[df["month_key"].notna()]
+    if df.empty:
+        return html.Div("No sprint data", style={"color": _IC["mt"], "padding": "20px"})
+
+    def _mk_sort(mk):
+        p = mk.split()
+        return (int(p[1].strip("'")), _MON3.get(p[0], 0)) if len(p) == 2 else (99, 99)
+
+    all_months = sorted(df["month_key"].unique(), key=_mk_sort)
+    devs = sorted(df["developer"].unique())
+
+    pivot = df.groupby(["developer", "month_key"]).size().reset_index(name="n")
+    z = []
+    for dev in devs:
+        row = []
+        for mo in all_months:
+            v = pivot.loc[(pivot.developer == dev) & (pivot.month_key == mo), "n"]
+            row.append(int(v.iloc[0]) if len(v) else 0)
+        z.append(row)
+
+    fig = go.Figure(go.Heatmap(
+        z=z, x=all_months, y=devs,
+        colorscale=[[0,"rgba(70,194,142,0.08)"],[0.3,_IC["amber"]],[1.0,_IC["red"]]],
+        showscale=False,
+        text=z, texttemplate="%{z}",
+        textfont=dict(color=_IC["fg"], size=12),
+        hovertemplate="<b>%{y}</b><br>%{x}: <b>%{z} stories</b><extra></extra>",
+    ))
+    fig.update_layout(**_dark_layout(
+        height=max(260, 48 + len(devs) * 38),
+        margin=dict(l=150, r=20, t=10, b=50),
+        xaxis=dict(side="top", gridcolor=_IC["grid"], tickfont=dict(size=11)),
+        yaxis=dict(gridcolor="rgba(0,0,0,0)", autorange="reversed",
+                   tickfont=dict(size=11)),
+    ))
+    return dcc.Graph(figure=fig, config={"displayModeBar": False}, style={"width": "100%"})
+
+
+def _build_release_scope_chart(df: pd.DataFrame) -> dcc.Graph:
+    """Stacked bar per release: all done / in-progress / not started."""
+    df = df[df["release_label"].str.match(r"^202[6-9] [A-Za-z]", na=False)].copy()
+    if df.empty:
+        return html.Div("No release data", style={"color": _IC["mt"], "padding": "20px"})
+
+    def _cls(row):
+        if row.gates_done == 5:             return "All gates done"
+        if row.gates_done > 0 or row.gates_wip > 0: return "In progress"
+        return "Not started"
+
+    df["status"] = df.apply(_cls, axis=1)
+    releases = sorted(df["release_label"].unique(), key=_release_sort_key)
+    labels   = [r.replace("2026 ", "").replace("2027 ", "'27 ") for r in releases]
+
+    cats = [("All gates done", _IC["green"]),
+            ("In progress",    _IC["amber"]),
+            ("Not started",    _IC["red"])]
+
+    fig = go.Figure([
+        go.Bar(
+            name=name, x=labels,
+            y=[len(df[(df.release_label == r) & (df.status == name)]) for r in releases],
+            marker_color=color,
+            hovertemplate="%{y} stories<extra>" + name + "</extra>",
+        )
+        for name, color in cats
+    ])
+    fig.update_layout(**_dark_layout(
+        barmode="stack", height=360,
+        margin=dict(l=50, r=20, t=10, b=80),
+        xaxis=dict(tickangle=-35, gridcolor=_IC["grid"], tickfont=dict(size=11)),
+        yaxis=dict(title="Stories", gridcolor=_IC["grid"]),
+        legend=dict(orientation="h", y=1.06, x=0),
+    ))
+    return dcc.Graph(figure=fig, config={"displayModeBar": False}, style={"width": "100%"})
+
+
+def _build_risk_scatter(df: pd.DataFrame) -> dcc.Graph:
+    """Scatter: x=gates done, y=release (near=top), size=story size, color=priority."""
+    df = df[df["release_label"].str.match(r"^202[6-9] [A-Za-z]", na=False)].copy()
+    if df.empty:
+        return html.Div("No data", style={"color": _IC["mt"], "padding": "20px"})
+
+    releases = sorted(df["release_label"].unique(), key=_release_sort_key)
+    rel_y = {r: i for i, r in enumerate(releases)}
+    labels = [r.replace("2026 ", "").replace("2027 ", "'27 ") for r in releases]
+
+    _sz  = {"Big": 22, "Medium": 15, "Small": 11, "Very Small": 8, "Unknown": 9}
+    _col = {1: _IC["red"], 2: _IC["amber"], 3: _IC["green"]}
+
+    fig = go.Figure()
+    for pri in [1, 2, 3]:
+        sub = df[df["priority"] == pri]
+        if sub.empty:
+            continue
+        fig.add_trace(go.Scatter(
+            x=sub["gates_done"].astype(float),
+            y=[rel_y[r] for r in sub["release_label"]],
+            mode="markers",
+            name=f"P{pri}",
+            marker=dict(
+                size=[_sz.get(s, 10) for s in sub["story_size"]],
+                color=_col[pri], opacity=0.75,
+                line=dict(width=1, color="rgba(255,255,255,0.12)"),
+            ),
+            text=sub["title"],
+            customdata=sub[["developer", "release_label", "story_size", "gates_done"]].values,
+            hovertemplate=(
+                "<b>%{text}</b><br>"
+                "Dev: %{customdata[0]}<br>"
+                "Release: %{customdata[1]}<br>"
+                "Size: %{customdata[2]}  |  Gates: %{customdata[3]}/5"
+                "<extra></extra>"
+            ),
+        ))
+
+    # Danger zone annotation: bottom-left = urgent + not started
+    fig.add_shape(type="rect", x0=-0.4, x1=1.4,
+                  y0=-0.5, y1=len(releases) * 0.3,
+                  fillcolor="rgba(239,110,99,0.06)",
+                  line=dict(color="rgba(239,110,99,0.2)", width=1, dash="dot"))
+
+    fig.update_layout(**_dark_layout(
+        height=max(420, 80 + len(releases) * 44),
+        margin=dict(l=140, r=20, t=30, b=50),
+        xaxis=dict(title="Gates completed (0 = none, 5 = all done)",
+                   range=[-0.5, 5.5], tickmode="linear", dtick=1,
+                   gridcolor=_IC["grid"], tickfont=dict(size=11)),
+        yaxis=dict(tickmode="array",
+                   tickvals=list(range(len(releases))),
+                   ticktext=labels,
+                   gridcolor=_IC["grid"], tickfont=dict(size=11),
+                   autorange="reversed"),
+        legend=dict(orientation="h", y=1.04, x=0),
+        annotations=[dict(
+            x=0.5, y=-0.1, xref="paper", yref="paper", showarrow=False,
+            text="← Risk zone (few gates, near release)       On track →",
+            font=dict(size=10, color=_IC["mt"]),
+        )],
+    ))
+    return dcc.Graph(figure=fig, config={"displayModeBar": False}, style={"width": "100%"})
 
 
 def _load_dt() -> pd.DataFrame:
@@ -410,7 +656,7 @@ def layout(**_):
         dcc.Store(id="dt-owner",     data="All owners"),
         dcc.Store(id="dt-platform",  data="All"),
         dcc.Store(id="dt-panel-wid", data=None),
-        dcc.Store(id="dt-view-tab",  data="grid"),      # "grid" | "gantt"
+        dcc.Store(id="dt-view-tab",  data="grid"),      # "grid" | "gantt" | "planning"
         dcc.Store(id="dt-gantt-view", data="0-12"),     # for gantt window
         dcc.Store(id="dt-gantt-type", data="all"),      # for gantt type filter
         dcc.Store(id="gantt-expanded", data={"s": [], "t": []}),  # shared with gantt_toggle.js
@@ -445,8 +691,9 @@ def layout(**_):
 
         # Tab switcher
         html.Div([
-            _tab_btn("Month Grid", "grid",  True),
-            _tab_btn("Gantt",      "gantt", False),
+            _tab_btn("Month Grid", "grid",     True),
+            _tab_btn("Gantt",      "gantt",    False),
+            _tab_btn("Planning",   "planning", False),
         ], id="dt-tab-row", style={
             "display": "flex", "alignItems": "center",
             "marginBottom": "14px", "borderBottom": f"1px solid {BD}",
@@ -510,6 +757,12 @@ def layout(**_):
             }),
         ]),
 
+        # ── Planning / Insights view ───────────────────────────────────────────
+        html.Div(id="dt-planning-section", style={"display": "none"}, children=[
+            dcc.Loading(type="circle", color="#818cf8",
+                        children=html.Div(id="dt-planning-charts")),
+        ]),
+
     ], style={"padding": "24px"})
 
 
@@ -517,10 +770,11 @@ def layout(**_):
 
 # Tab switcher
 @callback(
-    Output("dt-view-tab",      "data"),
-    Output("dt-tab-row",       "children"),
-    Output("dt-grid-section",  "style"),
-    Output("dt-gantt-section", "style"),
+    Output("dt-view-tab",           "data"),
+    Output("dt-tab-row",            "children"),
+    Output("dt-grid-section",       "style"),
+    Output("dt-gantt-section",      "style"),
+    Output("dt-planning-section",   "style"),
     Input({"type": "dt-tab-btn", "tab": ALL}, "n_clicks"),
     State("dt-view-tab", "data"),
     prevent_initial_call=True,
@@ -528,13 +782,19 @@ def layout(**_):
 def _switch_tab(_clicks, current):
     tid = ctx.triggered_id
     if not tid or not isinstance(tid, dict) or not ctx.triggered[0]["value"]:
-        return no_update, no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update, no_update
     tab = tid.get("tab", current)
-    btns = [_tab_btn("Month Grid", "grid", tab == "grid"),
-            _tab_btn("Gantt",      "gantt", tab == "gantt")]
+    btns = [
+        _tab_btn("Month Grid", "grid",     tab == "grid"),
+        _tab_btn("Gantt",      "gantt",    tab == "gantt"),
+        _tab_btn("Planning",   "planning", tab == "planning"),
+    ]
     show = {"display": "block"}
     hide = {"display": "none"}
-    return tab, btns, (show if tab == "grid" else hide), (show if tab == "gantt" else hide)
+    return (tab, btns,
+            show if tab == "grid"     else hide,
+            show if tab == "gantt"    else hide,
+            show if tab == "planning" else hide)
 
 
 # Filter pills → stores
@@ -707,3 +967,83 @@ def _render_gantt(view_tab, gantt_view, gantt_type, expanded):
     except Exception as e:
         return html.Div(f"Gantt unavailable: {e}",
                         style={"padding": "20px", "color": MT, "fontSize": "13px"})
+
+
+# Planning tab render
+@callback(
+    Output("dt-planning-charts", "children"),
+    Input("dt-view-tab",         "data"),
+    prevent_initial_call=True,
+)
+def _render_planning(view_tab):
+    if view_tab != "planning":
+        return no_update
+
+    df = _load_insights_data()
+    if df.empty:
+        return html.Div("No data available — run a sync to populate stories.",
+                        style={"padding": "40px", "color": MT, "fontSize": "13px"})
+
+    def _card(title, chart, subtitle=""):
+        return html.Div([
+            html.Div([
+                html.Span(title, style={
+                    "fontSize": "11px", "fontWeight": "700",
+                    "color": _IC["mt"], "textTransform": "uppercase",
+                    "letterSpacing": "0.5px",
+                }),
+                html.Span(f" — {subtitle}", style={
+                    "fontSize": "11px", "color": _IC["mt"],
+                }) if subtitle else None,
+            ], style={"marginBottom": "10px"}),
+            chart,
+        ], style={
+            "background": _IC["bg"],
+            "border": f"1px solid {_IC['grid']}",
+            "borderRadius": "12px",
+            "padding": "18px 16px 12px",
+            "marginBottom": "20px",
+        })
+
+    total   = len(df)
+    no_gate = len(df[df["gates_done"] == 0])
+    p1_no_gate = len(df[(df["priority"] == 1) & (df["gates_done"] == 0)])
+
+    summary = html.Div([
+        _kpi("Total active stories", str(total)),
+        _kpi("No gates started",     str(no_gate),     warn=no_gate > total * 0.5),
+        _kpi("P1 with no gates",     str(p1_no_gate),  warn=p1_no_gate > 0),
+    ], style={"display": "flex", "gap": "14px", "marginBottom": "20px",
+              "flexWrap": "wrap"})
+
+    return html.Div([
+        summary,
+        _card("Sign-Off Readiness by Release",
+              _build_release_scope_chart(df),
+              "green = all 5 gates done, amber = in progress, red = not started"),
+        _card("Developer Sprint Load",
+              _build_dev_load_chart(df),
+              "story count per developer per sprint"),
+        _card("Story Risk Matrix",
+              _build_risk_scatter(df),
+              "bottom-left = urgent stories with no sign-off progress"),
+    ], style={"paddingTop": "4px"})
+
+
+def _kpi(label: str, value: str, warn: bool = False) -> html.Div:
+    color = _IC["red"] if warn else _IC["fg"]
+    return html.Div([
+        html.Div(value, style={
+            "fontSize": "28px", "fontWeight": "800", "color": color,
+            "lineHeight": "1",
+        }),
+        html.Div(label, style={
+            "fontSize": "10px", "color": _IC["mt"],
+            "textTransform": "uppercase", "letterSpacing": "0.4px",
+            "marginTop": "4px",
+        }),
+    ], style={
+        "background": _IC["bg"], "border": f"1px solid {_IC['grid']}",
+        "borderRadius": "10px", "padding": "14px 18px",
+        "minWidth": "140px",
+    })
