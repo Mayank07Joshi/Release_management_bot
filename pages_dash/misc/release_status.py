@@ -486,15 +486,15 @@ def _build_table(stories, stage_data, row_data, selected_id=None, selected_ids=N
             },
         ),
         style={**_TH_B, "width": "28px", "position": "sticky", "left": "0px",
-               "zIndex": "3", "background": _BG_HEAD, "textAlign": "center"},
+               "zIndex": "5", "background": _BG_HEAD, "textAlign": "center"},
     )
 
     # (label, sort_col_key, extra_th_styles)
     fixed_cols = [
         ("ID",               "work_item_id",   {"width": "58px",    "position": "sticky", "left": "28px",
-                                                 "zIndex": "3", "background": _BG_HEAD, "textAlign": "center"}),
+                                                 "zIndex": "5", "background": _BG_HEAD, "textAlign": "center"}),
         ("Name of Story",    "title",          {"minWidth": "200px", "position": "sticky", "left": "86px",
-                                                 "zIndex": "3", "background": _BG_HEAD}),
+                                                 "zIndex": "5", "background": _BG_HEAD}),
         ("User Story Owner", "story_owner",    {"minWidth": "85px"}),
         ("Developer",        "main_developer", {"minWidth": "85px"}),
         ("QA",               "qa_person",      {"minWidth": "85px"}),
@@ -627,7 +627,8 @@ def _build_table(stories, stage_data, row_data, selected_id=None, selected_ids=N
     return html.Div(
         html.Table(
             [html.Thead(html.Tr(head_cells),
-                        style={"position": "sticky", "top": "0", "zIndex": "2"}),
+                        style={"position": "sticky", "top": "0", "zIndex": "4",
+                               "boxShadow": f"0 1px 0 {_BD}"}),
              html.Tbody(body_rows)],
             style={"borderCollapse": "collapse", "width": "100%", "minWidth": "2200px"},
         ),
