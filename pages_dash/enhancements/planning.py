@@ -334,6 +334,19 @@ def _load_sp_data(story_id: int) -> dict:
     """Load local planning fields + live ADO fields for the story panel."""
     from data.loader import engine as _engine
     from sqlalchemy import text as _text
+    import datetime as _dt
+    # Ensure all columns exist before querying (production may lag on migrations)
+    with _engine.begin() as _mc:
+        for _ddl in [
+            "ALTER TABLE p_story_tracking ADD COLUMN IF NOT EXISTS est_hours      NUMERIC(8,2)",
+            "ALTER TABLE p_story_tracking ADD COLUMN IF NOT EXISTS act_start_date DATE",
+            "ALTER TABLE p_story_tracking ADD COLUMN IF NOT EXISTS act_end_date   DATE",
+            "ALTER TABLE p_story_tracking ADD COLUMN IF NOT EXISTS act_hours      NUMERIC(8,2)",
+        ]:
+            try:
+                _mc.execute(_text(_ddl))
+            except Exception:
+                pass
     try:
         with _engine.connect() as conn:
             t = conn.execute(_text("""
@@ -347,7 +360,11 @@ def _load_sp_data(story_id: int) -> dict:
             """), {"id": story_id}).fetchone()
         result = {}
         if t:
-            result.update({k: v for k, v in dict(t._mapping).items() if v is not None})
+            for k, v in dict(t._mapping).items():
+                if v is None:
+                    continue
+                # Convert date objects to ISO strings so Dash can serialize them
+                result[k] = str(v) if isinstance(v, (_dt.date, _dt.datetime)) else v
         if w:
             result.update({k: v for k, v in dict(w._mapping).items() if v is not None})
         return result
@@ -6634,13 +6651,24 @@ def _sp_render(sid, stories_data, gates):
     sp_data  = _load_sp_data(sid)
     releases, iterations = _load_sp_options()
 
-    # Snapshot ADO field values at open-time so _sp_save_ado can ignore spurious fires
+    # Snapshot all panel field values at open-time — used to guard save callbacks
+    # against Dash 4 firing Input callbacks on panel re-render
+    est_start_snap = str(sp_data.get("est_start_date") or "")
+    est_end_snap   = str(sp_data.get("est_end_date")   or "")
+    act_start_snap = str(sp_data.get("act_start_date") or "")
+    act_end_snap   = str(sp_data.get("act_end_date")   or "")
     loaded = {
         "main_designer":  sp_data.get("main_designer"),
         "design_type":    sp_data.get("design_type"),
         "release_date":   sp_data.get("release_date"),
         "iteration_path": sp_data.get("iteration_path"),
         "story_owner":    sp_data.get("story_owner"),
+        "est_start_date": est_start_snap,
+        "est_end_date":   est_end_snap,
+        "est_hours":      sp_data.get("est_hours"),
+        "act_start_date": act_start_snap,
+        "act_end_date":   act_end_snap,
+        "act_hours":      sp_data.get("act_hours"),
     }
 
     pri     = story.get("pri", "")
@@ -6726,6 +6754,7 @@ def _sp_gate_date_save(values):
 # ── Save local DB fields (est/act dates & hours) ──────────────────────────────
 @callback(
     Output("sp-save-status", "children"),
+    Output("st-save-ts",     "data",     allow_duplicate=True),
     Input("sp-est-start",    "value"),
     Input("sp-est-end",      "value"),
     Input("sp-est-hours",    "value"),
@@ -6733,28 +6762,62 @@ def _sp_gate_date_save(values):
     Input("sp-act-end",      "value"),
     Input("sp-act-hours",    "value"),
     State("plan-story-sid",  "data"),
+    State("sp-loaded-data",  "data"),
     prevent_initial_call=True,
 )
-def _sp_save_local(est_s, est_e, est_h, act_s, act_e, act_h, sid):
+def _sp_save_local(est_s, est_e, est_h, act_s, act_e, act_h, sid, loaded):
+    import time as _t
     if not sid:
-        return no_update
+        return no_update, no_update
     triggered = ctx.triggered_id
     _field_map = {
-        "sp-est-start":    ("est_start_date", est_s),
-        "sp-est-end":      ("est_end_date",   est_e),
-        "sp-est-hours":    ("est_hours",      est_h),
-        "sp-act-start":    ("act_start_date", act_s),
-        "sp-act-end":      ("act_end_date",   act_e),
-        "sp-act-hours":    ("act_hours",      act_h),
+        "sp-est-start": ("est_start_date", est_s),
+        "sp-est-end":   ("est_end_date",   est_e),
+        "sp-est-hours": ("est_hours",      est_h),
+        "sp-act-start": ("act_start_date", act_s),
+        "sp-act-end":   ("act_end_date",   act_e),
+        "sp-act-hours": ("act_hours",      act_h),
     }
     col, val = _field_map.get(triggered, (None, None))
     if not col:
-        return no_update
+        return no_update, no_update
+
+    # Guard: skip if value matches what was loaded at panel open (Dash 4 re-render fire)
+    loaded_val = (loaded or {}).get(col)
+    current_str = str(val) if val not in (None, "") else ""
+    loaded_str  = str(loaded_val) if loaded_val not in (None, "") else ""
+    if current_str == loaded_str:
+        return no_update, no_update
+
     try:
         _upsert_sp_data(int(sid), col, val)
-        return "Saved"
-    except Exception:
-        return "Error saving"
+        return "Saved ✓", int(_t.time())
+    except Exception as e:
+        return f"Save error: {e}", no_update
+
+
+# ── Mirror saved ADO fields directly into work_items_main so panel re-opens correctly ──
+def _mirror_ado_to_local(story_id: int, fields: dict) -> None:
+    """Write ADO-bound fields into work_items_main immediately after a successful ADO write.
+    Prevents stale pre-fill before the next sync cycle runs."""
+    _COL_MAP = {
+        "story_owner":   "story_owner",
+        "main_designer": "main_designer",
+        "design_type":   "design_type",
+        "release_date":  "release_date",
+        "iteration":     "iteration_path",
+    }
+    updates = {_COL_MAP[k]: v for k, v in fields.items() if k in _COL_MAP}
+    if not updates:
+        return
+    from data.loader import engine as _engine
+    from sqlalchemy import text as _text
+    set_clause = ", ".join(f"{col} = :{col}" for col in updates)
+    updates["_id"] = story_id
+    with _engine.begin() as conn:
+        conn.execute(_text(
+            f"UPDATE work_items_main SET {set_clause} WHERE work_item_id = :_id"
+        ), updates)
 
 
 # ── Save to ADO button — batches all ADO fields in one write ──────────────────
@@ -6773,16 +6836,19 @@ def _sp_save_ado(n, story_owner, designer, design_type, release, iteration, sid)
     if not n or not sid:
         return no_update
     fields = {}
-    if story_owner: fields["story_owner"]  = story_owner
-    if designer:    fields["main_designer"] = designer
-    if design_type: fields["design_type"]   = design_type
-    if release:     fields["release_date"]  = release
-    if iteration:   fields["iteration"]     = iteration
+    if story_owner: fields["story_owner"]   = story_owner
+    if designer:    fields["main_designer"]  = designer
+    if design_type: fields["design_type"]    = design_type
+    if release:     fields["release_date"]   = release
+    if iteration:   fields["iteration"]      = iteration
     if not fields:
         return no_update
     try:
-        from sync.ado_write import write_fields as _write
-        _write(int(sid), fields)
+        from sync.ado_write import write_fields_sync as _write
+        ok, err = _write(int(sid), fields)
+        if not ok:
+            return f"ADO error: {err}"
+        _mirror_ado_to_local(int(sid), fields)
         return "Saved to ADO ✓"
-    except Exception:
-        return "ADO error"
+    except Exception as e:
+        return f"Error: {e}"
