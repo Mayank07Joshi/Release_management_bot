@@ -724,6 +724,11 @@ def run_sync(full: bool = False) -> dict:
             log.warning("Production bugs sync failed (non-fatal): %s", _pb_err)
 
         _bust_loader_cache()
+        try:
+            from data.loader import bust_ui_cache as _bust_ui
+            _bust_ui()
+        except Exception:
+            pass
 
         try:
             from sync.task_classifier import run_classifier

@@ -2181,6 +2181,7 @@ def _panel_move(n_clicks, selected_ids, month_idx, panel_ctx, moved_store,
                 UPDATE work_items_main SET iteration_path = :path
                 WHERE work_item_id = :wid
             """), {"path": new_iter, "wid": wid})
+    from data.loader import bust_ui_cache as _bust; _bust()
 
     from datetime import date as _d
     label = _d(y2, m2, 1).strftime("%b-%y")
@@ -2217,6 +2218,7 @@ def _bulk_set_release_date(n_clicks, selected_ids, rd):
     from sync.ado_write import write_fields as _aw
     for wid in ids:
         _aw(wid, {"release_date": rd})
+    from data.loader import bust_ui_cache as _bust; _bust()
     return f"Release date set for {len(ids)} item(s) → {rd}"
 
 
@@ -2518,6 +2520,7 @@ def _commit_tp_changes(n, item_id, pending):
                 f"UPDATE work_items_main SET {', '.join(db_sets)} WHERE work_item_id = :id"
             ), db_params)
 
+    from data.loader import bust_ui_cache as _bust; _bust()
     import time as _t
     notif = {"msg": f"Saved #{wid} to ADO", "type": "success", "ts": _t.time()}
     return {}, _t.time(), notif

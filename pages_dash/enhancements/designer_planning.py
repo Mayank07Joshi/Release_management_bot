@@ -101,12 +101,12 @@ def _story_status_badge(wid: int):
     from sqlalchemy import text as _text
     with _eng.connect() as conn:
         g = conn.execute(_text("""
-            SELECT claude_screens, text_written, our_screens, html_screens, sn_signoff
+            SELECT claude_screens, text_written, our_screens, sn_signoff
             FROM p_planning_gates WHERE work_item_id = :id
         """), {"id": wid}).fetchone()
     done  = sum([bool(g.claude_screens), bool(g.text_written), bool(g.our_screens),
-                 bool(g.html_screens), bool(g.sn_signoff)]) if g else 0
-    total = 5
+                 bool(g.sn_signoff)]) if g else 0
+    total = 4
     complete = done == total
 
     def _pill(label, active, color):
@@ -159,8 +159,7 @@ def _load_data():
                    w.release_date, w.work_item_type, w.priority,
                    COALESCE(w.story_size,   '') AS story_size,
                    COALESCE(w.story_status, '') AS story_status,
-                   COALESCE(g.our_screens,  FALSE) AS our_screens,
-                   COALESCE(g.html_screens, FALSE) AS html_screens
+                   COALESCE(g.our_screens,  FALSE) AS our_screens
             FROM work_items_main w
             LEFT JOIN p_planning_gates g ON g.work_item_id = w.work_item_id
             WHERE w.work_item_type IN ('Enhancement','User Story')
@@ -189,7 +188,7 @@ def _load_data():
             continue
         dev_year, dev_month = p
         dy, dm = _des_ym(dev_year, dev_month)
-        done = bool(r.our_screens) and bool(r.html_screens)
+        done = bool(r.our_screens)
 
         def _clean(v):
             return (v or "").strip() if (v or "").strip() not in ("Unassigned", "") else None
@@ -1039,8 +1038,7 @@ def _render_panel(story_id, pending, iter_map_store):
                    COALESCE(w.story_status, '') AS story_status,
                    COALESCE(w.priority,     '') AS priority,
                    COALESCE(w.type, 'Internal') AS cust_type,
-                   COALESCE(g.our_screens,  FALSE) AS our_screens,
-                   COALESCE(g.html_screens, FALSE) AS html_screens
+                   COALESCE(g.our_screens,  FALSE) AS our_screens
             FROM work_items_main w
             LEFT JOIN p_planning_gates g ON g.work_item_id = w.work_item_id
             WHERE w.work_item_id = :id
@@ -1061,7 +1059,7 @@ def _render_panel(story_id, pending, iter_map_store):
 
     dev_year, dev_month = p
     dy, dm = _des_ym(dev_year, dev_month)
-    done   = bool(row.our_screens) and bool(row.html_screens)
+    done   = bool(row.our_screens)
     in_dev = row.state in _DEV_STATES
 
     if done:
@@ -1387,6 +1385,7 @@ def _change_dev_month(_, __, cur, story_id, iter_map):
             conn.execute(text(
                 "UPDATE work_items_main SET iteration_path=:p WHERE work_item_id=:id"
             ), {"p": iter_map[key], "id": story_id})
+        from data.loader import bust_ui_cache as _bust; _bust()
     return {"year": y, "month": m}, f"{_MON_ABBR[m]} ({m:02d})"
 
 
@@ -1593,6 +1592,7 @@ def _commit_all_changes(n, pending, story_id, iter_map_store):
                 f"UPDATE work_items_main SET {', '.join(db_sets)} WHERE work_item_id=:id"
             ), db_params)
 
+    from data.loader import bust_ui_cache as _bust; _bust()
     notif = {"msg": f"Saved #{sid} to ADO", "type": "success", "ts": _t.time()}
     return {}, sid, notif
 
@@ -1627,6 +1627,7 @@ def _reassign_designer(clicks):
         conn.execute(text(
             "UPDATE work_items_main SET main_designer=:d WHERE work_item_id=:id"
         ), {"d": new_designer, "id": story_id})
+    from data.loader import bust_ui_cache as _bust; _bust()
     notif = {"msg": f"#{story_id} reassigned to {new_designer}", "type": "success", "ts": _t.time()}
     return "__balance__", notif
 
@@ -1650,5 +1651,6 @@ def _unassign_designer(clicks):
         conn.execute(text(
             "UPDATE work_items_main SET main_designer=NULL WHERE work_item_id=:id"
         ), {"id": story_id})
+    from data.loader import bust_ui_cache as _bust; _bust()
     notif = {"msg": f"#{story_id} designer unassigned", "type": "info", "ts": _t.time()}
     return "__balance__", notif

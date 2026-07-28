@@ -339,12 +339,12 @@ def _tog(label, btn_id, active, color=_INDIGO):
 def _story_status_badge(wid: int):
     with engine.connect() as conn:
         g = conn.execute(text("""
-            SELECT claude_screens, text_written, our_screens, html_screens, sn_signoff
+            SELECT claude_screens, text_written, our_screens, sn_signoff
             FROM p_planning_gates WHERE work_item_id = :id
         """), {"id": wid}).fetchone()
     done  = sum([bool(g.claude_screens), bool(g.text_written), bool(g.our_screens),
-                 bool(g.html_screens), bool(g.sn_signoff)]) if g else 0
-    total = 5
+                 bool(g.sn_signoff)]) if g else 0
+    total = 4
     complete = done == total
     c = _GREEN if complete else (_AMBER if done > 0 else _DIM)
     r = _rgb(c)

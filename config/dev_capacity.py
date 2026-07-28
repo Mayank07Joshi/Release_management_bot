@@ -14,7 +14,6 @@ ALL_STAFF = [
     {"name": "Dolly Munjal",    "role": "Mobile Dev",      "team": "Mobile",       "capacity_h": 180},
     {"name": "Suraj Gupta",     "role": "Mobile Dev",      "team": "Mobile",       "capacity_h": 180},
     {"name": "Sagar Khurana",   "role": "Mobile Dev",      "team": "Mobile",       "capacity_h": 180},
-    {"name": "Jyoti Dahiya",    "role": "Mobile Dev",      "team": "Mobile",       "capacity_h": 180},
     {"name": "Nishtha Arora",   "role": "iOS Dev",         "team": "Mobile",       "capacity_h": 180},
     # ── QA ────────────────────────────────────────────────────────────────────
     {"name": "Chhavi Bhardwaj", "role": "QA",              "team": "QA",           "capacity_h": 180},

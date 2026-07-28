@@ -47,11 +47,11 @@ _AREA_COLORS = {
 }
 
 # ── Data layer ────────────────────────────────────────────────────────────────
-_DT_CACHE: dict = {"df": None, "ts": 0.0}
+_DT_CACHE: dict = {"df": None, "ts": 0.0, "bust": -1}
 _DT_TTL = 300
-_GRID_RENDER_CACHE: dict = {}   # filter_key → (ts, grid_children)
+_GRID_RENDER_CACHE: dict = {}   # filter_key → (bust, ts, grid_children)
 
-_INSIGHTS_CACHE: dict = {"df": None, "ts": 0.0}
+_INSIGHTS_CACHE: dict = {"df": None, "ts": 0.0, "bust": -1}
 _INSIGHTS_TTL = 180
 
 # Chart palette (matches panel design standard)
@@ -84,8 +84,12 @@ def _release_sort_key(label: str) -> tuple:
 
 
 def _load_insights_data() -> pd.DataFrame:
+    from data.loader import get_ui_cache_bust as _get_bust
     now = _time_mod.time()
-    if _INSIGHTS_CACHE["df"] is not None and now - _INSIGHTS_CACHE["ts"] < _INSIGHTS_TTL:
+    bust = _get_bust()
+    if (_INSIGHTS_CACHE["df"] is not None
+            and now - _INSIGHTS_CACHE["ts"] < _INSIGHTS_TTL
+            and _INSIGHTS_CACHE["bust"] == bust):
         return _INSIGHTS_CACHE["df"]
     try:
         with engine.connect() as c:
@@ -103,12 +107,10 @@ def _load_insights_data() -> pd.DataFrame:
                     (CASE WHEN COALESCE(pg.claude_screens,     FALSE) THEN 1 ELSE 0 END +
                      CASE WHEN COALESCE(pg.text_written,       FALSE) THEN 1 ELSE 0 END +
                      CASE WHEN COALESCE(pg.our_screens,        FALSE) THEN 1 ELSE 0 END +
-                     CASE WHEN COALESCE(pg.html_screens,       FALSE) THEN 1 ELSE 0 END +
                      CASE WHEN COALESCE(pg.sn_signoff,         FALSE) THEN 1 ELSE 0 END) AS gates_done,
                     (CASE WHEN COALESCE(pg.claude_screens_wip, FALSE) THEN 1 ELSE 0 END +
                      CASE WHEN COALESCE(pg.text_written_wip,   FALSE) THEN 1 ELSE 0 END +
                      CASE WHEN COALESCE(pg.our_screens_wip,    FALSE) THEN 1 ELSE 0 END +
-                     CASE WHEN COALESCE(pg.html_screens_wip,   FALSE) THEN 1 ELSE 0 END +
                      CASE WHEN COALESCE(pg.sn_signoff_wip,     FALSE) THEN 1 ELSE 0 END) AS gates_wip
                 FROM work_items_main w
                 LEFT JOIN p_planning_gates pg USING (work_item_id)
@@ -125,6 +127,7 @@ def _load_insights_data() -> pd.DataFrame:
         df["priority"] = pd.to_numeric(df["priority"], errors="coerce").fillna(3).astype(int)
         _INSIGHTS_CACHE["df"] = df
         _INSIGHTS_CACHE["ts"] = now
+        _INSIGHTS_CACHE["bust"] = bust
         return df
     except Exception:
         return pd.DataFrame()
@@ -296,8 +299,13 @@ def _build_risk_scatter(df: pd.DataFrame) -> dcc.Graph:
 
 
 def _load_dt() -> pd.DataFrame:
+    from data.loader import get_ui_cache_bust as _get_bust
     now = _time_mod.time()
-    if _DT_CACHE["df"] is None or now - _DT_CACHE["ts"] > _DT_TTL:
+    bust = _get_bust()
+    if (_DT_CACHE["df"] is None or now - _DT_CACHE["ts"] > _DT_TTL
+            or _DT_CACHE["bust"] != bust):
+        _GRID_RENDER_CACHE.clear()
+    if _DT_CACHE["df"] is None or now - _DT_CACHE["ts"] > _DT_TTL or _DT_CACHE["bust"] != bust:
         with engine.connect() as _c:
             df = pd.read_sql(_text("""
                 SELECT
@@ -320,6 +328,7 @@ def _load_dt() -> pd.DataFrame:
         df["story_size_norm"] = df["story_size"].apply(_normalize_size)
         _DT_CACHE["df"] = df
         _DT_CACHE["ts"] = now
+        _DT_CACHE["bust"] = bust
     return _DT_CACHE["df"].copy()
 
 
@@ -899,7 +908,8 @@ def _render_grid_only(rolling, sizes, owner, platform, search):
     owner    = owner    or "All owners"
     platform = platform or "All"
 
-    key = _filter_key(rolling, sizes, owner, platform, search)
+    from data.loader import get_ui_cache_bust as _get_bust
+    key = (_get_bust(),) + _filter_key(rolling, sizes, owner, platform, search)
     now = _time_mod.time()
     if key in _GRID_RENDER_CACHE:
         ts, cached = _GRID_RENDER_CACHE[key]

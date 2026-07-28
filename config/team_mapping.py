@@ -24,7 +24,6 @@ TEAM_MAPPING = {
     # Mobile Team
     'Dolly Munjal': 'Mobile',
     'Sagar Khurana': 'Mobile',
-    'Jyoti Dahiya': 'Mobile',
 
     # Design/Video Team
     'Kaushik Awasthi': 'Design/Video',

@@ -20,7 +20,7 @@ dash.register_page(__name__, path="/planning", name="Planning Tool")
 print(">>> [planning.py] LOADED — panel=680px card=#252548")
 
 import time as _time_mod
-_GANTT_CACHE: dict = {"items": None, "tasks": None, "ts": 0.0}
+_GANTT_CACHE: dict = {"items": None, "tasks": None, "ts": 0.0, "bust": -1}
 _GANTT_TTL = 300  # 5-minute cache
 
 # ─── Colour tokens ─────────────────────────────────────────────────────────────
@@ -57,12 +57,11 @@ STATUS_COLOR = {
 }
 
 # BA sign-off gate fields — ordered, matches DB columns
-_GATE_FIELDS = ("claude_screens", "text_written", "our_screens", "html_screens", "sn_signoff")
+_GATE_FIELDS = ("claude_screens", "text_written", "our_screens", "sn_signoff")
 _GATE_LABELS = {
     "claude_screens": "Claude screens",
     "text_written":   "Text written",
     "our_screens":    "Our screens",
-    "html_screens":   "HTML screens",
     "sn_signoff":     "SN sign-off",
 }
 _GATE_FILTER_MAP: dict = {}  # gates now toggle directly; no tracker focus mapping
@@ -127,9 +126,9 @@ _CAL = {1:"Jan", 2:"Feb", 3:"Mar", 4:"Apr", 5:"May", 6:"Jun",
 
 # Cache for processed planning data — avoids rebuilding 700+ stories on every page visit.
 # Gate state is NOT cached here (always fresh from DB on page load).
-_planning_cache: dict = {"data": None, "ts": 0.0}
-_bug_cache:      dict = {"data": None, "ts": 0.0}
-_st_data_cache:  dict = {"data": None, "ts": 0.0}
+_planning_cache: dict = {"data": None, "ts": 0.0, "bust": -1}
+_bug_cache:      dict = {"data": None, "ts": 0.0, "bust": -1}
+_st_data_cache:  dict = {"data": None, "ts": 0.0, "bust": -1}
 _PLANNING_TTL = 300  # 5 minutes, matches load_data() TTL
 _PAGE_SIZE    = 4    # rows per page in BA Sign-Off table
 
@@ -195,8 +194,11 @@ def _load_bug_data() -> list[dict]:
     from data.loader import engine as _engine
     from sqlalchemy import text as _text
 
+    from data.loader import get_ui_cache_bust as _get_bust
     _now = _time.monotonic()
-    if _bug_cache["data"] is not None and (_now - _bug_cache["ts"]) < _PLANNING_TTL:
+    _bust = _get_bust()
+    if (_bug_cache["data"] is not None and (_now - _bug_cache["ts"]) < _PLANNING_TTL
+            and _bug_cache["bust"] == _bust):
         return _bug_cache["data"]
 
     try:
@@ -243,6 +245,7 @@ def _load_bug_data() -> list[dict]:
 
     _bug_cache["data"] = result
     _bug_cache["ts"]   = _now
+    _bug_cache["bust"] = _bust
     return result
 
 
@@ -252,8 +255,11 @@ def _load_story_tracking_data() -> list[dict]:
     from data.loader import engine as _engine
     from sqlalchemy import text as _text
 
+    from data.loader import get_ui_cache_bust as _get_bust
     _now = _time.monotonic()
-    if _st_data_cache["data"] is not None and (_now - _st_data_cache["ts"]) < _PLANNING_TTL:
+    _bust = _get_bust()
+    if (_st_data_cache["data"] is not None and (_now - _st_data_cache["ts"]) < _PLANNING_TTL
+            and _st_data_cache["bust"] == _bust):
         return _st_data_cache["data"]
 
     try:
@@ -312,6 +318,7 @@ def _load_story_tracking_data() -> list[dict]:
 
     _st_data_cache["data"] = result
     _st_data_cache["ts"]   = _now
+    _st_data_cache["bust"] = _bust
     return result
 
 
@@ -533,9 +540,9 @@ def _build_st_table(rows, sort_col, sort_dir, filters, page=0):
         ("Size",      "size",      {}),
         ("Status",    "status",    {}),
         ("Type",      "stype",     {}),
-        ("Est Start", "est_start", {}),
-        ("Est End",   "est_end",   {}),
-        ("Est Hrs",   "est_hrs",   {}),
+        ("Writing Start", "est_start", {}),
+        ("Writing End",   "est_end",   {}),
+        ("Writing Hrs",   "est_hrs",   {}),
         ("Actual",    "actual",    {}),
         ("Designer",  "designer",  {}),
         ("QA",        "qa",        {}),
@@ -771,8 +778,11 @@ def _load_planning_data():
     from sqlalchemy import text as _text
 
     # ── Check cache (stories + matrices only, not gates) ─────────────────────
+    from data.loader import get_ui_cache_bust as _get_bust
     _now = _time.monotonic()
-    if _planning_cache["data"] is not None and (_now - _planning_cache["ts"]) < _PLANNING_TTL:
+    _bust = _get_bust()
+    if (_planning_cache["data"] is not None and (_now - _planning_cache["ts"]) < _PLANNING_TTL
+            and _planning_cache["bust"] == _bust):
         cached_stories, months, ba_names, dev_names, dev_matrix, story_matrix, dev_stories_flat = \
             _planning_cache["data"]
         try:
@@ -854,7 +864,6 @@ def _load_planning_data():
             "claude_screens": False,
             "text_written":   False,
             "our_screens":    False,
-            "html_screens":   False,
             "sn_signoff":     False,
             "estimation":     est_full,
             "state":          str(r.state or ""),
@@ -978,7 +987,8 @@ def _load_planning_data():
     ]
     _planning_cache["data"] = (_stories_for_cache, months, ba_names, dev_names,
                                dev_matrix, story_matrix, dev_stories_flat)
-    _planning_cache["ts"] = _time.monotonic()
+    _planning_cache["ts"]   = _time.monotonic()
+    _planning_cache["bust"] = _bust
 
     return stories, months, init_gates, ba_names, dev_names, dev_matrix, story_matrix, dev_stories_flat
 
@@ -1070,8 +1080,8 @@ def _gate_row(sid: int, field: str, g: dict) -> html.Div:
 
 
 def _status_badge(status, g):
-    c    = STATUS_COLOR.get(status, MT)
-    done = sum(1 for f in _GATE_FIELDS if g.get(f))
+    c     = STATUS_COLOR.get(status, MT)
+    done  = sum(1 for f in _GATE_FIELDS if g.get(f))
     total = len(_GATE_FIELDS)
 
     stuck_at = None
@@ -1081,31 +1091,38 @@ def _status_badge(status, g):
                 stuck_at = _GATE_LABELS.get(f, f)
                 break
 
-    rows = [
-        html.Div([
-            html.Span("●", style={"color": c, "marginRight": "5px", "fontSize": "9px"}),
-            html.Span(status, style={"fontSize": "11px", "fontWeight": "700",
-                                     "letterSpacing": "0.4px", "color": c}),
-            html.Span(f"{done}/{total} gates",
-                      style={"fontSize": "10px", "color": MT,
-                             "marginLeft": "7px", "fontWeight": "500"}),
-        ], style={"display": "flex", "alignItems": "center"}),
-    ]
-    if stuck_at:
-        rows.append(
-            html.Div(f"Stuck at: {stuck_at}",
-                     style={"fontSize": "9px", "color": A, "marginTop": "3px",
-                            "fontWeight": "600"})
-        )
+    # Line 1: dot + status label — never wraps
+    line1 = html.Div([
+        html.Span("●", style={"color": c, "marginRight": "5px", "fontSize": "8px",
+                              "flexShrink": "0"}),
+        html.Span(status, style={"fontSize": "11px", "fontWeight": "700",
+                                 "letterSpacing": "0.4px", "color": c,
+                                 "whiteSpace": "nowrap"}),
+    ], style={"display": "flex", "alignItems": "center"})
 
-    return html.Div(rows, style={
+    # Line 2: gates count  +  stuck label (same row, small)
+    sub = [html.Span(f"{done}/{total} gates",
+                     style={"fontSize": "10px", "color": MT, "fontWeight": "500",
+                            "whiteSpace": "nowrap"})]
+    if stuck_at:
+        sub += [
+            html.Span(" · ", style={"color": MT, "fontSize": "10px"}),
+            html.Span(f"Stuck at: {stuck_at}",
+                      style={"fontSize": "10px", "color": A, "fontWeight": "600",
+                             "whiteSpace": "nowrap"}),
+        ]
+
+    line2 = html.Div(sub, style={"display": "flex", "alignItems": "center",
+                                  "marginTop": "4px", "flexWrap": "nowrap"})
+
+    return html.Div([line1, line2], style={
         "background":    _dim(c),
         "border":        f"1px solid {_brd(c)}",
         "borderRadius":  "8px",
-        "padding":       "7px 12px",
-        "display":       "flex",
+        "padding":       "7px 10px",
+        "display":       "inline-flex",
         "flexDirection": "column",
-        "minWidth":      "140px",
+        "minWidth":      "0",
     })
 
 
@@ -1252,12 +1269,11 @@ _TH_S = {
 }
 
 story_table_header = html.Tr([
-    html.Th("Story",          style={**_TH_S, "width": "32%"}),
-    html.Th("Developer",      style={**_TH_S, "width": "12%"}),
-    html.Th("BA Responsible", style={**_TH_S, "width": "13%"}),
-    html.Th("Sign-Off Gates", style={**_TH_S, "width": "21%"}),
-    html.Th("Status",         style={**_TH_S, "width": "15%"}),
-    html.Th("Lifecycle",      style={**_TH_S, "width": "7%", "textAlign": "center"}),
+    html.Th("Story",          style={**_TH_S, "width": "34%"}),
+    html.Th("Developer",      style={**_TH_S, "width": "13%"}),
+    html.Th("BA Responsible", style={**_TH_S, "width": "14%"}),
+    html.Th("Sign-Off Gates", style={**_TH_S, "width": "22%"}),
+    html.Th("Status",         style={**_TH_S, "width": "17%"}),
 ])
 
 
@@ -1331,16 +1347,6 @@ def _story_row(s: dict, gates: dict) -> html.Tr:
         ], style={"padding": "18px 16px", "borderBottom": f"1px solid {BD}"}),
         html.Td(gate_summary, style={"padding": "12px 16px", "borderBottom": f"1px solid {BD}"}),
         html.Td(_status_badge(status, g), style={"padding": "18px 16px", "borderBottom": f"1px solid {BD}"}),
-        html.Td(
-            html.Button("📋", id={"type": "tracker-btn", "sid": s["id"]}, n_clicks=0,
-                        title="Open lifecycle tracker",
-                        style={"background": "none", "border": f"1px solid {BD}",
-                               "borderRadius": "8px", "color": P, "fontSize": "16px",
-                               "cursor": "pointer", "padding": "6px 10px",
-                               "transition": "all .15s"}),
-            style={"padding": "10px 8px", "borderBottom": f"1px solid {BD}",
-                   "textAlign": "center"},
-        ),
     ], style={"background": CD, "transition": "background .15s"})
 
 
@@ -2399,9 +2405,12 @@ def _build_gantt_html(
     _NONE = html.Div("No active work items match the current filters.",
                      style={"color": MT, "padding": "20px", "fontSize": "12px"})
 
-    # ── Load from module-level cache (refreshes every 5 min) ──────────────────
+    # ── Load from module-level cache (refreshes every 5 min or on data write) ──
+    from data.loader import get_ui_cache_bust as _get_bust
     _now = _time_mod.time()
-    if _GANTT_CACHE["items"] is None or _now - _GANTT_CACHE["ts"] > _GANTT_TTL:
+    _bust = _get_bust()
+    if (_GANTT_CACHE["items"] is None or _now - _GANTT_CACHE["ts"] > _GANTT_TTL
+            or _GANTT_CACHE["bust"] != _bust):
         with engine.connect() as _c:
             _GANTT_CACHE["items"] = pd.read_sql(
                 _text("SELECT * FROM agg_gantt_items ORDER BY main_developer, function, bar_start"),
@@ -2410,7 +2419,8 @@ def _build_gantt_html(
             _GANTT_CACHE["tasks"] = pd.read_sql(
                 _text("SELECT * FROM agg_gantt_tasks"), _c,
             )
-        _GANTT_CACHE["ts"] = _now
+        _GANTT_CACHE["ts"]   = _now
+        _GANTT_CACHE["bust"] = _bust
 
     items_df = _GANTT_CACHE["items"].copy()
     _task_df  = _GANTT_CACHE["tasks"].copy()
@@ -4056,13 +4066,22 @@ _REVIEW_OPTS  = [{"label": n, "value": n}
 
 
 def _sp_days(s_date, e_date) -> str:
+    """Count Mon–Fri working days between two dates (inclusive)."""
     if not s_date or not e_date:
         return "—"
     try:
-        from datetime import date as _d
-        s = _d.fromisoformat(str(s_date))
-        e = _d.fromisoformat(str(e_date))
-        return str(max(0, (e - s).days + 1))
+        import datetime as _dt
+        s = _dt.date.fromisoformat(str(s_date))
+        e = _dt.date.fromisoformat(str(e_date))
+        if e < s:
+            return "—"
+        days = 0
+        cur  = s
+        while cur <= e:
+            if cur.weekday() < 5:   # Mon=0 … Fri=4
+                days += 1
+            cur += _dt.timedelta(days=1)
+        return str(days)
     except Exception:
         return "—"
 
@@ -4127,55 +4146,57 @@ def _build_sp_body_static(story: dict, sp_data: dict, releases: list, iterations
                  style={"marginBottom": "14px"}),
     ])
 
-    # ── Estimates ─────────────────────────────────────────────────────────────
+    # ── Story Writing ─────────────────────────────────────────────────────────
     estimates = html.Div([
         _div,
-        _sh("Estimates"),
+        _sh("Story Writing"),
         _row(
             _col([_lbl("Start Date"),
                   dcc.Input(id="sp-est-start", type="text", value=est_start,
-                            placeholder="YYYY-MM-DD", debounce=True, style=_inp_s)]),
+                            placeholder="YYYY-MM-DD", style=_inp_s)]),
             _col([_lbl("End Date"),
                   dcc.Input(id="sp-est-end", type="text", value=est_end,
-                            placeholder="YYYY-MM-DD", debounce=True, style=_inp_s)]),
+                            placeholder="YYYY-MM-DD", style=_inp_s)]),
             html.Div([
                 _lbl("Days"),
                 html.Div(_sp_days(est_start, est_end),
+                         id="sp-est-days",
                          style={"fontSize": "18px", "fontWeight": "700",
                                 "color": _SP_FG, "paddingTop": "6px"}),
             ], style={"flexShrink": "0", "minWidth": "44px"}),
         ),
         html.Div([
-            _lbl("Hours"),
+            _lbl("Estimates"),
             dcc.Input(id="sp-est-hours", type="number", min=0, step=0.5,
-                      value=sp_data.get("est_hours"), debounce=True,
+                      value=sp_data.get("est_hours"),
                       style={**_inp_s, "width": "110px", "padding": "4px 8px",
                              "fontSize": "12px"}),
         ], style={"marginBottom": "14px"}),
     ])
 
-    # ── Actuals ───────────────────────────────────────────────────────────────
+    # ── Story Deployment ──────────────────────────────────────────────────────
     actuals = html.Div([
         _div,
-        _sh("Actuals"),
+        _sh("Story Deployment"),
         _row(
             _col([_lbl("Start Date"),
                   dcc.Input(id="sp-act-start", type="text", value=act_start,
-                            placeholder="YYYY-MM-DD", debounce=True, style=_inp_s)]),
+                            placeholder="YYYY-MM-DD", style=_inp_s)]),
             _col([_lbl("End Date"),
                   dcc.Input(id="sp-act-end", type="text", value=act_end,
-                            placeholder="YYYY-MM-DD", debounce=True, style=_inp_s)]),
+                            placeholder="YYYY-MM-DD", style=_inp_s)]),
             html.Div([
                 _lbl("Days"),
                 html.Div(_sp_days(act_start, act_end),
+                         id="sp-act-days",
                          style={"fontSize": "18px", "fontWeight": "700",
                                 "color": _SP_FG, "paddingTop": "6px"}),
             ], style={"flexShrink": "0", "minWidth": "44px"}),
         ),
         html.Div([
-            _lbl("Hours"),
+            _lbl("Estimates"),
             dcc.Input(id="sp-act-hours", type="number", min=0, step=0.5,
-                      value=sp_data.get("act_hours"), debounce=True,
+                      value=sp_data.get("act_hours"),
                       style={**_inp_s, "width": "110px", "padding": "4px 8px",
                              "fontSize": "12px"}),
         ], style={"marginBottom": "14px"}),
@@ -4211,7 +4232,17 @@ def _build_sp_body_static(story: dict, sp_data: dict, releases: list, iterations
         "marginBottom": "4px",
     })
 
-    return html.Div([planning, estimates, actuals, ado, save_btn])
+    # ── Save to Local button ──────────────────────────────────────────────────
+    local_btn = html.Button("Save to Local", id="sp-save-local-btn", n_clicks=0, style={
+        "width": "100%", "padding": "9px", "borderRadius": "8px",
+        "background": "rgba(70,194,142,0.133)",
+        "border": "1px solid rgba(70,194,142,0.5)",
+        "color": _SP_GREEN, "cursor": "pointer",
+        "fontSize": "12px", "fontWeight": "700",
+        "marginTop": "6px", "marginBottom": "4px",
+    })
+
+    return html.Div([planning, ado, save_btn, estimates, actuals, local_btn])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -5449,7 +5480,6 @@ _GATE_LABEL = {
     "claude_screens": "Claude Screens",
     "text_written":   "Text Written",
     "our_screens":    "Our Screens",
-    "html_screens":   "HTML Screens",
     "sn_signoff":     "SN Sign-Off",
 }
 
@@ -6626,7 +6656,7 @@ def _sp_close(close_c, backdrop_c):
     return None
 
 
-# ── Render: open panel + load data when sid changes ──────────────────────────
+# ── Render: open panel + load data when sid changes OR sync completes ─────────
 @callback(
     Output("sp-side-panel",  "style"),
     Output("sp-backdrop",    "style"),
@@ -6635,11 +6665,12 @@ def _sp_close(close_c, backdrop_c):
     Output("sp-gates-body",  "children"),
     Output("sp-loaded-data", "data"),
     Input("plan-story-sid",  "data"),
+    Input("notif-store",     "data"),
     State("plan-stories-store", "data"),
     State("gate-store",         "data"),
     prevent_initial_call=True,
 )
-def _sp_render(sid, stories_data, gates):
+def _sp_render(sid, _notif, stories_data, gates):
     if not sid:
         return _SP_CLOSED, _SP_BD_CLOSED, no_update, no_update, no_update, no_update
 
@@ -6751,46 +6782,50 @@ def _sp_gate_date_save(values):
         return "Error"
 
 
+# ── Live working-days display (fires whenever either date input changes) ──────
+@callback(
+    Output("sp-est-days", "children"),
+    Output("sp-act-days", "children"),
+    Input("sp-est-start", "value"),
+    Input("sp-est-end",   "value"),
+    Input("sp-act-start", "value"),
+    Input("sp-act-end",   "value"),
+)
+def _sp_update_days(est_s, est_e, act_s, act_e):
+    return _sp_days(est_s, est_e), _sp_days(act_s, act_e)
+
+
 # ── Save local DB fields (est/act dates & hours) ──────────────────────────────
 @callback(
-    Output("sp-save-status", "children"),
-    Output("st-save-ts",     "data",     allow_duplicate=True),
-    Input("sp-est-start",    "value"),
-    Input("sp-est-end",      "value"),
-    Input("sp-est-hours",    "value"),
-    Input("sp-act-start",    "value"),
-    Input("sp-act-end",      "value"),
-    Input("sp-act-hours",    "value"),
-    State("plan-story-sid",  "data"),
-    State("sp-loaded-data",  "data"),
+    Output("sp-save-status",    "children"),
+    Output("st-save-ts",        "data",  allow_duplicate=True),
+    Input("sp-save-local-btn",  "n_clicks"),
+    State("sp-est-start",       "value"),
+    State("sp-est-end",         "value"),
+    State("sp-est-hours",       "value"),
+    State("sp-act-start",       "value"),
+    State("sp-act-end",         "value"),
+    State("sp-act-hours",       "value"),
+    State("plan-story-sid",     "data"),
     prevent_initial_call=True,
 )
-def _sp_save_local(est_s, est_e, est_h, act_s, act_e, act_h, sid, loaded):
+def _sp_save_local(n_clicks, est_s, est_e, est_h, act_s, act_e, act_h, sid):
     import time as _t
-    if not sid:
+    if not sid or not n_clicks:
         return no_update, no_update
-    triggered = ctx.triggered_id
-    _field_map = {
-        "sp-est-start": ("est_start_date", est_s),
-        "sp-est-end":   ("est_end_date",   est_e),
-        "sp-est-hours": ("est_hours",      est_h),
-        "sp-act-start": ("act_start_date", act_s),
-        "sp-act-end":   ("act_end_date",   act_e),
-        "sp-act-hours": ("act_hours",      act_h),
-    }
-    col, val = _field_map.get(triggered, (None, None))
-    if not col:
-        return no_update, no_update
-
-    # Guard: skip if value matches what was loaded at panel open (Dash 4 re-render fire)
-    loaded_val = (loaded or {}).get(col)
-    current_str = str(val) if val not in (None, "") else ""
-    loaded_str  = str(loaded_val) if loaded_val not in (None, "") else ""
-    if current_str == loaded_str:
-        return no_update, no_update
-
+    fields = [
+        ("est_start_date", est_s),
+        ("est_end_date",   est_e),
+        ("est_hours",      est_h),
+        ("act_start_date", act_s),
+        ("act_end_date",   act_e),
+        ("act_hours",      act_h),
+    ]
     try:
-        _upsert_sp_data(int(sid), col, val)
+        for col, val in fields:
+            _upsert_sp_data(int(sid), col, val)
+        from data.loader import bust_ui_cache as _bust
+        _bust()
         return "Saved ✓", int(_t.time())
     except Exception as e:
         return f"Save error: {e}", no_update
@@ -6823,6 +6858,7 @@ def _mirror_ado_to_local(story_id: int, fields: dict) -> None:
 # ── Save to ADO button — batches all ADO fields in one write ──────────────────
 @callback(
     Output("sp-save-status", "children", allow_duplicate=True),
+    Output("st-save-ts",     "data",     allow_duplicate=True),
     Input("sp-save-ado-btn",  "n_clicks"),
     State("sp-story-owner",  "value"),
     State("sp-designer",     "value"),
@@ -6833,8 +6869,9 @@ def _mirror_ado_to_local(story_id: int, fields: dict) -> None:
     prevent_initial_call=True,
 )
 def _sp_save_ado(n, story_owner, designer, design_type, release, iteration, sid):
+    import time as _t
     if not n or not sid:
-        return no_update
+        return no_update, no_update
     fields = {}
     if story_owner: fields["story_owner"]   = story_owner
     if designer:    fields["main_designer"]  = designer
@@ -6842,13 +6879,15 @@ def _sp_save_ado(n, story_owner, designer, design_type, release, iteration, sid)
     if release:     fields["release_date"]   = release
     if iteration:   fields["iteration"]      = iteration
     if not fields:
-        return no_update
+        return no_update, no_update
     try:
         from sync.ado_write import write_fields_sync as _write
         ok, err = _write(int(sid), fields)
         if not ok:
-            return f"ADO error: {err}"
+            return f"ADO error: {err}", no_update
         _mirror_ado_to_local(int(sid), fields)
-        return "Saved to ADO ✓"
+        from data.loader import bust_ui_cache as _bust
+        _bust()
+        return "Saved to ADO ✓", int(_t.time())
     except Exception as e:
-        return f"Error: {e}"
+        return f"Error: {e}", no_update
