@@ -253,10 +253,24 @@ def _dev_panel_load(mk: str, dev: str,
                 COALESCE(w.priority, '')     AS priority,
                 COALESCE(w.story_size, '')   AS story_size,
                 COALESCE(w.release_date, '') AS release_date,
-                COALESCE(ta.task_total_count,    0) AS task_total_count,
-                COALESCE(ta.task_done_count,    0) AS task_done_count,
-                COALESCE(ta.task_orig_est,      0) AS task_orig_est,
-                COALESCE(ta.task_completed_sum, 0) AS task_completed_sum,
+                CASE
+                    WHEN ta.task_h IS NOT NULL THEN ta.task_total_count
+                    ELSE 1
+                END AS task_total_count,
+                CASE
+                    WHEN ta.task_h IS NOT NULL THEN ta.task_done_count
+                    ELSE (CASE WHEN COALESCE(w.remaining_work, 0) = 0
+                                AND COALESCE(w.completed_work, 0) > 0
+                               THEN 1 ELSE 0 END)
+                END AS task_done_count,
+                CASE
+                    WHEN ta.task_h IS NOT NULL THEN ta.task_orig_est
+                    ELSE COALESCE(w.original_estimate, 0)
+                END AS task_orig_est,
+                CASE
+                    WHEN ta.task_h IS NOT NULL THEN ta.task_completed_sum
+                    ELSE COALESCE(w.completed_work, 0)
+                END AS task_completed_sum,
                 CASE
                     WHEN ta.task_h IS NOT NULL THEN ta.task_h
                     ELSE COALESCE(
