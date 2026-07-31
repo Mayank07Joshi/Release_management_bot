@@ -187,6 +187,8 @@ def _load_task_hours() -> list[dict]:
                     t.remaining_work,
                     GREATEST(COALESCE(t.original_estimate, 0) - COALESCE(t.completed_work, 0), 0)
                 )                            AS task_est,
+                COALESCE(t.original_estimate, 0) AS orig_est,
+                COALESCE(t.completed_work, 0)    AS completed_work,
                 t.iteration_path             AS task_iter,
                 COALESCE(w.type, 'Internal') AS cust_type,
                 t.parent_id                  AS parent_id,
@@ -219,7 +221,9 @@ def _load_task_hours() -> list[dict]:
             "dev":         dev,
             "team":        team,
             "mk":          _month_key(*ym),
-            "est_h":       float(r.task_est or 0),
+            "est_h":          float(r.task_est or 0),
+            "orig_est":       float(r.orig_est or 0),
+            "completed_work": float(r.completed_work or 0),
             "cust_type":   str(r.cust_type or "Internal"),
             "platform":    platform,
             "parent_id":   int(r.parent_id) if r.parent_id else None,
@@ -249,6 +253,10 @@ def _dev_panel_load(mk: str, dev: str,
                 COALESCE(w.priority, '')     AS priority,
                 COALESCE(w.story_size, '')   AS story_size,
                 COALESCE(w.release_date, '') AS release_date,
+                COALESCE(ta.task_total_count,    0) AS task_total_count,
+                COALESCE(ta.task_done_count,    0) AS task_done_count,
+                COALESCE(ta.task_orig_est,      0) AS task_orig_est,
+                COALESCE(ta.task_completed_sum, 0) AS task_completed_sum,
                 CASE
                     WHEN ta.task_h IS NOT NULL THEN ta.task_h
                     ELSE COALESCE(
@@ -262,7 +270,14 @@ def _dev_panel_load(mk: str, dev: str,
                        SUM(COALESCE(
                            remaining_work,
                            GREATEST(COALESCE(original_estimate,0) - COALESCE(completed_work,0), 0)
-                       )) AS task_h
+                       )) AS task_h,
+                       SUM(COALESCE(original_estimate, 0))  AS task_orig_est,
+                       SUM(COALESCE(completed_work, 0))     AS task_completed_sum,
+                       COUNT(*) AS task_total_count,
+                       SUM(CASE WHEN remaining_work IS NOT NULL
+                                 AND remaining_work = 0
+                                 AND COALESCE(completed_work, 0) > 0
+                                THEN 1 ELSE 0 END) AS task_done_count
                 FROM work_items_main
                 WHERE work_item_type = 'Task'
                   AND main_developer  = :dev
@@ -289,7 +304,9 @@ def _dev_panel_load(mk: str, dev: str,
               )
             GROUP BY w.work_item_id, w.title, w.work_item_type, w.type, w.priority,
                      w.story_size, w.release_date,
-                     w.remaining_work, w.original_estimate, w.completed_work, ta.task_h
+                     w.remaining_work, w.original_estimate, w.completed_work,
+                     ta.task_h, ta.task_orig_est, ta.task_completed_sum,
+                     ta.task_total_count, ta.task_done_count
         """), {"dev": dev, "pat": iter_pat}).fetchall()
 
     result = []
@@ -299,8 +316,16 @@ def _dev_panel_load(mk: str, dev: str,
             continue
         if platform_filter != "All" and platform != platform_filter:
             continue
-        is_issue = r.work_item_type in _BUG_TYPES
-        est_h    = float(r.task_h or 0)
+        is_issue            = r.work_item_type in _BUG_TYPES
+        est_h               = float(r.task_h or 0)
+        task_orig_est       = float(getattr(r, "task_orig_est",       None) or 0)
+        task_completed_sum  = float(getattr(r, "task_completed_sum",  None) or 0)
+        task_total_count    = int(getattr(r,   "task_total_count",    None) or 0)
+        task_done_count     = int(getattr(r,   "task_done_count",     None) or 0)
+        has_work            = task_orig_est > 0 or task_completed_sum > 0
+        is_completed = (task_total_count > 0
+                        and task_done_count == task_total_count
+                        and has_work)
         result.append({
             "id":           r.work_item_id,
             "title":        r.title,
@@ -310,7 +335,9 @@ def _dev_panel_load(mk: str, dev: str,
             "pri":          _classify_pri(r.priority),
             "size":         _map_story_size(r.story_size) if not is_issue else None,
             "est_h":        est_h,
-            "estimated":    est_h > 0,
+            "estimated":    est_h > 0 or has_work,
+            "completed":    is_completed,
+            "completed_h":  task_completed_sum,
             "cust_type":    cust,
             "platform":     platform,
             "release_date": str(r.release_date or ""),
@@ -708,6 +735,7 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
     n_est   = sum(1 for x in items if x["estimated"])
     n_unest = n_total - n_est
     total_h = sum(x["est_h"] for x in items)
+    completed_h = sum(x.get("completed_h", 0) for x in items)
     y, m    = int(mk[:4]), int(mk[5:7])
     ml      = _month_label(y, m)
     tl      = team_filter if team_filter != "All" else "All teams"
@@ -760,6 +788,10 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
         elif x.get("type") == "issue":
             tags.append(_tag("No release date",
                 "rgba(251,191,36,0.10)", "rgb(251,191,36)", "rgba(251,191,36,0.28)"))
+        # Completed badge (all tasks done: remaining=0, completed>0, was estimated)
+        if x.get("completed"):
+            tags.append(_tag("Completed",
+                "rgba(34,197,94,0.12)", "rgb(34,197,94)", "rgba(34,197,94,0.28)"))
         # Moved badge
         if moved and str(x["id"]) in moved:
             tags.append(_tag(f"→ {moved[str(x['id'])]}",
@@ -767,8 +799,13 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
         return tags
 
     def _item_row(x: dict, is_est: bool) -> html.Div:
-        h_str   = f"{int(x['est_h'])}h" if x["est_h"] > 0 else "—"
-        h_color = _FG if is_est else _AMBER
+        completed_h = x.get("completed_h", 0)
+        if x["est_h"] > 0:
+            h_str, h_color = f"{int(x['est_h'])}h", (_FG if is_est else _AMBER)
+        elif x.get("completed") and completed_h > 0:
+            h_str, h_color = f"{int(completed_h)}h", _GREEN
+        else:
+            h_str, h_color = "—", (_FG if is_est else _AMBER)
         is_sel  = x["id"] in sel
         row_bg  = (f"rgba({_rgb(_SEL_CYAN)},0.11)" if is_sel
                    else (f"rgba({_rgb(_AMBER)},0.08)" if not is_est else "transparent"))
@@ -878,7 +915,7 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
                 _total_line("Hours on enhancements", enh_h),
                 html.Div(style={"marginBottom": "8px"}),
             ]
-        sections.append(_total_line("Total hours — all work", total_h))
+        sections.append(_total_line("Remaining hours — all work", total_h))
     else:
         est_items   = sorted([x for x in items if x["estimated"]],
                              key=_sort_key, reverse=_reverse)
@@ -889,7 +926,7 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
             sections += [
                 _section_header("Estimated", _GREEN, n_est, n_total),
                 *[_item_row(x, True) for x in est_items],
-                _total_line("Total hours", total_h),
+                _total_line("Remaining hours", total_h),
             ]
         if unest_items:
             sections += [
@@ -940,7 +977,7 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
                     "fontFamily": _MONO, "fontSize": "28px", "fontWeight": "700",
                     "color": _FG,
                 }),
-                html.Div("Total hours", style={"fontSize": "11px", "color": _MT, "marginTop": "2px"}),
+                html.Div("Remaining hours", style={"fontSize": "11px", "color": _MT, "marginTop": "2px"}),
             ], style={
                 "background": _BG_HEAD, "borderRadius": "10px",
                 "padding": "14px 16px",
@@ -957,7 +994,18 @@ def _build_panel_content(panel_ctx: dict, team_filter: str,
                 "padding": "14px 16px",
                 "border": f"1px solid rgba({_rgb(_AMBER)},0.19)",
             }),
-        ], style={"display": "grid", "gridTemplateColumns": "1fr 1fr",
+            html.Div([
+                html.Div(f"{int(completed_h)}h", style={
+                    "fontFamily": _MONO, "fontSize": "28px", "fontWeight": "700",
+                    "color": _GREEN,
+                }),
+                html.Div("Completed hours", style={"fontSize": "11px", "color": _MT, "marginTop": "2px"}),
+            ], style={
+                "background": f"rgba({_rgb(_GREEN)},0.08)", "borderRadius": "10px",
+                "padding": "14px 16px",
+                "border": f"1px solid rgba({_rgb(_GREEN)},0.19)",
+            }),
+        ], style={"display": "grid", "gridTemplateColumns": "1fr 1fr 1fr",
                   "gap": "10px", "marginBottom": "20px"}),
 
         # Filter / Sort controls
@@ -1321,7 +1369,7 @@ def _build_grid(items: list[dict], team_filter: str, horizon_d: int,
         if dev not in dev_data or mk not in dev_data[dev]:
             continue
         cell = dev_data[dev][mk]
-        est  = th["est_h"] > 0
+        est  = th["est_h"] > 0 or th.get("orig_est", 0) > 0 or th.get("completed_work", 0) > 0
         if th["parent_type"] == "issue":
             if est: cell["iss_e"] += 1
             else:   cell["iss_u"] += 1
@@ -1962,8 +2010,9 @@ def _select_platform(clicks):
     Input("tp-source-store",   "data"),
     Input("tp-platform-store", "data"),
     Input("tp-panel-ctx",      "data"),
+    Input("notif-store",       "data"),
 )
-def _render_grid(team, horizon, source, platform, panel_ctx):
+def _render_grid(team, horizon, source, platform, panel_ctx, _notif):
     items = _load_items()
     return _build_grid(items, team or "All", horizon or 365,
                        source or "All", platform or "All", panel_ctx)
@@ -2017,12 +2066,13 @@ def _close_panel(n):
     Input("tp-item-detail",     "data"),
     Input("tp-item-pending",    "data"),
     Input("tp-flt",             "data"),
+    Input("notif-store",        "data"),
     State("tp-team-store",     "data"),
     State("tp-source-store",   "data"),
     State("tp-platform-store", "data"),
     State("tp-moved-store",    "data"),
 )
-def _render_panel(panel_ctx, selection, _rd_refresh, item_detail, item_pending, flt,
+def _render_panel(panel_ctx, selection, _rd_refresh, item_detail, item_pending, flt, _notif,
                   team_filter, source_filter, platform_filter, moved_items):
     _PANEL_STYLE = {
         "position": "fixed", "top": "0", "right": "0",
