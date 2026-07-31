@@ -29,8 +29,14 @@ log = logging.getLogger(__name__)
 _ORG_URL    = os.getenv("ORGANIZATION_URL", "https://dev.azure.com/expenseondemand")
 _PAT        = os.getenv("AZURE_DEVOPS_PAT")
 _PROJECT    = os.getenv("PROJECT_NAME", "Solo Expenses")
+_DB_USER    = os.getenv("DB_USER",     "postgres")
 _DB_PASS    = urllib.parse.quote_plus(os.getenv("DB_PASSWORD", "1234"))
-_DB_CONN    = f"postgresql+psycopg2://postgres:{_DB_PASS}@localhost:5432/vsts_analytics"
+_DB_HOST    = os.getenv("DB_HOST",     "localhost")
+_DB_PORT    = os.getenv("DB_PORT",     "5432")
+_DB_NAME    = os.getenv("DB_NAME",     "vsts_analytics")
+_DB_CONN    = os.getenv("DATABASE_URL") or (
+    f"postgresql+psycopg2://{_DB_USER}:{_DB_PASS}@{_DB_HOST}:{_DB_PORT}/{_DB_NAME}"
+)
 
 _ITEM_TYPES = "'User Story', 'Bug', 'Bug_UI', 'Bug_Text', 'Task', 'Enhancement'"
 
