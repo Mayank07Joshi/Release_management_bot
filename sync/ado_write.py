@@ -156,6 +156,10 @@ def _build_patches(fields_dict: dict[str, Any]) -> list[dict]:
     """
     Convert platform field names to ADO JSON-Patch operations.
     Skips None values and unmapped fields.
+    An empty string clears the field via "remove" — ADO identity fields in
+    particular reject "add" with a placeholder value (e.g. "Unassigned" is
+    not a real identity and gets rejected outright), but "remove" clears any
+    field type cleanly.
     """
     patches = []
     for field, value in fields_dict.items():
@@ -164,6 +168,9 @@ def _build_patches(fields_dict: dict[str, Any]) -> list[dict]:
             log.debug(f"[ado_write] no mapping for field '{field}' — skipped")
             continue
         if value is None:
+            continue
+        if value == "":
+            patches.append({"op": "remove", "path": f"/fields/{ado_path}"})
             continue
         patches.append({
             "op":    "add",

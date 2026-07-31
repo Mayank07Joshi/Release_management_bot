@@ -6859,6 +6859,7 @@ def _mirror_ado_to_local(story_id: int, fields: dict) -> None:
 @callback(
     Output("sp-save-status", "children", allow_duplicate=True),
     Output("st-save-ts",     "data",     allow_duplicate=True),
+    Output("notif-store",    "data",     allow_duplicate=True),
     Input("sp-save-ado-btn",  "n_clicks"),
     State("sp-story-owner",  "value"),
     State("sp-designer",     "value"),
@@ -6871,23 +6872,31 @@ def _mirror_ado_to_local(story_id: int, fields: dict) -> None:
 def _sp_save_ado(n, story_owner, designer, design_type, release, iteration, sid):
     import time as _t
     if not n or not sid:
-        return no_update, no_update
+        return no_update, no_update, no_update
     fields = {}
     if story_owner: fields["story_owner"]   = story_owner
-    if designer:    fields["main_designer"]  = designer
+    # "Unassigned" is a picklist placeholder, not a real ADO identity — sending
+    # it as-is gets rejected by ADO ("unknown identity"). Translate to "" so
+    # _build_patches clears the field via a "remove" op instead.
+    if designer:
+        fields["main_designer"] = "" if designer == "Unassigned" else designer
     if design_type: fields["design_type"]    = design_type
     if release:     fields["release_date"]   = release
     if iteration:   fields["iteration"]      = iteration
     if not fields:
-        return no_update, no_update
+        notif = {"msg": "Nothing to save — pick a value first.", "type": "info", "ts": _t.time()}
+        return no_update, no_update, notif
     try:
         from sync.ado_write import write_fields_sync as _write
         ok, err = _write(int(sid), fields)
         if not ok:
-            return f"ADO error: {err}", no_update
+            notif = {"msg": f"ADO error: {err}", "type": "error", "ts": _t.time()}
+            return f"ADO error: {err}", no_update, notif
         _mirror_ado_to_local(int(sid), fields)
         from data.loader import bust_ui_cache as _bust
         _bust()
-        return "Saved to ADO ✓", int(_t.time())
+        notif = {"msg": "Saved to ADO ✓", "type": "success", "ts": _t.time()}
+        return "Saved to ADO ✓", int(_t.time()), notif
     except Exception as e:
-        return f"Error: {e}", no_update
+        notif = {"msg": f"Error: {e}", "type": "error", "ts": _t.time()}
+        return f"Error: {e}", no_update, notif
