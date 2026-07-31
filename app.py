@@ -429,17 +429,26 @@ def _ado_failure_toast(n):
     Input("url-location", "pathname"),
 )
 def _data_freshness(n, _path):
-    from data.loader import get_last_load_time
+    from sync.ado_sync import get_last_sync_result
+    from datetime import datetime
     import time as _time
-    t = get_last_load_time()
-    if not t:
+
+    result = get_last_sync_result()
+    ts_str = result.get("timestamp")
+    if not ts_str:
         return "data: loading…"
-    age = int(_time.time() - t)
+
+    age = int(_time.time() - datetime.fromisoformat(ts_str).timestamp())
     if age < 60:
-        return f"↻ {age}s ago"
+        label = f"↻ {age}s ago"
     elif age < 3600:
-        return f"↻ {age // 60}m ago"
-    return f"↻ {age // 3600}h ago"
+        label = f"↻ {age // 60}m ago"
+    else:
+        label = f"↻ {age // 3600}h ago"
+
+    if result.get("status") == "error":
+        return f"⚠ sync failed — {label}"
+    return label
 
 
 @app.callback(
